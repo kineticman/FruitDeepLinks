@@ -400,23 +400,32 @@ curl http://localhost:6655/lanes/m3u
 ## 📁 File Structure
 
 ```
-peacockdeeplinks/
-├── peacock_server.py              # Flask web server + scheduler
-├── peacock_ingest_atom.py         # Peacock API scraper
-├── peacock_build_lanes.py         # Lane builder
-├── peacock_export_hybrid.py       # XMLTV/M3U exporter
-├── Dockerfile                     # Docker image
-├── docker-compose.yml             # Docker Compose config
-├── .env.example                   # Environment template
-├── requirements.txt               # Python dependencies
-└── data/                          # Persistent data (created)
-    ├── peacock_events.db          # SQLite database
-    ├── peacock_lanes.xml          # Lane XMLTV
-    ├── peacock_lanes.m3u          # Lane M3U (ADBTuner)
-    ├── peacock_lanes_chrome.m3u   # Chrome Capture M3U
-    ├── peacock_direct.xml         # Direct XMLTV
-    └── peacock_direct.m3u         # Direct M3U
+PeacockDeepLinks/
+├── bin/
+│   ├── peacock_server.py          # Flask web server + scheduler
+│   ├── peacock_ingest_atom.py     # Peacock API scraper
+│   ├── peacock_build_lanes.py     # Lane planner
+│   ├── peacock_export_from_db.py  # XMLTV/M3U exporter (DB → XML/M3U)
+│   ├── peacock_export_hybrid.py   # Experimental hybrid exporter
+│   └── peacock_refresh_all.py     # Orchestrates ingest → lanes → export
+├── data/                          # Persistent data (volume)
+│   ├── peacock_events.db          # SQLite database
+│   ├── peacock_lanes.xml          # Lanes XMLTV
+│   ├── peacock_lanes.m3u          # Lanes M3U
+│   ├── peacock_lanes_chrome.m3u   # Chrome Capture / CH4C M3U
+│   ├── peacock_direct.xml         # Direct (one-channel-per-event) XMLTV
+│   └── peacock_direct.m3u         # Direct (one-channel-per-event) M3U
+├── out/                           # Optional extra output directory (currently unused)
+├── docs/                          # User-facing docs
+│   ├── PORTAINER_GUIDE.md         # Portainer stack setup
+│   ├── CHROME_CAPTURE_M3U.md      # Chrome Capture config notes
+│   └── CH4C_INTEGRATION.md        # CH4C integration guide
+├── docker-compose.yml             # Example Docker Compose config
+├── Dockerfile                     # Docker image build
+├── README.md                      # This file
+└── requirements.txt               # Python dependencies
 ```
+
 
 ## 🔧 Troubleshooting
 
