@@ -22,9 +22,10 @@ Automated scraper that creates virtual TV channels from Peacock TV sports conten
 - Uses: `peacock_lanes.xml` + `peacock_lanes.m3u`
 
 ### For Chrome Capture
-- Direct deeplink URLs wrapped in `chrome://`
-- Same EPG as ADBTuner
-- Uses: `peacock_lanes.xml` + `peacock_lanes_chrome.m3u`
+
+- `chrome://` URLs that call `/api/lane/{id}/deeplink?format=text` on your PeacockDeepLinks server  
+- Same EPG as ADBTuner  
+- Uses: `peacock_lanes.xml` + `peacock_lanes_chrome.m3u`  
 
 ### For Simple Players
 - One channel per event
@@ -331,7 +332,8 @@ http://192.168.86.72:6655/api/lane/1/deeplink
 **M3U Format:**
 ```m3u
 #EXTINF:-1 tvg-id="peacock.lane.1" tvg-chno="9000",Peacock Sports 1
-chrome://https://www.peacocktv.com/deeplink?deeplinkData=...
+chrome://http://192.168.86.72:6655/api/lane/1/deeplink?format=text
+
 ```
 
 ### Direct Deeplinks

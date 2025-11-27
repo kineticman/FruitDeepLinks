@@ -126,7 +126,7 @@ def build_adbtuner_xmltv(conn: sqlite3.Connection, xml_path: str):
     
     tv = ET.Element("tv")
     tv.set("generator-info-name", "Peacock TV Scraper")
-    tv.set("generator-info-url", "https://github.com/yourusername/peacock-scraper")
+    tv.set("generator-info-url", "https://github.com/kineticman/PeacockDeepLinks")
     
     # Channels
     for lane_id, name, logical_number in lanes:
@@ -228,23 +228,17 @@ def build_adbtuner_m3u(conn: sqlite3.Connection, m3u_path: str, server_url: str)
     
     print(f"Wrote ADBTuner M3U: {m3u_path}")
 
-def build_chrome_m3u(conn: sqlite3.Connection, m3u_path: str):
-    """Build Chrome Capture M3U with chrome:// deeplink URLs"""
+def build_chrome_m3u(conn: sqlite3.Connection, m3u_path: str, server_url: str):
+    """Build Chrome Capture M3U with chrome:// API URLs for dynamic deeplinks"""
     lanes = get_lanes(conn)
     print(f"Chrome Capture M3U: {len(lanes)} lanes")
     
     with open(m3u_path, "w", encoding="utf-8") as f:
         f.write("#EXTM3U\n\n")
         for lane_id, name, logical_number in lanes:
-            # Get the current deeplink for this lane
-            deeplink = get_current_lane_deeplink_for_chrome(conn, lane_id)
-            
-            # Wrap in chrome:// format
-            if deeplink:
-                chrome_url = f"chrome://{deeplink}"
-            else:
-                # Fallback if no event
-                chrome_url = "chrome://https://www.peacocktv.com"
+            # Use API endpoint wrapped in chrome:// for dynamic deeplink resolution
+            api_url = f"{server_url}/api/lane/{lane_id}/deeplink?format=text"
+            chrome_url = f"chrome://{api_url}"
             
             f.write(
                 f'#EXTINF:-1 tvg-id="peacock.lane.{lane_id}" '
@@ -256,59 +250,6 @@ def build_chrome_m3u(conn: sqlite3.Connection, m3u_path: str):
     
     print(f"Wrote Chrome Capture M3U: {m3u_path}")
 
-def get_current_lane_deeplink_for_chrome(conn: sqlite3.Connection, lane_id: int) -> str:
-    """Get deeplink URL for Chrome Capture (not wrapped yet)"""
-    try:
-        cur = conn.cursor()
-        now = datetime.now(timezone.utc).isoformat()
-        
-        # Find current event in this lane
-        cur.execute("""
-            SELECT e.pvid
-            FROM lane_events le
-            JOIN events e ON le.event_id = e.id
-            WHERE le.lane_id = ?
-              AND le.is_placeholder = 0
-              AND le.start_utc <= ?
-              AND le.end_utc > ?
-              AND e.pvid IS NOT NULL
-            ORDER BY le.start_utc DESC
-            LIMIT 1
-        """, (lane_id, now, now))
-        
-        row = cur.fetchone()
-        
-        if not row or not row["pvid"]:
-            # No current event, find next upcoming
-            cur.execute("""
-                SELECT e.pvid
-                FROM lane_events le
-                JOIN events e ON le.event_id = e.id
-                WHERE le.lane_id = ?
-                  AND le.is_placeholder = 0
-                  AND le.start_utc > ?
-                  AND e.pvid IS NOT NULL
-                ORDER BY le.start_utc ASC
-                LIMIT 1
-            """, (lane_id, now))
-            
-            row = cur.fetchone()
-            
-            if not row or not row["pvid"]:
-                return None
-        
-        pvid = row["pvid"]
-        
-        # Build deeplink
-        deeplink_payload = {"pvid": pvid, "type": "PROGRAMME", "action": "PLAY"}
-        deeplink_json = json.dumps(deeplink_payload, separators=(",", ":"))
-        deeplink_url = f"https://www.peacocktv.com/deeplink?deeplinkData={urllib.parse.quote(deeplink_json, safe='')}"
-        
-        return deeplink_url
-        
-    except Exception as e:
-        return None
-
 def build_direct_xmltv(conn: sqlite3.Connection, xml_path: str):
     """Build one-channel-per-event XMLTV with placeholders"""
     events = get_direct_events(conn, hours_window=24)
@@ -318,7 +259,7 @@ def build_direct_xmltv(conn: sqlite3.Connection, xml_path: str):
     
     tv = ET.Element("tv")
     tv.set("generator-info-name", "Peacock TV Scraper - Direct")
-    tv.set("generator-info-url", "https://github.com/yourusername/peacock-scraper")
+    tv.set("generator-info-url", "https://github.com/kineticman/PeacockDeepLinks")
     
     # Create channel and program for each event with placeholders
     for idx, event in enumerate(events, start=1):
@@ -557,7 +498,7 @@ def main():
     # Build ADBTuner files (lane-based with API URLs)
     build_adbtuner_xmltv(conn, args.lanes_xml)
     build_adbtuner_m3u(conn, args.lanes_m3u, args.server_url)
-    build_chrome_m3u(conn, args.chrome_m3u)
+    build_chrome_m3u(conn, args.chrome_m3u, args.server_url)
     
     # Build Direct files (one channel per event with deeplinks)
     build_direct_xmltv(conn, args.direct_xml)
