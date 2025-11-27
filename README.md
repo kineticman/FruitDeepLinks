@@ -1,6 +1,6 @@
-# 🦚 Peacock TV Sports Scraper
+# PeacockDeepLinks
 
-Automated tool that scrapes Peacock’s sports schedule and builds virtual channels (XMLTV + M3U) for use with Channels DVR, ADBTuner, Chrome Capture, Plex, Emby, and other IPTV players.
+Automated scraper that creates virtual TV channels from Peacock TV sports content with XMLTV EPG and M3U playlists. Perfect for integration with DVR applications like Channels DVR, Plex, or Emby.
 
 ## ✨ Features
 
@@ -45,7 +45,7 @@ Automated tool that scrapes Peacock’s sports schedule and builds virtual chann
 1. **Clone the repository**
 ```bash
 git clone https://github.com/kineticman/PeacockDeepLinks.git
-cd PeacockDeepLinks
+cd peacockdeeplinks
 ```
 
 2. **Configure environment**
@@ -76,15 +76,17 @@ http://localhost:6655
 
 1. **Open Portainer** and navigate to **Stacks** → **Add Stack**
 
-2. **Name your stack:** `peacock-scraper`
+2. **Name your stack:** `peacockdeeplinks`
 
 3. **Paste the docker-compose.yml:**
 ```yaml
 version: '3.8'
 
 services:
-  peacockdeeplinks:
+  peacock:
     image: ghcr.io/kineticman/peacockdeeplinks:latest
+    build:
+      context: https://github.com/kineticman/PeacockDeepLinks.git
     container_name: peacockdeeplinks
     restart: unless-stopped
     ports:
@@ -106,34 +108,6 @@ services:
       - PEACOCK_LANE_START_CH=9000
       - PEACOCK_SLUG=/sports/live-and-upcoming
       - PEACOCK_REFRESH_CRON=15 3 * * *
-
-The cron is evaluated in the container’s timezone. Set `TZ` (e.g. `America/New_York` or `UTC`) in your Docker/Portainer config if you want local times.
-      - TZ=UTC
-
-volumes:
-  peacock-data:
-    restart: unless-stopped
-    ports:
-      - "6655:6655"
-    volumes:
-      - peacock-data:/data
-    environment:
-      - PEACOCK_PORT=6655
-      - PEACOCK_SERVER_HOST=192.168.86.72    # Change to your Docker host IP
-      - PEACOCK_DB_PATH=/data/peacock_events.db
-      - PEACOCK_LANES_XML_PATH=/data/peacock_lanes.xml
-      - PEACOCK_LANES_M3U_PATH=/data/peacock_lanes.m3u
-      - PEACOCK_CHROME_M3U_PATH=/data/peacock_lanes_chrome.m3u
-      - PEACOCK_DIRECT_XML_PATH=/data/peacock_direct.xml
-      - PEACOCK_DIRECT_M3U_PATH=/data/peacock_direct.m3u
-      - PEACOCK_LANES=10
-      - PEACOCK_DAYS_AHEAD=7
-      - PEACOCK_PADDING_MINUTES=45
-      - PEACOCK_LANE_START_CH=9000
-      - PEACOCK_SLUG=/sports/live-and-upcoming
-      - PEACOCK_REFRESH_CRON=15 3 * * *
-
-The cron is evaluated in the container’s timezone. Set `TZ` (e.g. `America/New_York` or `UTC`) in your Docker/Portainer config if you want local times.
       - TZ=UTC
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6655/api/status')"]
@@ -159,7 +133,7 @@ volumes:
 1. **Navigate to Containers** → **Add Container**
 
 2. **Basic Settings:**
-   - **Name:** `peacock-scraper`
+   - **Name:** `peacockdeeplinks`
    - **Image:** Build from GitHub (see below) or use pre-built image
 
 3. **To build from source in Portainer:**
@@ -168,7 +142,7 @@ volumes:
    
    b. **Build method:** Use Git repository
       - **Repository URL:** `https://github.com/kineticman/PeacockDeepLinks`
-      - **Image name:** `peacock-scraper:latest`
+      - **Image name:** `peacockdeeplinks:latest`
    
    c. Click **Build the image**
    
@@ -246,9 +220,7 @@ CH4C_HOST=127.0.0.1                   # CH4C server IP (default: 127.0.0.1)
 CH4C_PORT=2442                        # CH4C server port (default: 2442)
 
 # Refresh Schedule (cron format)
-PEACOCK_REFRESH_CRON=15 3 * * *
-
-The cron is evaluated in the container’s timezone. Set `TZ` (e.g. `America/New_York` or `UTC`) in your Docker/Portainer config if you want local times.       # Daily at 3:15 AM UTC
+PEACOCK_REFRESH_CRON=15 3 * * *       # Daily at 3:15 AM UTC
 ```
 
 ### Cron Schedule Examples
@@ -428,11 +400,11 @@ curl http://localhost:6655/lanes/m3u
 ## 📁 File Structure
 
 ```
-peacock-scraper/
+peacockdeeplinks/
 ├── peacock_server.py              # Flask web server + scheduler
 ├── peacock_ingest_atom.py         # Peacock API scraper
-├── peacock_build_lanes.py         # Lane planner
-├── peacock_export_from_db.py      # XMLTV/M3U exporter
+├── peacock_build_lanes.py         # Lane builder
+├── peacock_export_hybrid.py       # XMLTV/M3U exporter
 ├── Dockerfile                     # Docker image
 ├── docker-compose.yml             # Docker Compose config
 ├── .env.example                   # Environment template
