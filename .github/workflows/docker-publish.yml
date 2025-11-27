@@ -32,6 +32,11 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest        # always push :latest
+            type=ref,event=branch        # e.g. :main
+            type=ref,event=tag           # e.g. :v0.1.0
+            type=sha                     # e.g. :sha-abc123
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
