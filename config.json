@@ -1,0 +1,17 @@
+{
+  "auth_tokens": {
+    "utscf": "OjAAAAEAAAAAAAIAEAAAACMAKwAtAA%7E%7E",
+    "utsk": "6e3013c6d6fae3c2%3A%3A%3A%3A%3A%3A235656c069bb0efb",
+    "media_user_token": "AjL9jKbwrj1TyagkO9KuKorYijQPguzoW/bWiLDfs/oOd1oGF376i+UiLgBFrDzeeu44pL1zGs7dd6vTUkrt+i1CRxm4tPpTOsm1Z1SiugBJ09oToFu/NcUBGCPlsDtYR8mv6Gjh+N7OdrrL8apd0/s7vKMYCqF3fG3s/RIrFJ5xIMHAzAs7VOCfs9AYeQWR0PgliH2tPbc8cR4clnlC4vsaAAyBa9poTNuhCBTDxfb9jyeVhQ==",
+    "bearer": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6IldlYlBsYXlLaWQifQ.eyJpc3MiOiJBTVBXZWJQbGF5IiwiaWF0IjoxNzYzMDc2MDkwLCJleHAiOjE3NzAzMzM2OTAsInJvb3RfaHR0cHNfb3JpZ2luIjpbImFwcGxlLmNvbSJdfQ.-gHdAOIKGocEdbmwWtF4VJALFwix-vt1_BMpL_zWxrCA1ZyzYR7CBayxMErdn9l9trX8fpj5yEXSyoIIhb9xLg"
+  },
+  "providers": [
+    "espn",
+    "peacock",
+    "all"
+  ],
+  "options": {
+    "fetch_details": true,
+    "rate_limit_delay": 2.0
+  }
+}

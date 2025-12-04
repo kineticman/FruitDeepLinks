@@ -1,3 +1,28 @@
-flask==3.0.0
-apscheduler==3.10.4
-requests==2.31.0
+# Core dependencies
+requests>=2.31.0
+playwright>=1.40.0
+selenium>=4.15.0
+webdriver-manager>=4.0.1
+
+# Database
+sqlite3; python_version < '3.0'  # Built-in for Python 3+
+
+# XML/HTML parsing
+lxml>=4.9.3
+beautifulsoup4>=4.12.2
+
+# JSON handling
+orjson>=3.9.10  # Fast JSON parsing (optional, falls back to built-in json)
+
+# HTTP client
+httpx>=0.25.2
+
+# Date/time handling
+python-dateutil>=2.8.2
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Optional: Web server if you want to serve streams
+flask>=3.0.0
+flask-cors>=4.0.0

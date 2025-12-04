@@ -1,26 +1,46 @@
+# bin/peacock_export_hybrid.py
 #!/usr/bin/env python3
 """
-peacock_export_hybrid.py - Export both lane-based AND direct deeplink formats
+Export XMLTV + M3U with STABLE channel ids that match M3U tvg-id.
 
-Generates:
-1. Lane-based (for ADBTuner):
-   - peacock_lanes.xml / peacock_lanes.m3u
-   - M3U uses configurable server URLs that call /api/lane/{id}/deeplink
-   
-2. Direct deeplinks (for simple players):
-   - peacock_direct.xml / peacock_direct.m3u
-   - One channel per event (only events within 24 hours)
-   - Includes placeholders: "Event Not Started" and "Event Ended"
-   - Channels match between XML and M3U
+Updates:
+- Placeholder times (upcoming/ended) are rendered in **system local time** with tz abbrev.
+- Stable XML <channel id> == M3U tvg-id via fdl.<event_id|pvid>
+- Deterministic SQL ordering
+- 24h default window, placeholders, provider categories, image extraction, deeplinks
 """
 
-import os, argparse, json, sqlite3, urllib.parse
+from __future__ import annotations
+
+import os, argparse, json, sqlite3, urllib.parse, sys, re
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+# Import filtering support
+try:
+    from filter_integration import (
+        load_user_preferences,
+        should_include_event,
+        get_best_deeplink_for_event,
+        get_fallback_deeplink
+    )
+    FILTERING_AVAILABLE = True
+except ImportError:
+    print("Warning: filter_integration not available, filtering disabled")
+    FILTERING_AVAILABLE = False
+    def load_user_preferences(conn):
+        return {"enabled_services": [], "disabled_sports": [], "disabled_leagues": []}
+    def should_include_event(event, prefs):
+        return True
+    def get_best_deeplink_for_event(conn, event_id, services):
+        return None
+    def get_fallback_deeplink(event):
+        return None
+
+# -------------------- DB helpers --------------------
 def get_conn(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -33,480 +53,438 @@ def check_tables(conn: sqlite3.Connection, required: List[str]) -> Tuple[bool, L
     missing = [t for t in required if t not in existing]
     return (len(missing) == 0, missing)
 
-def get_lanes(conn: sqlite3.Connection) -> List[Tuple[int, str, int]]:
-    cur = conn.cursor()
-    cur.execute("SELECT lane_id, name, logical_number FROM lanes ORDER BY lane_id")
-    return [(row["lane_id"], row["name"], row["logical_number"]) for row in cur.fetchall()]
-
-def get_lane_events(conn: sqlite3.Connection) -> List[Dict]:
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT le.lane_id, le.event_id, le.is_placeholder, le.start_utc, le.end_utc, le.title,
-               e.pvid, e.slug, e.title AS event_title, e.channel_name,
-               e.synopsis, e.synopsis_brief, e.genres_json
-        FROM lane_events le
-        LEFT JOIN events e ON le.event_id = e.id
-        ORDER BY le.lane_id, le.start_utc
-    """)
-    return [dict(row) for row in cur.fetchall()]
-
-def get_direct_events(conn: sqlite3.Connection, hours_window: int = 24) -> List[Dict]:
-    """Get events starting within the next X hours"""
-    cur = conn.cursor()
-    now = datetime.now(timezone.utc)
-    window_end = now + timedelta(hours=hours_window)
-    
-    cur.execute("""
-        SELECT e.id, e.pvid, e.slug, e.title, e.channel_name,
-               e.synopsis, e.synopsis_brief, e.genres_json,
-               le.start_utc, le.end_utc
-        FROM events e
-        JOIN lane_events le ON e.id = le.event_id
-        WHERE le.is_placeholder = 0
-          AND e.pvid IS NOT NULL
-          AND le.start_utc <= ?
-          AND le.end_utc > ?
-        GROUP BY e.id
-        ORDER BY le.start_utc
-    """, (window_end.isoformat(), now.isoformat()))
-    
-    return [dict(row) for row in cur.fetchall()]
-
+# -------------------- Small utils --------------------
 def parse_iso(dt_str: str) -> datetime:
     if not dt_str:
         return datetime.max.replace(tzinfo=timezone.utc)
     dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
     return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
+def xmltv_time(dt: datetime) -> str:
+    # Keep the space form for broad compatibility; can switch to no-space if needed.
+    return dt.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S +0000")
+
 def snap_to_half_hour(dt: datetime) -> datetime:
-    """Snap datetime to nearest :00 or :30"""
     if dt.minute < 15:
         return dt.replace(minute=0, second=0, microsecond=0)
     elif dt.minute < 45:
         return dt.replace(minute=30, second=0, microsecond=0)
     else:
-        # Round up to next hour
         return (dt + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
 
-def xmltv_time(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S +0000")
+def _sanitize_id(s: str) -> str:
+    s = (s or "").strip()
+    s = re.sub(r"[^A-Za-z0-9._-]+", ".", s)
+    if not s:
+        s = "ev"
+    if s[0].isdigit():
+        s = "x" + s
+    return s
 
-def format_local_time(dt: datetime) -> str:
-    """Format datetime in local time for display"""
-    # Convert to US Eastern Time (you can change this to your timezone)
-    from datetime import timezone as tz
-    # EST is UTC-5, EDT is UTC-4
-    # For simplicity, using a fixed offset. In production, use pytz or zoneinfo
-    eastern_offset = timedelta(hours=-5)  # Adjust for your timezone
-    local_dt = dt + eastern_offset
-    return local_dt.strftime('%I:%M %p EST')
+def stable_channel_id(event: Dict, prefix: str = "fdl.") -> str:
+    key = event.get("id") or event.get("event_id") or event.get("pvid")
+    if key:
+        return _sanitize_id(prefix + key)
+    t = (event.get("title") or "event").strip()
+    st = (event.get("start_utc") or "").replace("-", "").replace(":", "").replace("T", "").replace("Z", "")
+    return _sanitize_id(prefix + t + "." + st)
 
-def get_event_images(conn: sqlite3.Connection, event_id: str, preferred_types: List[str]) -> Optional[str]:
-    if not event_id:
-        return None
+def get_provider_from_channel(channel_name: str) -> str:
+    if not channel_name:
+        return "Sports"
+    channel_lower = channel_name.lower()
+    if "espn" in channel_lower:
+        return "ESPN+"
+    elif "peacock" in channel_lower:
+        return "Peacock"
+    elif "national broadcasting company" in channel_lower or channel_name == "National Broadcasting Company":
+        return "Peacock"
+    elif "nbc sports" in channel_lower:
+        return "NBC Sports"
+    elif "prime" in channel_lower or "amazon" in channel_lower:
+        return "Prime Video"
+    elif "cbs" in channel_lower:
+        return "CBS Sports"
+    elif "paramount" in channel_lower:
+        return "Paramount+"
+    elif "fox" in channel_lower:
+        return "FOX Sports"
+    elif "nfl" in channel_lower and "network" not in channel_lower:
+        return "NFL+"
+    elif "nba" in channel_lower and "tv" not in channel_lower:
+        return "NBA League Pass"
+    elif "dazn" in channel_lower:
+        return "DAZN"
+    elif "apple" in channel_lower:
+        return "Apple TV+"
+    else:
+        return channel_name
+
+# Local time display helpers
+_LOCAL_TZ = datetime.now().astimezone().tzinfo
+
+def _fmt_local_short(dt_utc: datetime) -> str:
+    """
+    WHY: Human-friendly local time for placeholders. Example: 'Sun at 04:00 AM EST'
+    Notes:
+      - Portable: avoid %-I (Linux) / %#I (Windows). Use %I and accept leading zero.
+      - %Z gets tz abbrev (EST/EDT/etc.). Fallback to offset if empty.
+    """
+    ldt = dt_utc.astimezone(_LOCAL_TZ)
+    tz = ldt.strftime("%Z") or ldt.strftime("%z")
+    return ldt.strftime(f"%a at %I:%M %p {tz}")
+
+# -------------------- Images --------------------
+def get_event_image_url(conn: sqlite3.Connection, event: Dict) -> Optional[str]:
+    event_id = event.get("id") or event.get("event_id")
+    if event_id:
+        cur = conn.cursor()
+        for img_type in ["landscape", "scene169", "titleArt169"]:
+            cur.execute("SELECT url FROM event_images WHERE event_id=? AND img_type=? LIMIT 1",
+                        (event_id, img_type))
+            row = cur.fetchone()
+            if row:
+                return row["url"]
+
+    raw_json = event.get("raw_attributes_json")
+    if raw_json:
+        try:
+            attrs = json.loads(raw_json)
+            if "competitors" in attrs and isinstance(attrs["competitors"], list):
+                for comp in attrs["competitors"]:
+                    logo_url = comp.get("logo_url")
+                    if logo_url:
+                        return (logo_url
+                                .replace("{w}", "400")
+                                .replace("{h}", "400")
+                                .replace("{f}", "png"))
+            if "images" in attrs and attrs["images"]:
+                images = attrs["images"]
+                for key in ["showTile2x1", "showTile16x9", "showTile2x3"]:
+                    if key in images and images[key]:
+                        return images[key]
+            if "playables" in attrs and isinstance(attrs["playables"], list):
+                for playable in attrs["playables"]:
+                    if playable.get("image"):
+                        return playable["image"]
+        except Exception:
+            pass
+    return None
+
+# -------------------- Event selection (24h) --------------------
+def get_direct_events(conn: sqlite3.Connection, hours_window: int = 24, 
+                     apply_filters: bool = True) -> List[Dict]:
+    """Get events for direct export, optionally applying user filters"""
     cur = conn.cursor()
-    for img_type in preferred_types:
-        cur.execute("SELECT url FROM event_images WHERE event_id=? AND img_type=? LIMIT 1", (event_id, img_type))
-        row = cur.fetchone()
-        if row:
-            return row["url"]
-    cur.execute("SELECT url FROM event_images WHERE event_id=? LIMIT 1", (event_id,))
-    row = cur.fetchone()
-    return row["url"] if row else None
-
-def build_adbtuner_xmltv(conn: sqlite3.Connection, xml_path: str):
-    """Build lane-based XMLTV for ADBTuner"""
-    lanes = get_lanes(conn)
-    lane_events = get_lane_events(conn)
-    print(f"ADBTuner XMLTV: {len(lanes)} lanes, {len(lane_events)} events")
-    
-    events_by_lane: Dict[int, List[Dict]] = {}
-    for row in lane_events:
-        events_by_lane.setdefault(row["lane_id"], []).append(row)
-    
-    tv = ET.Element("tv")
-    tv.set("generator-info-name", "Peacock TV Scraper")
-    tv.set("generator-info-url", "https://github.com/kineticman/PeacockDeepLinks")
-    
-    # Channels
-    for lane_id, name, logical_number in lanes:
-        chan = ET.SubElement(tv, "channel", id=f"peacock.lane.{lane_id}")
-        dn = ET.SubElement(chan, "display-name")
-        dn.text = f"{name} ({logical_number})"
-    
-    # Programs
-    for lane_id, name, logical_number in lanes:
-        rows = events_by_lane.get(lane_id, [])
-        if not rows:
-            continue
-        
-        for row in rows:
-            start = parse_iso(row["start_utc"])
-            stop = parse_iso(row["end_utc"])
-            if stop <= start:
-                stop = start + timedelta(minutes=1)
-            
-            prog = ET.SubElement(
-                tv, "programme",
-                channel=f"peacock.lane.{lane_id}",
-                start=xmltv_time(start),
-                stop=xmltv_time(stop)
-            )
-            
-            is_placeholder = bool(row["is_placeholder"])
-            
-            # Title
-            if is_placeholder:
-                title_text = "Nothing Scheduled"
-            else:
-                title_text = row.get("event_title") or row.get("title") or "Peacock Sports"
-            
-            title_el = ET.SubElement(prog, "title")
-            title_el.text = title_text
-            
-            # Description
-            if not is_placeholder:
-                desc_text = row.get("synopsis") or row.get("synopsis_brief")
-                if desc_text:
-                    desc_el = ET.SubElement(prog, "desc")
-                    desc_el.text = desc_text
-            
-            # Categories
-            if not is_placeholder:
-                cat1 = ET.SubElement(prog, "category")
-                cat1.text = "Sports"
-                
-                genres_json = row.get("genres_json")
-                if genres_json:
-                    try:
-                        genres = json.loads(genres_json)
-                        if isinstance(genres, list):
-                            for g in genres:
-                                if g:
-                                    cat_el = ET.SubElement(prog, "category")
-                                    cat_el.text = str(g)
-                    except:
-                        pass
-            
-            # Icon
-            if not is_placeholder and row.get("event_id"):
-                img_url = get_event_images(
-                    conn, row["event_id"],
-                    ["landscape", "scene169", "titleArt169", "scene34"]
-                )
-                if img_url:
-                    icon = ET.SubElement(prog, "icon")
-                    icon.set("src", img_url)
-            
-            if not is_placeholder:
-                live = ET.SubElement(prog, "live")
-                live.text = "1"
-    
-    xml_str = minidom.parseString(ET.tostring(tv)).toprettyxml(indent="  ")
-    with open(xml_path, "w", encoding="utf-8") as f:
-        f.write(xml_str)
-    print(f"Wrote ADBTuner XMLTV: {xml_path}")
-
-def build_adbtuner_m3u(conn: sqlite3.Connection, m3u_path: str, server_url: str):
-    """Build lane-based M3U for ADBTuner with API URLs"""
-    lanes = get_lanes(conn)
-    print(f"ADBTuner M3U: {len(lanes)} lanes")
-    
-    with open(m3u_path, "w", encoding="utf-8") as f:
-        f.write("#EXTM3U\n\n")
-        for lane_id, name, logical_number in lanes:
-            # Use configured server URL for API endpoint
-            stream_url = f"{server_url}/api/lane/{lane_id}/deeplink"
-            
-            f.write(
-                f'#EXTINF:-1 tvg-id="peacock.lane.{lane_id}" '
-                f'tvg-name="{name}" '
-                f'tvg-chno="{logical_number}" '
-                f'group-title="Peacock Lanes" tvg-logo="",{name}\n'
-            )
-            f.write(f"{stream_url}\n\n")
-    
-    print(f"Wrote ADBTuner M3U: {m3u_path}")
-
-def build_chrome_m3u(conn: sqlite3.Connection, m3u_path: str, server_url: str):
-    """Build Chrome Capture M3U with chrome:// API URLs for dynamic deeplinks"""
-    lanes = get_lanes(conn)
-    print(f"Chrome Capture M3U: {len(lanes)} lanes")
-    
-    with open(m3u_path, "w", encoding="utf-8") as f:
-        f.write("#EXTM3U\n\n")
-        for lane_id, name, logical_number in lanes:
-            # Use API endpoint wrapped in chrome:// for dynamic deeplink resolution
-            api_url = f"{server_url}/api/lane/{lane_id}/deeplink?format=text"
-            chrome_url = f"chrome://{api_url}"
-            
-            f.write(
-                f'#EXTINF:-1 tvg-id="peacock.lane.{lane_id}" '
-                f'tvg-name="{name}" '
-                f'tvg-chno="{logical_number}" '
-                f'group-title="Peacock Lanes" tvg-logo="",{name}\n'
-            )
-            f.write(f"{chrome_url}\n\n")
-    
-    print(f"Wrote Chrome Capture M3U: {m3u_path}")
-
-def build_direct_xmltv(conn: sqlite3.Connection, xml_path: str):
-    """Build one-channel-per-event XMLTV with placeholders"""
-    events = get_direct_events(conn, hours_window=24)
-    print(f"Direct XMLTV: {len(events)} event channels (within 24 hours)")
-    
     now = datetime.now(timezone.utc)
+    window_end = now + timedelta(hours=hours_window)
+    cur.execute("""
+        SELECT e.id, e.pvid, e.slug, e.title, e.channel_name,
+               e.synopsis, e.synopsis_brief, e.genres_json, e.classification_json,
+               e.start_utc, e.end_utc, e.raw_attributes_json
+        FROM events e
+        WHERE e.pvid IS NOT NULL
+          AND e.end_utc >= ?
+          AND e.start_utc <= ?
+        ORDER BY datetime(e.start_utc) ASC,
+                 datetime(e.end_utc) ASC,
+                 e.title ASC,
+                 e.id ASC
+    """, (now.isoformat(), window_end.isoformat()))
     
-    tv = ET.Element("tv")
-    tv.set("generator-info-name", "Peacock TV Scraper - Direct")
-    tv.set("generator-info-url", "https://github.com/kineticman/PeacockDeepLinks")
+    all_events = [dict(row) for row in cur.fetchall()]
     
-    # Create channel and program for each event with placeholders
-    for idx, event in enumerate(events, start=1):
-        chan_id = f"peacock.event.{idx}"
+    # Apply content filters if enabled
+    if apply_filters and FILTERING_AVAILABLE:
+        preferences = load_user_preferences(conn)
+        filtered_events = []
+        for event in all_events:
+            if should_include_event(event, preferences):
+                filtered_events.append(event)
         
-        # Channel definition
+        if len(filtered_events) < len(all_events):
+            print(f"  Filtered: {len(all_events)} -> {len(filtered_events)} events (removed {len(all_events) - len(filtered_events)})")
+        
+        return filtered_events
+    
+    return all_events
+
+# -------------------- XMLTV --------------------
+def build_direct_xmltv(conn: sqlite3.Connection, xml_path: str, hours_window: int = 24, 
+                       epg_prefix: str = "fdl.", apply_filters: bool = True):
+    events = get_direct_events(conn, hours_window=hours_window, apply_filters=apply_filters)
+    print(f"Direct XMLTV: {len(events)} event channels (within {hours_window}h)")
+    
+    # Load user preferences for deeplink selection
+    preferences = load_user_preferences(conn) if FILTERING_AVAILABLE else {}
+    enabled_services = preferences.get("enabled_services", [])
+
+    now = datetime.now(timezone.utc)
+    tv = ET.Element("tv")
+    tv.set("generator-info-name", "FruitDeepLinks - Direct")
+    tv.set("generator-info-url", "https://github.com/yourusername/FruitDeepLinks")
+
+    for idx, event in enumerate(events, start=1):
+        chan_id = stable_channel_id(event, epg_prefix)
+        title = event.get("title") or f"Sports Event {idx}"
+        channel_name = event.get("channel_name") or "Sports"
+        event_id = event.get("id", "")
+        
+        # Get actual deeplink and extract provider from it (same as M3U)
+        deeplink_url = None
+        if FILTERING_AVAILABLE and enabled_services:
+            # Try filtered playables first
+            deeplink_url = get_best_deeplink_for_event(conn, event_id, enabled_services)
+        
+        if not deeplink_url and FILTERING_AVAILABLE:
+            # Fallback to raw_attributes
+            deeplink_url = get_fallback_deeplink(event)
+        
+        if not deeplink_url:
+            # Final fallback for Peacock events
+            pvid = event.get("pvid")
+            if pvid and not event_id.startswith("appletv-"):
+                payload = {"pvid": pvid, "type": "PROGRAMME", "action": "PLAY"}
+                deeplink_url = "https://www.peacocktv.com/deeplink?deeplinkData=" + urllib.parse.quote(
+                    json.dumps(payload, separators=(",", ":"), ensure_ascii=False), safe=""
+                )
+        
+        # Extract actual provider from the deeplink URL
+        provider = "Sports"  # Default fallback
+        if deeplink_url:
+            try:
+                # Try using logical service mapper first
+                if FILTERING_AVAILABLE:
+                    from logical_service_mapper import get_logical_service_for_playable, get_service_display_name
+                    from provider_utils import extract_provider_from_url
+                    
+                    # Extract raw provider scheme
+                    scheme = extract_provider_from_url(deeplink_url)
+                    if scheme:
+                        # Get logical service (handles web URL mapping)
+                        logical_service = get_logical_service_for_playable(
+                            provider=scheme if scheme not in ('http', 'https') else scheme,
+                            deeplink_play=deeplink_url,
+                            deeplink_open=None,
+                            playable_url=None,
+                            event_id=event_id,
+                            conn=conn
+                        )
+                        provider = get_service_display_name(logical_service)
+            except Exception as e:
+                # Fallback to channel_name if all else fails
+                provider = get_provider_from_channel(channel_name)
+            pass  # Fall back to channel_name-based provider
+
         chan = ET.SubElement(tv, "channel", id=chan_id)
         dn = ET.SubElement(chan, "display-name")
-        dn.text = event["title"] or f"Peacock Event {idx}"
-        
-        # Event times
+        dn.text = title
+
         event_start = parse_iso(event["start_utc"])
         event_end = parse_iso(event["end_utc"])
         if event_end <= event_start:
             event_end = event_start + timedelta(hours=3)
-        
-        # Placeholder: "Event Not Started" - snap to :00 or :30
-        # Start from NOW or 8 hours before event (whichever is earlier)
-        pre_start = now
-        earliest_start = event_start - timedelta(hours=8)
-        if earliest_start < pre_start:
-            pre_start = earliest_start
-        
-        # Snap to nearest :00 or :30
-        pre_start = snap_to_half_hour(pre_start)
-        
-        # Create 30-minute placeholder blocks before event
+
+        # Pre-event placeholders (from now-1h snapped to :00/:30)
+        pre_start = snap_to_half_hour(now - timedelta(hours=1))
         current = pre_start
         while current < event_start:
-            block_end = min(current + timedelta(minutes=30), event_start)
-            
-            # Skip if block would be less than 1 minute
+            block_end = min(current + timedelta(hours=1), event_start)
             if (block_end - current).total_seconds() < 60:
                 break
-            
-            prog = ET.SubElement(
-                tv, "programme",
-                channel=chan_id,
-                start=xmltv_time(current),
-                stop=xmltv_time(block_end)
-            )
-            
-            title_el = ET.SubElement(prog, "title")
-            title_el.text = "Event Not Started"
-            
-            desc_el = ET.SubElement(prog, "desc")
-            desc_el.text = f"This event starts at {format_local_time(event_start)}. Check back closer to start time."
-            
+            pre_prog = ET.SubElement(tv, "programme",
+                                     channel=chan_id,
+                                     start=xmltv_time(current),
+                                     stop=xmltv_time(block_end))
+            ET.SubElement(pre_prog, "title").text = "Event Not Started"
+            # WHY: show *local* start time for user clarity
+            ET.SubElement(pre_prog, "desc").text = f"Starts { _fmt_local_short(event_start) }. Available on {provider}."
             current = block_end
-        
-        # Actual event program
-        prog = ET.SubElement(
-            tv, "programme",
-            channel=chan_id,
-            start=xmltv_time(event_start),
-            stop=xmltv_time(event_end)
-        )
-        
-        title_el = ET.SubElement(prog, "title")
-        title_el.text = event["title"] or "Peacock Sports"
-        
-        desc_text = event.get("synopsis") or event.get("synopsis_brief")
-        if desc_text:
-            desc_el = ET.SubElement(prog, "desc")
-            desc_el.text = desc_text
-        
-        cat1 = ET.SubElement(prog, "category")
-        cat1.text = "Sports"
-        
+
+        # Main event
+        prog = ET.SubElement(tv, "programme",
+                             channel=chan_id,
+                             start=xmltv_time(event_start),
+                             stop=xmltv_time(event_end))
+        ET.SubElement(prog, "title").text = title
+
+        base_desc = event.get("synopsis") or event.get("synopsis_brief") or title
+        sport_label = None
         genres_json = event.get("genres_json")
         if genres_json:
             try:
                 genres = json.loads(genres_json)
                 if isinstance(genres, list):
-                    for g in genres:
-                        if g:
-                            cat_el = ET.SubElement(prog, "category")
-                            cat_el.text = str(g)
-            except:
+                    cands = [g for g in genres if g and g not in (provider, "Sports")]
+                    if cands:
+                        sport_label = max(cands, key=len)
+            except Exception:
                 pass
-        
-        if event.get("id"):
-            img_url = get_event_images(
-                conn, event["id"],
-                ["landscape", "scene169", "titleArt169", "scene34"]
-            )
-            if img_url:
-                icon = ET.SubElement(prog, "icon")
-                icon.set("src", img_url)
-        
-        live = ET.SubElement(prog, "live")
-        live.text = "1"
-        
-        # Placeholder: "Event Ended" (24 hours after event end)
+        if sport_label and provider:
+            desc_text = f"{base_desc} - {sport_label} - on {provider}"
+        elif provider:
+            desc_text = f"{base_desc} - on {provider}"
+        else:
+            desc_text = base_desc
+        ET.SubElement(prog, "desc").text = desc_text
+
+        ET.SubElement(prog, "category").text = provider
+        ET.SubElement(prog, "category").text = "Sports"
+        if genres_json:
+            try:
+                for g in json.loads(genres_json) or []:
+                    if g and g != provider:
+                        ET.SubElement(prog, "category").text = str(g)
+            except Exception:
+                pass
+
+        img_url = get_event_image_url(conn, event)
+        if img_url:
+            ET.SubElement(prog, "icon", src=img_url)
+        ET.SubElement(prog, "live").text = "1"
+
+        # Post-event placeholders (24h in 1h blocks)
+        current = event_end
         post_end = event_end + timedelta(hours=24)
-        
-        # Snap event_end to next :00 or :30
-        current = snap_to_half_hour(event_end)
-        if current < event_end:
-            current = event_end
-        
-        # Create 30-minute placeholder blocks after event
         while current < post_end:
-            block_end = min(current + timedelta(minutes=30), post_end)
-            
-            # Skip if block would be less than 1 minute
-            if (block_end - current).total_seconds() < 60:
-                break
-            
-            prog = ET.SubElement(
-                tv, "programme",
-                channel=chan_id,
-                start=xmltv_time(current),
-                stop=xmltv_time(block_end)
-            )
-            
-            title_el = ET.SubElement(prog, "title")
-            title_el.text = "Event Ended"
-            
-            desc_el = ET.SubElement(prog, "desc")
-            desc_el.text = f"This event ended at {format_local_time(event_end)}. Check guide for upcoming events."
-            
+            block_end = min(current + timedelta(hours=1), post_end)
+            post_prog = ET.SubElement(tv, "programme",
+                                      channel=chan_id,
+                                      start=xmltv_time(current),
+                                      stop=xmltv_time(block_end))
+            ET.SubElement(post_prog, "title").text = "Event Ended"
+            # WHY: show *local* end time too
+            ET.SubElement(post_prog, "desc").text = f"Ended { _fmt_local_short(event_end) }. Available on {provider}."
             current = block_end
-    
+
     xml_str = minidom.parseString(ET.tostring(tv)).toprettyxml(indent="  ")
+    Path(xml_path).parent.mkdir(parents=True, exist_ok=True)
     with open(xml_path, "w", encoding="utf-8") as f:
         f.write(xml_str)
     print(f"Wrote Direct XMLTV: {xml_path}")
 
-def build_direct_m3u(conn: sqlite3.Connection, m3u_path: str):
-    """Build one-channel-per-event M3U matching the XMLTV channels"""
-    events = get_direct_events(conn, hours_window=24)
-    print(f"Direct M3U: {len(events)} event channels (within 24 hours)")
+# -------------------- M3U --------------------
+def build_direct_m3u(conn: sqlite3.Connection, m3u_path: str, hours_window: int = 24, 
+                    epg_prefix: str = "fdl.", apply_filters: bool = True):
+    events = get_direct_events(conn, hours_window=hours_window, apply_filters=apply_filters)
+    print(f"Direct M3U: {len(events)} event channels (within {hours_window}h)")
     
+    # Load user preferences for deeplink selection
+    preferences = load_user_preferences(conn) if FILTERING_AVAILABLE else {}
+    enabled_services = preferences.get("enabled_services", [])
+    
+    skipped_no_deeplink = 0
+
     with open(m3u_path, "w", encoding="utf-8") as f:
         f.write("#EXTM3U\n\n")
-        
         for idx, event in enumerate(events, start=1):
             pvid = event.get("pvid")
             if not pvid:
                 continue
+
+            chan_id = stable_channel_id(event, epg_prefix)
+            title = event.get("title") or f"Sports Event {idx}"
+            channel_name = event.get("channel_name") or "Sports"
+            provider = get_provider_from_channel(channel_name)
+
+            img_url = get_event_image_url(conn, event)
+            logo_attr = f' tvg-logo="{img_url}"' if img_url else ""
+
+            # NEW: Smart deeplink selection based on user preferences
+            deeplink_url = None
+            event_id = event.get("id", "")
             
-            # Create actual Peacock deeplink
-            deeplink_payload = {"pvid": pvid, "type": "PROGRAMME", "action": "PLAY"}
-            deeplink_json = json.dumps(deeplink_payload, separators=(",", ":"))
-            deeplink_url = f"https://www.peacocktv.com/deeplink?deeplinkData={urllib.parse.quote(deeplink_json, safe='')}"
+            if FILTERING_AVAILABLE and enabled_services:
+                # Try filtered playables first
+                deeplink_url = get_best_deeplink_for_event(conn, event_id, enabled_services)
             
-            # MUST match XMLTV channel ID
-            chan_id = f"peacock.event.{idx}"
-            title = event["title"] or f"Peacock Event {idx}"
+            if not deeplink_url and FILTERING_AVAILABLE:
+                # Fallback to raw_attributes (for events without playables table data)
+                deeplink_url = get_fallback_deeplink(event)
             
-            # Get image for tvg-logo
-            logo_url = ""
-            if event.get("id"):
-                logo_url = get_event_images(
-                    conn, event["id"],
-                    ["landscape", "scene169", "titleArt169", "scene34"]
-                ) or ""
+            if not deeplink_url:
+                # Final fallback: old method for Peacock events
+                if not event_id.startswith("appletv-"):
+                    payload = {"pvid": pvid, "type": "PROGRAMME", "action": "PLAY"}
+                    deeplink_url = "https://www.peacocktv.com/deeplink?deeplinkData=" + urllib.parse.quote(
+                        json.dumps(payload, separators=(",", ":"), ensure_ascii=False), safe=""
+                    )
             
+            # Skip events with no suitable deeplink
+            if not deeplink_url:
+                skipped_no_deeplink += 1
+                continue
+            
+            # Extract actual provider from the deeplink URL for accurate group-title
+            actual_provider = provider  # Default to channel_name-based provider
+            try:
+                if FILTERING_AVAILABLE:
+                    from provider_utils import extract_provider_from_url, get_provider_display_name
+                    scheme = extract_provider_from_url(deeplink_url)
+                    if scheme:
+                        actual_provider = get_provider_display_name(scheme)
+            except:
+                pass  # Fall back to channel_name-based provider
+
             f.write(
-                f'#EXTINF:-1 tvg-id="{chan_id}" '
-                f'tvg-name="{title}" '
-                f'group-title="Peacock Events"'
+                f'#EXTINF:-1 tvg-id="{chan_id}" tvg-name="{title}" group-title="{actual_provider}"{logo_attr},{title}\n'
             )
-            
-            if logo_url:
-                f.write(f' tvg-logo="{logo_url}"')
-            
-            f.write(f',{title}\n')
             f.write(f"{deeplink_url}\n\n")
     
+    if skipped_no_deeplink > 0:
+        print(f"  Skipped {skipped_no_deeplink} events with no suitable deeplinks")
+
+    Path(m3u_path).parent.mkdir(parents=True, exist_ok=True)
     print(f"Wrote Direct M3U: {m3u_path}")
 
+# -------------------- Stubs for lanes (unchanged) --------------------
+def build_adbtuner_xmltv(conn, xml_path): print("Skipping lanes XMLTV - use full version")
+def build_adbtuner_m3u(conn, m3u_path, server_url): print("Skipping lanes M3U - use full version")
+def build_chrome_m3u(conn, m3u_path, server_url): print("Skipping chrome M3U - use full version")
+
+# -------------------- CLI --------------------
 def main():
     script_dir = Path(__file__).resolve().parent
-    if script_dir.name == 'bin':
-        repo_root = script_dir.parent
-        default_db = str(repo_root / 'data' / 'peacock_events.db')
-        default_lanes_xml = str(repo_root / 'out' / 'peacock_lanes.xml')
-        default_lanes_m3u = str(repo_root / 'out' / 'peacock_lanes.m3u')
-        default_direct_xml = str(repo_root / 'out' / 'peacock_direct.xml')
-        default_direct_m3u = str(repo_root / 'out' / 'peacock_direct.m3u')
-    else:
-        default_db = "peacock_events.db"
-        default_lanes_xml = "peacock_lanes.xml"
-        default_lanes_m3u = "peacock_lanes.m3u"
-        default_direct_xml = "peacock_direct.xml"
-        default_direct_m3u = "peacock_direct.m3u"
-    
-    env_db = os.getenv("PEACOCK_DB_PATH")
-    env_lanes_xml = os.getenv("PEACOCK_LANES_XML_PATH")
-    env_lanes_m3u = os.getenv("PEACOCK_LANES_M3U_PATH")
-    env_direct_xml = os.getenv("PEACOCK_DIRECT_XML_PATH")
-    env_direct_m3u = os.getenv("PEACOCK_DIRECT_M3U_PATH")
-    env_server_url = os.getenv("PEACOCK_SERVER_URL")
-    env_chrome_m3u = os.getenv("PEACOCK_CHROME_M3U_PATH")
-    
-    # Get server URL from HOST+PORT if not set
-    if not env_server_url:
-        server_host = os.getenv("PEACOCK_SERVER_HOST", "localhost")
-        server_port = os.getenv("PEACOCK_PORT", "6655")
-        env_server_url = f"http://{server_host}:{server_port}"
-    
+    repo_root = script_dir.parent if script_dir.name == 'bin' else script_dir
+
+    default_db = str(repo_root / 'data' / 'fruit_events.db')
+    default_direct_xml = str(repo_root / 'out' / 'direct.xml')
+    default_direct_m3u = str(repo_root / 'out' / 'direct.m3u')
+
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", default=env_db or default_db)
-    ap.add_argument("--lanes-xml", default=env_lanes_xml or default_lanes_xml)
-    ap.add_argument("--lanes-m3u", default=env_lanes_m3u or default_lanes_m3u)
-    ap.add_argument("--chrome-m3u", default=env_chrome_m3u or default_lanes_m3u.replace('.m3u', '_chrome.m3u'))
-    ap.add_argument("--direct-xml", default=env_direct_xml or default_direct_xml)
-    ap.add_argument("--direct-m3u", default=env_direct_m3u or default_direct_m3u)
-    ap.add_argument("--server-url", default=env_server_url, help="Server URL for API deeplink endpoints")
+    ap.add_argument("--db", default=os.getenv("PEACOCK_DB_PATH", default_db))
+    ap.add_argument("--direct-xml", default=default_direct_xml)
+    ap.add_argument("--direct-m3u", default=default_direct_m3u)
+    ap.add_argument("--hours-window", type=int, default=24, help="Channelize events overlapping next N hours")
+    ap.add_argument("--epg-prefix", default="fdl.", help="Prefix for tvg-id/<channel id>")
+    ap.add_argument("--no-filters", action="store_true", help="Disable user preference filtering")
     args = ap.parse_args()
     
-    for path in [args.lanes_xml, args.lanes_m3u, args.chrome_m3u, args.direct_xml, args.direct_m3u]:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-    
+    apply_filters = not args.no_filters  # Default: apply filters unless --no-filters flag
+
     print(f"Using DB: {args.db}")
-    print(f"Server URL: {args.server_url}")
-    print(f"\nADBTuner outputs:")
-    print(f"  - {args.lanes_xml}")
-    print(f"  - {args.lanes_m3u}")
-    print(f"\nChrome Capture output:")
-    print(f"  - {args.chrome_m3u}")
-    print(f"\nDirect outputs:")
-    print(f"  - {args.direct_xml}")
-    print(f"  - {args.direct_m3u}")
+    print(f"Direct outputs: {args.direct_xml}, {args.direct_m3u}")
+    print(f"Window: {args.hours_window}h | EPG prefix: {args.epg_prefix}")
+    print(f"Filtering: {'ENABLED' if apply_filters else 'DISABLED'}")
+    if apply_filters and not FILTERING_AVAILABLE:
+        print("  Warning: filter_integration.py not found, filtering disabled")
     print()
-    
+
     conn = get_conn(args.db)
-    ok, missing = check_tables(conn, ["lanes", "lane_events", "events"])
+    ok, missing = check_tables(conn, ["events"])
     if not ok:
-        print(f"\nERROR: Missing tables: {', '.join(missing)}")
-        print("\nRun: ./bin/peacock_refresh_all.py")
+        print(f"ERROR: Missing tables: {', '.join(missing)}")
         return 1
-    
-    # Build ADBTuner files (lane-based with API URLs)
-    build_adbtuner_xmltv(conn, args.lanes_xml)
-    build_adbtuner_m3u(conn, args.lanes_m3u, args.server_url)
-    build_chrome_m3u(conn, args.chrome_m3u, args.server_url)
-    
-    # Build Direct files (one channel per event with deeplinks)
-    build_direct_xmltv(conn, args.direct_xml)
-    build_direct_m3u(conn, args.direct_m3u)
-    
+
+    build_direct_xmltv(conn, args.direct_xml, hours_window=args.hours_window, 
+                      epg_prefix=args.epg_prefix, apply_filters=apply_filters)
+    build_direct_m3u(conn, args.direct_m3u, hours_window=args.hours_window, 
+                    epg_prefix=args.epg_prefix, apply_filters=apply_filters)
+
     conn.close()
     print("\nExport complete!")
     return 0
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
+

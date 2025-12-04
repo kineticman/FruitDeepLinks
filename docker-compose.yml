@@ -1,53 +1,53 @@
 version: '3.8'
-
 services:
-  peacock:
+  fruitdeeplinks:
     build: .
-    container_name: peacock-scraper
-    restart: unless-stopped
-    ports:
-      - "${PEACOCK_PORT:-6655}:6655"
-    volumes:
-      - ./data:/data
+    container_name: fruitdeeplinks
+    hostname: fruitdeeplinks
+    shm_size: '2gb'  # Chrome needs more shared memory in Docker
     environment:
-      # Server configuration
-      - PEACOCK_PORT=6655
-      
-      # IMPORTANT: Set this to your Docker host's IP address or hostname
-      # Just the IP/hostname - NO http:// and NO port number
-      # Server URL will be: http://${PEACOCK_SERVER_HOST}:${PEACOCK_PORT}
-      - PEACOCK_SERVER_HOST=${PEACOCK_SERVER_HOST:-localhost}
-      
-      # File paths (inside container)
-      - PEACOCK_DB_PATH=/data/peacock_events.db
-      - PEACOCK_LANES_XML_PATH=/data/peacock_lanes.xml
-      - PEACOCK_LANES_M3U_PATH=/data/peacock_lanes.m3u
-      - PEACOCK_CHROME_M3U_PATH=/data/peacock_lanes_chrome.m3u
-      - PEACOCK_DIRECT_XML_PATH=/data/peacock_direct.xml
-      - PEACOCK_DIRECT_M3U_PATH=/data/peacock_direct.m3u
-      
-      # Scraper configuration
-      - PEACOCK_LANES=${PEACOCK_LANES:-10}
-      - PEACOCK_DAYS_AHEAD=${PEACOCK_DAYS_AHEAD:-7}
-      - PEACOCK_PADDING_MINUTES=${PEACOCK_PADDING_MINUTES:-45}
-      - PEACOCK_LANE_START_CH=${PEACOCK_LANE_START_CH:-9000}
-      
-      # API configuration
-      - PEACOCK_SLUG=${PEACOCK_SLUG:-/sports/live-and-upcoming}
-      
-      # Optional: Channels-4-Chrome (CH4C) bridge for http:// playlists
-      - CH4C_HOST=${CH4C_HOST:-127.0.0.1}
-      - CH4C_PORT=${CH4C_PORT:-2442}
-      
-      # Schedule (cron format: minute hour day month day_of_week)
-      # Default: 3:15 AM UTC daily
-      - PEACOCK_REFRESH_CRON=${PEACOCK_REFRESH_CRON:-15 3 * * *}
-      
       # Timezone
-      - TZ=UTC
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6655/api/status')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      - TZ=America/New_York
+      # Database path
+      - PEACOCK_DB_PATH=/app/data/fruit_events.db
+      # Lane configuration
+      - PEACOCK_LANES=50
+      - PEACOCK_LANE_START_CH=9000
+      - PEACOCK_DAYS_AHEAD=7
+      # Padding and placeholders
+      - PEACOCK_PADDING_MINUTES=30
+      - PEACOCK_PLACEHOLDER_BLOCK_MINUTES=60
+      - PEACOCK_PLACEHOLDER_EXTRA_DAYS=5
+      # Apple TV Scraper settings
+      - HEADLESS=true
+      - NO_NETWORK=false
+      # Server URL for M3U export (THIS IS YOUR FRUITDEEPLINKS SERVER IP)
+      - SERVER_URL=http://192.168.86.80:6655
+      # Channels DVR IP (where Channels DVR is running)
+      - CHANNELS_DVR_IP=192.168.86.72
+      - CHANNELS_SOURCE_NAME=appletvdeeper
+    volumes:
+      # Persistent database and output files
+      - ./data:/app/data
+      - ./out:/app/out
+      - ./logs:/app/logs
+      # Optional: Mount config for easy editing
+      - ./config:/app/config
+    restart: unless-stopped
+    # Expose web server
+    ports:
+      - "6655:6655"
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Network mode - use host if you need access to other local services
+    # network_mode: host
+    # Or use bridge with port mapping if running a web server
+    # ports:
+    #   - "6655:6655"
+networks:
+  default:
+    name: fruitdeeplinks_network

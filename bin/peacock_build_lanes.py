@@ -54,29 +54,53 @@ def derive_times_from_attrs(attrs: Dict[str, Any]) -> Tuple[Optional[int], Optio
 def load_future_events(conn: sqlite3.Connection, days_ahead: int) -> List[Event]:
     now, cutoff = datetime.now(timezone.utc), datetime.now(timezone.utc) + timedelta(days=days_ahead)
     cur = conn.cursor()
-    cur.execute("SELECT id, pvid, slug, title, channel_name, raw_attributes_json FROM events WHERE pvid IS NOT NULL")
+    cur.execute("""
+        SELECT id, pvid, slug, title, channel_name, start_utc, end_utc, raw_attributes_json 
+        FROM events 
+        WHERE pvid IS NOT NULL 
+          AND start_utc IS NOT NULL
+          AND end_utc IS NOT NULL
+    """)
     
     events: List[Event] = []
     for row in cur.fetchall():
-        event_id, pvid, slug, title, channel_name, raw_json = row
+        event_id, pvid, slug, title, channel_name, start_utc, end_utc, raw_json = row
         if channel_name in FAKE_CHANNELS:
             continue
-        try:
-            attrs = json.loads(raw_json) if raw_json else {}
-        except:
-            attrs = {}
         
-        start_ms, end_ms, runtime_secs = derive_times_from_attrs(attrs)
-        if not start_ms:
-            continue
-        start_dt = ms_to_dt(start_ms)
+        # Use the database columns directly (works for both Peacock and Apple TV)
+        try:
+            start_dt = datetime.fromisoformat(start_utc.replace("Z", "+00:00"))
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=timezone.utc)
+            else:
+                start_dt = start_dt.astimezone(timezone.utc)
+            
+            end_dt = datetime.fromisoformat(end_utc.replace("Z", "+00:00"))
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=timezone.utc)
+            else:
+                end_dt = end_dt.astimezone(timezone.utc)
+        except Exception as e:
+            # Fallback: try to parse from raw_attributes_json (Peacock-style)
+            try:
+                attrs = json.loads(raw_json) if raw_json else {}
+            except:
+                continue
+            
+            start_ms, end_ms, runtime_secs = derive_times_from_attrs(attrs)
+            if not start_ms:
+                continue
+            start_dt = ms_to_dt(start_ms)
+            
+            if end_ms:
+                end_dt = ms_to_dt(end_ms)
+            else:
+                end_dt = start_dt + timedelta(seconds=runtime_secs if runtime_secs else 7200)
+        
+        # Filter by time window
         if start_dt < now or start_dt > cutoff:
             continue
-        
-        if end_ms:
-            end_dt = ms_to_dt(end_ms)
-        else:
-            end_dt = start_dt + timedelta(seconds=runtime_secs if runtime_secs else 7200)
         
         end_padded = end_dt + timedelta(minutes=PADDING_MINUTES)
         events.append(Event(event_id, pvid, slug, title, channel_name, start_dt, end_padded))
@@ -112,7 +136,7 @@ def create_lanes(conn: sqlite3.Connection, lane_count: int):
         logical_number = LANE_START_CH_DEFAULT + (lane_id - 1)
         cur.execute(
             "INSERT INTO lanes VALUES (?, ?, ?)",
-            (lane_id, f"Peacock Sports {lane_id}", logical_number),
+            (lane_id, f"Multi-Source Sports {lane_id}", logical_number),
         )
     conn.commit()
 
