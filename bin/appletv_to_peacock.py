@@ -1,7 +1,7 @@
+# bin/appletv_to_peacock.py
 #!/usr/bin/env python3
 """
 appletv_to_peacock.py - Import Apple TV Sports events into Peacock DB (idempotent)
-NOW WITH MULTI-PUNCHOUT SUPPORT - Stores all playables per event
 
 Usage:
   python appletv_to_peacock.py --apple-json parsed_events.json --peacock-db peacock_events.db
@@ -14,17 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# Import provider utilities
-try:
-    from provider_utils import extract_provider_from_url
-except ImportError:
-    # Fallback if provider_utils not available
-    def extract_provider_from_url(url: str) -> str:
-        if not url or '://' not in url:
-            return 'unknown'
-        return url.split('://')[0]
-
-# Provider channel number "namespaces" (kept for potential future use)
+# Provider channel number “namespaces” (kept for potential future use)
 PROVIDER_CHANNEL_RANGES = {
     "peacock": 9000, "espn-plus": 1000, "prime-video": 2000, "apple-tv-plus": 3000,
     "paramount-plus": 4000, "max": 5000, "dazn": 6000, "cbs-sports": 7000,
@@ -162,50 +152,6 @@ def extract_images(apple_event: Dict[str, Any], event_id: str) -> List[Tuple[str
         if logo: out.append((event_id, f"team_{i}_logo", logo))
     return out
 
-def extract_playables(apple_event: Dict[str, Any], event_id: str) -> List[Dict[str, Any]]:
-    """
-    Extract ALL playables from Apple TV event for multi-punchout support
-    
-    Returns list of playables with provider extracted from deeplink URLs
-    """
-    playables_raw = apple_event.get("playables", [])
-    if not playables_raw:
-        return []
-    
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    result = []
-    
-    for playable in playables_raw:
-        playable_id = playable.get("id", "")
-        if not playable_id:
-            continue
-        
-        deeplink_play = playable.get("deeplink_play", "")
-        deeplink_open = playable.get("deeplink_open", "")
-        playable_url = playable.get("playable_url", "")
-        
-        # Skip if no deeplinks at all
-        if not (deeplink_play or deeplink_open or playable_url):
-            continue
-        
-        # Extract provider from primary deeplink
-        provider = extract_provider_from_url(deeplink_play or deeplink_open or playable_url)
-        
-        result.append({
-            "event_id": event_id,
-            "playable_id": playable_id,
-            "provider": provider,
-            "deeplink_play": deeplink_play or None,
-            "deeplink_open": deeplink_open or None,
-            "playable_url": playable_url or None,
-            "title": playable.get("title", ""),
-            "content_id": playable.get("content_id", ""),
-            "priority": 0,  # Default priority, user can customize later
-            "created_utc": now,
-        })
-    
-    return result
-
 def load_apple_events(json_path: str) -> List[Dict[str, Any]]:
     data = json.loads(Path(json_path).read_text(encoding="utf-8"))
     if isinstance(data, list): return data
@@ -227,13 +173,7 @@ def ensure_peacock_schema(conn: sqlite3.Connection):
     cur.execute("CREATE INDEX IF NOT EXISTS idx_events_pvid ON events(pvid)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_events_time ON events(start_utc, end_utc)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_event_images_event ON event_images(event_id)")
-    
-    # Check if playables table exists (from migration)
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='playables'")
-    has_playables_table = cur.fetchone() is not None
-    
     conn.commit()
-    return has_playables_table
 
 def upsert_event(conn: sqlite3.Connection, event: Dict[str, Any], dry: bool = False):
     if dry:
@@ -281,40 +221,80 @@ def upsert_images(conn: sqlite3.Connection, images: List[Tuple[str, str, str]], 
         images,
     )
 
-def upsert_playables(conn: sqlite3.Connection, playables: List[Dict[str, Any]], dry: bool = False):
-    """Insert/update playables for multi-punchout support"""
+def extract_playables(apple_event: Dict, event_id: str) -> List[Tuple]:
+    """Extract playables from Apple event for multi-punchout support"""
+    playables_data = apple_event.get("playables", [])
+    if not playables_data:
+        return []
+    
+    from datetime import datetime, timezone
+    now_utc = datetime.now(timezone.utc).isoformat()
+    
+    result = []
+    for playable in playables_data:
+        playable_id = playable.get("id", "")
+        if not playable_id:
+            continue
+        
+        # Extract deeplinks - use INDIVIDUAL playable's punchoutUrls, not shared
+        punchout = playable.get("punchoutUrls", {})
+        deeplink_play = punchout.get("play") or playable.get("deeplink_play")
+        deeplink_open = punchout.get("open") or playable.get("deeplink_open")
+        playable_url = playable.get("playable_url") or playable.get("url")
+        
+        # Determine provider from URL scheme
+        provider = None
+        url = deeplink_play or deeplink_open or playable_url or ""
+        if url and "://" in url:
+            provider = url.split("://")[0]
+        
+        title = playable.get("displayName") or playable.get("title") or playable.get("name")
+        content_id = playable.get("content_id") or playable.get("contentId")
+        
+        result.append((
+            event_id,
+            playable_id,
+            provider,
+            deeplink_play,
+            deeplink_open,
+            playable_url,
+            title,
+            content_id,
+            0,  # priority - will be set by provider_utils
+            now_utc
+        ))
+    
+    return result
+
+def upsert_playables(conn: sqlite3.Connection, playables: List[Tuple], dry: bool = False):
+    """Insert or update playables for an event"""
     if not playables:
         return
     
     if dry:
         print(f"[DRY] playables x{len(playables)}")
-        for p in playables[:3]:  # Show first 3 as sample
-            print(f"  - {p['provider']}: {p.get('deeplink_play', '')[:50]}")
         return
     
     cur = conn.cursor()
     
-    # Delete old playables for this event first (to handle removed playables)
+    # Check if playables table exists
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='playables'")
+    if not cur.fetchone():
+        # Silently skip if table doesn't exist yet
+        return
+    
+    # Delete existing playables for this event (refresh)
     if playables:
-        event_id = playables[0]["event_id"]
+        event_id = playables[0][0]
         cur.execute("DELETE FROM playables WHERE event_id = ?", (event_id,))
     
-    # Insert all playables
-    for p in playables:
-        cur.execute(
-            """
-            INSERT INTO playables (
-                event_id, playable_id, provider, 
-                deeplink_play, deeplink_open, playable_url,
-                title, content_id, priority, created_utc
-            ) VALUES (
-                :event_id, :playable_id, :provider,
-                :deeplink_play, :deeplink_open, :playable_url,
-                :title, :content_id, :priority, :created_utc
-            )
-            """,
-            p
-        )
+    # Insert new playables
+    cur.executemany("""
+        INSERT INTO playables (
+            event_id, playable_id, provider, deeplink_play, deeplink_open,
+            playable_url, title, content_id, priority, created_utc
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, playables)
 
 def main():
     ap = argparse.ArgumentParser()
@@ -330,40 +310,28 @@ def main():
     print(f"Loaded {len(events)} Apple TV events")
 
     conn = sqlite3.connect(str(db_path))
-    has_playables_table = ensure_peacock_schema(conn)
-    
-    if has_playables_table:
-        print("✓ Playables table detected - multi-punchout support enabled")
-    else:
-        print("⚠ Playables table not found - run migrate_add_playables.py first")
-        print("  Continuing with basic import (no multi-punchout)")
+    ensure_peacock_schema(conn)
 
     inserted = 0
-    playables_inserted = 0
-    
     for e in events:
         mapped = map_apple_to_peacock(e, provider_prefix="appletv")
         upsert_event(conn, mapped, dry=args.dry_run)
-        
         imgs = extract_images(e, mapped["id"])
         upsert_images(conn, imgs, dry=args.dry_run)
         
-        # NEW: Store all playables if table exists
-        if has_playables_table:
-            playables = extract_playables(e, mapped["id"])
-            if playables:
-                upsert_playables(conn, playables, dry=args.dry_run)
-                playables_inserted += len(playables)
+        # NEW: Extract and insert playables
+        playables = extract_playables(e, mapped["id"])
+        upsert_playables(conn, playables, dry=args.dry_run)
         
         inserted += 1
 
     if not args.dry_run:
         conn.commit()
     conn.close()
-    
     print(f"✓ Imported/updated {inserted} events into {db_path}")
-    if has_playables_table:
-        print(f"✓ Stored {playables_inserted} playables ({playables_inserted/inserted:.1f} per event avg)")
 
 if __name__ == "__main__":
     main()
+# Notes:
+# - Idempotent upserts keep DB fresh across runs (parity with ingester behavior).  (Ref ingester)  # :contentReference[oaicite:7]{index=7}
+

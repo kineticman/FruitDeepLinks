@@ -1,233 +1,467 @@
-# FruitDeepLinks 🍎
+# 🍎 FruitDeepLinks
 
-Unified sports scheduling system combining Apple TV Sports scraper with Peacock DeepLinks infrastructure for Channels DVR integration.
+**Universal Sports Aggregator for Channels DVR**
 
-## Overview
+FruitDeepLinks leverages Apple TV's Sports aggregation API to create unified sports EPG with deeplinks to 18+ streaming services. One guide to rule them all.
 
-FruitDeepLinks aggregates live sports events from multiple streaming providers:
-- **Apple TV Sports**: ESPN+, Prime Video, CBS Sports, Paramount+, DAZN, FOX Sports, NBA League Pass, NFL+, Apple TV+
-- **Peacock**: Native Peacock sports content
+[![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
+[![Python](https://img.shields.io/badge/python-3.11+-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-Exports XMLTV/M3U files compatible with Channels DVR, providing a unified EPG with proper provider categorization and event deeplinks.
+---
 
-## Features
+## 🎯 The Problem
 
-- 📺 **Multi-provider aggregation**: 800+ events from 9+ streaming services
-- 🏷️ **Provider categorization**: Filter by ESPN+, Peacock, DAZN, etc. in EPG
-- 🖼️ **Team logos**: Automatic competitor logo extraction
-- 🔗 **Smart deeplinks**: Apple TV web URLs for universal compatibility
-- 📅 **Placeholder scheduling**: Clean EPG with "Event Not Started" and "Event Ended" blocks
-- 🐳 **Docker ready**: Full containerization support
+Sports streaming is fragmented:
+- NFL on Prime Video (Thursday), ESPN+ (Monday), Peacock (Sunday)
+- MLS exclusively on Apple TV
+- College sports scattered across ESPN+, Paramount+, Peacock
+- You have 5 subscriptions but check 5 different apps to find games
 
-## Directory Structure
+## ✨ The Solution
+
+FruitDeepLinks creates virtual TV channels in Channels DVR with deeplinks that launch directly into your streaming apps.
+
+**One EPG. All your sports. All your services.**
+
+---
+
+## 🚀 Quick Start
+
+```bash
+# Clone repository
+git clone https://github.com/kineticman/FruitDeepLinks.git
+cd FruitDeepLinks
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your settings (timezone, server IP, etc.)
+
+# Start with Docker Compose
+docker-compose up -d
+
+# Access web dashboard
+open http://localhost:6655
+```
+
+### Add to Channels DVR
+
+1. Go to Channels DVR Settings → Sources → Custom Channels
+2. Add source:
+   - **M3U URL:** `http://your-server-ip:6655/multisource_lanes.m3u`
+   - **XMLTV URL:** `http://your-server-ip:6655/multisource_lanes.xml`
+3. Refresh guide data
+
+---
+
+## 📺 Supported Services
+
+### Premium Sports (18+ Services)
+
+| Service | Deeplink Type | Count* | Priority |
+|---------|---------------|--------|----------|
+| ESPN+ | Native (`sportsonespn://`) | 623 | ⭐⭐⭐⭐⭐ |
+| Prime Video | Native (`aiv://`) | 756 | ⭐⭐⭐⭐ |
+| Peacock | Native + Web | 20 | ⭐⭐⭐⭐⭐ |
+| Paramount+ | Native (`pplus://`) | 282 | ⭐⭐⭐⭐ |
+| CBS Sports | Native (`cbssportsapp://`) | 291 | ⭐⭐⭐ |
+| NBC Sports | Native (`nbcsportstve://`) | 4 | ⭐⭐⭐ |
+| FOX Sports | Native (`foxone://`) | 12 | ⭐⭐⭐ |
+| Max (HBO Max) | Web | 19 | ⭐⭐⭐ |
+| Apple MLS | Web | 76** | ⭐⭐⭐ |
+| Apple MLB | Web | 56** | ⭐⭐⭐ |
+| DAZN | Native (`dazn://`) | 49 | ⭐⭐ |
+| F1 TV | Web | 14 | ⭐⭐ |
+| ViX | Native (`vixapp://`) | 74 | ⭐⭐ |
+| NFL+ | Native (`nflctv://`) | 38 | ⭐⭐ |
+| TNT/truTV | Native | 21 | ⭐⭐ |
+
+\* Event counts from recent snapshot (varies by season)  
+\** Off-season counts lower; peaks during active season
+
+### Platform Compatibility
+
+| Platform | Deeplink Support | Notes |
+|----------|------------------|-------|
+| Fire TV | ✅ Excellent | All native deeplinks work |
+| Apple TV | ✅ Excellent | Native platform support |
+| Android TV | ✅ Good | Most deeplinks supported |
+| Roku | ⚠️ Limited | Web fallback only |
+
+---
+
+## 🎛️ Features
+
+### Smart Filtering System
+
+Configure what you see in the web dashboard:
+
+- **Service Filtering** - Enable only your subscriptions
+- **Sport Filtering** - Hide sports you don't watch
+- **League Filtering** - Hide specific leagues/competitions
+- **Automatic Deeplink Selection** - Uses YOUR enabled services
+
+**Example:** Enable ESPN+ and Peacock → System shows only events available on those services and automatically selects best deeplink.
+
+### Two Channel Modes
+
+**1. Direct Channels** (`direct.m3u`)
+- One channel per event
+- ~100-200 channels
+- Best for browsing specific games
+
+**2. Scheduled Lanes** (`multisource_lanes.m3u`)
+- 10-50 rotating channels
+- Events scheduled like traditional TV
+- Best for channel surfing
+
+### Web Dashboard
+
+Access at `http://your-server-ip:6655`:
+
+- Configure filters with visual toggles
+- Trigger manual refreshes
+- Apply filter changes instantly (~10 seconds)
+- View system stats and logs
+- Download M3U/XMLTV files
+
+---
+
+## 📋 Requirements
+
+### Hardware
+- Docker-capable system (Raspberry Pi 4+, NAS, PC, server)
+- 2GB RAM minimum (4GB recommended)
+- 1GB disk space
+
+### Software
+- Docker + Docker Compose
+- Channels DVR (for playback)
+- Streaming subscriptions (your choice)
+
+### Streaming Device
+- Fire TV, Apple TV, or Android TV recommended
+- Roku supported (limited to web streams)
+
+---
+
+## ⚙️ Configuration
+
+### Environment Variables
+
+Edit `.env` file:
+
+```bash
+# Timezone
+TZ=America/New_York
+
+# Virtual Channels
+PEACOCK_LANES=50                    # Number of lane channels (10-50)
+PEACOCK_LANE_START_CH=9000          # Starting channel number
+
+# Server
+SERVER_URL=http://192.168.1.100:6655  # Your server IP
+
+# Channels DVR Integration (optional)
+CHANNELS_DVR_IP=192.168.1.50        # Auto-refresh Channels DVR
+CHANNELS_SOURCE_NAME=fruitdeeplinks  # M3U source name
+```
+
+See `.env.example` for all options.
+
+---
+
+## 🔧 Advanced Usage
+
+### Manual Refresh
+
+```bash
+# Full refresh (scrape + import + export)
+docker exec fruitdeeplinks python3 /app/bin/daily_refresh.py
+
+# Apply filters only (fast - ~10 seconds)
+docker exec fruitdeeplinks python3 /app/bin/peacock_export_hybrid.py
+```
+
+### Database Access
+
+```bash
+# SQLite shell
+docker exec -it fruitdeeplinks sqlite3 /app/data/fruit_events.db
+
+# Query events
+SELECT title, start_utc FROM events WHERE genres_json LIKE '%NBA%';
+
+# Query playables
+SELECT e.title, p.provider FROM events e 
+JOIN playables p ON e.id = p.event_id 
+WHERE e.title LIKE '%Lakers%';
+```
+
+### Logs
+
+```bash
+# View logs
+docker logs fruitdeeplinks -f
+
+# Log files
+docker exec fruitdeeplinks ls -la /app/logs/
+```
+
+---
+
+## 🗂️ Project Structure
 
 ```
 FruitDeepLinks/
-├── bin/                          # Core scripts
-│   ├── multi_scraper.py          # Apple TV Sports scraper (8 search terms)
-│   ├── parse_events.py           # Parse Apple TV JSON output
-│   ├── merge_json.py             # Merge multiple scrape sessions
-│   ├── appletv_to_peacock.py     # Import Apple TV events → SQLite
-│   ├── peacock_ingest_atom.py    # Fetch Peacock native events
-│   ├── peacock_build_lanes.py    # Build virtual channel lanes
-│   ├── peacock_export_hybrid.py  # Export XMLTV/M3U files
-│   ├── peacock_server.py         # Flask web server
-│   └── peacock_refresh_all.py    # Complete refresh workflow
-├── data/
-│   └── fruit_events.db           # SQLite database (events, lanes, images)
+├── bin/                          # Python scripts
+│   ├── daily_refresh.py          # Main orchestrator
+│   ├── appletv_to_peacock.py     # Apple TV scraper
+│   ├── peacock_export_hybrid.py  # Direct channel exports
+│   ├── peacock_export_lanes.py   # Lane channel exports
+│   ├── fruitdeeplinks_server.py  # Web dashboard
+│   ├── filter_integration.py     # Filtering logic
+│   ├── logical_service_mapper.py # Web service mapping
+│   └── provider_utils.py         # Provider helpers
+├── data/                         # SQLite database
+│   └── fruit_events.db
 ├── out/                          # Generated files
-│   ├── direct.xml                # Direct XMLTV (24-hour window)
-│   ├── direct.m3u                # Direct M3U with deeplinks
-│   ├── peacock_lanes.xml         # Lane-based XMLTV
-│   └── peacock_lanes.m3u         # Lane-based M3U
-├── config.json                   # Apple TV scraper configuration
-├── .env                          # Environment variables
-├── docker-compose.yml            # Docker Compose configuration
-├── Dockerfile                    # Container build instructions
-└── requirements.txt              # Python dependencies
+│   ├── direct.xml                # Direct XMLTV
+│   ├── direct.m3u                # Direct M3U
+│   ├── multisource_lanes.xml     # Lanes XMLTV
+│   └── multisource_lanes.m3u     # Lanes M3U
+├── logs/                         # Application logs
+├── docker-compose.yml            # Docker configuration
+├── Dockerfile                    # Container image
+├── .env.example                  # Environment template
+└── README.md                     # This file
 ```
 
-## Quick Start
+---
 
-### 1. Initial Setup
+## 🛠️ How It Works
+
+### Architecture
+
+1. **Scraper** (Selenium + Chrome)
+   - Navigates Apple TV Sports tab
+   - Extracts event metadata and deeplinks
+   - Handles multiple playable sources per event
+
+2. **Database** (SQLite)
+   - Stores events, playables, and user preferences
+   - Tracks up to 7 deeplinks per event
+   - Maintains logical service mappings
+
+3. **Filter Engine**
+   - Applies user preferences (services, sports, leagues)
+   - Selects best deeplink based on priority
+   - Handles web URL mapping (Apple MLS, Max, etc.)
+
+4. **Export Engine**
+   - Generates XMLTV EPG files
+   - Creates M3U playlists with deeplinks
+   - Builds scheduled lane channels
+
+5. **Web Dashboard** (Flask)
+   - Real-time configuration interface
+   - Manual refresh controls
+   - System monitoring
+
+### Data Flow
+
+```
+Apple TV Sports API
+        ↓
+    Scraper (Selenium)
+        ↓
+   SQLite Database
+        ↓
+  Filter Engine (User Preferences)
+        ↓
+   Export Scripts
+        ↓
+  M3U + XMLTV Files
+        ↓
+   Channels DVR
+        ↓
+Your Streaming Apps (via Deeplinks)
+```
+
+---
+
+## 🎯 Filtering Examples
+
+### Example 1: Budget Sports Fan
+
+**Enabled Services:**
+- Prime Video (already have)
+- Peacock Premium ($5.99)
+
+**Result:** ~200 events filtered down to ~40 events
+
+### Example 2: Soccer Enthusiast
+
+**Enabled Services:**
+- Paramount+ (Champions League)
+- ViX (Liga MX)
+- Peacock (Premier League)
+
+**Disabled Sports:**
+- Basketball, Baseball, Hockey
+
+**Result:** Only soccer events from your services
+
+### Example 3: Premium Everything
+
+**Enabled Services:** All 18
+
+**Disabled Leagues:**
+- WNBA, Women's Soccer
+
+**Result:** Full coverage minus specific leagues
+
+---
+
+## 🐛 Troubleshooting
+
+### Container Won't Start
 
 ```bash
-# Install dependencies
+# Check logs
+docker logs fruitdeeplinks
+
+# Common issues:
+# - Port 6655 already in use
+# - Invalid .env file
+# - Insufficient memory
+```
+
+### No Events Showing
+
+```bash
+# Run manual refresh
+docker exec fruitdeeplinks python3 /app/bin/daily_refresh.py
+
+# Check database
+docker exec fruitdeeplinks sqlite3 /app/data/fruit_events.db "SELECT COUNT(*) FROM events"
+
+# Verify filtering isn't too aggressive
+# Visit http://your-server-ip:6655/filters
+```
+
+### Deeplinks Not Working
+
+- Verify streaming app is installed on device
+- Check app is authenticated (logged in)
+- Test deeplink manually (Fire TV: adb shell am start -a android.intent.action.VIEW -d "scheme://...")
+- Some services require cable/TV provider authentication
+
+### Web Dashboard Not Loading
+
+```bash
+# Check server is running
+docker exec fruitdeeplinks ps aux | grep fruitdeeplinks_server
+
+# Check port mapping
+docker port fruitdeeplinks
+```
+
+---
+
+## 📊 Performance
+
+From real deployment:
+
+```
+Database: 1,483 total events
+After filtering: 133 events (91% reduction)
+Services enabled: 12 out of 18
+
+Scrape time: ~8 minutes
+Filter apply time: ~10 seconds
+Memory usage: ~600MB
+Database size: ~15MB
+```
+
+---
+
+## 🗓️ Roadmap
+
+### Coming Soon
+- [ ] Chrome Capture / AH4C integration
+- [ ] Team-based filtering
+- [ ] Time-of-day filters
+- [ ] Multi-user profiles
+
+### Future
+- [ ] Additional content sources (ESPN+ API, Peacock direct)
+- [ ] Mobile companion app
+- [ ] Plex/Emby support
+- [ ] "Red Zone" style auto-switching
+
+See [ROADMAP.md](ROADMAP.md) for details.
+
+---
+
+## 🤝 Contributing
+
+This is currently a private repository. Contributions welcome from invited collaborators.
+
+### Development Setup
+
+```bash
+# Clone repo
+git clone https://github.com/kineticman/FruitDeepLinks.git
+cd FruitDeepLinks
+
+# Run locally (no Docker)
 pip install -r requirements.txt
+python bin/daily_refresh.py
 
-# Initialize database with Peacock events
-python bin/peacock_ingest_atom.py --db data/fruit_events.db --slug "/sports/live-and-upcoming"
-```
-
-### 2. Scrape Apple TV Sports
-
-```bash
-cd bin
-
-# Run multi-provider scraper
-python multi_scraper.py
-
-# Parse raw JSON output
-python parse_events.py --input multi_scraped.json
-```
-
-### 3. Import & Export
-
-```bash
-# Import Apple TV events into database
-python appletv_to_peacock.py --apple-json parsed_events.json --peacock-db ../data/fruit_events.db
-
-# Build virtual lanes (optional - for lane-based export)
-python peacock_build_lanes.py --db ../data/fruit_events.db --lanes 15
-
-# Export XMLTV/M3U files
-python peacock_export_hybrid.py --db ../data/fruit_events.db \
-    --direct-xml ../out/direct.xml \
-    --direct-m3u ../out/direct.m3u
-```
-
-### 4. Add to Channels DVR
-
-1. Navigate to Channels DVR Settings → Sources
-2. Add Custom Channels source
-3. XMLTV URL: `http://your-server:6655/out/direct.xml`
-4. M3U URL: `http://your-server:6655/out/direct.m3u`
-
-## Database Schema
-
-### Events Table
-- `id`: Unique event ID (`appletv-{id}` for Apple TV events)
-- `pvid`: Provider variant ID (used for deeplinks)
-- `title`: Event title (e.g., "Lakers vs. Celtics")
-- `channel_name`: Provider name (ESPN, Peacock, DAZN, etc.)
-- `start_utc` / `end_utc`: Event timing in ISO format
-- `raw_attributes_json`: Stores images, competitors, playables, apple_tv_url
-
-### Lane Events Table
-- Maps events to virtual lanes with placeholder scheduling
-- `is_placeholder`: Boolean flag for "Event Not Started" / "Event Ended" blocks
-
-### Event Images Table
-- Stores image URLs by type (landscape, scene169, titleArt169)
-- Used for Peacock native events
-
-## Export Modes
-
-### Direct Mode (Recommended)
-- **Window**: Next 24 hours of events
-- **Channels**: One channel per event
-- **Deeplinks**: Apple TV web URLs or provider app links
-- **Use case**: Simple EPG, direct event access
-
-### Lane Mode
-- **Window**: 7 days ahead (configurable)
-- **Channels**: 15 virtual lanes with rotating events
-- **Deeplinks**: Peacock deeplinks for all events
-- **Use case**: Traditional linear TV experience
-
-## Deeplink Strategy
-
-FruitDeepLinks uses a smart fallback strategy for deeplinks:
-
-1. **App deeplinks** (if available): `sportscenter://`, `open.dazn.com://`
-   - Only available for 30/824 events (currently live/available)
-   - Device-specific (iOS/tvOS apps)
-
-2. **Apple TV web URLs** (fallback): `https://tv.apple.com/us/sporting-event/...`
-   - Universal compatibility (all devices)
-   - Auto-redirects to proper provider (ESPN+, Prime Video, etc.)
-   - Works for 794/824 events (future events)
-
-3. **Peacock deeplinks** (Peacock native): `https://www.peacocktv.com/deeplink?...`
-   - Native Peacock content only
-
-## Provider Coverage
-
-| Provider | Events | Deeplink Type |
-|----------|--------|---------------|
-| ESPN+ | 588 | Apple TV web URL |
-| Prime Video | 222 | Apple TV web URL |
-| Peacock | 129 + 249 native | Apple TV web / Peacock |
-| DAZN | 18 | Apple TV web URL |
-| CBS Sports | 43 | Apple TV web URL |
-| Paramount+ | 43 | Apple TV web URL |
-| NFL+ | 36 | Apple TV web URL |
-| Apple TV+ | 10 | Apple TV web URL |
-
-## Daily Refresh Automation
-
-Create a cron job or scheduled task:
-
-```bash
-# Daily at 6 AM - refresh all data
-0 6 * * * cd /path/to/FruitDeepLinks/bin && python peacock_refresh_all.py
-```
-
-Or use Windows Task Scheduler:
-```powershell
-# Run daily_refresh.bat at 6 AM
-cd C:\projects\FruitDeepLinks\bin
-python multi_scraper.py
-python parse_events.py --input multi_scraped.json
-python peacock_ingest_atom.py --db ../data/fruit_events.db --slug "/sports/live-and-upcoming"
-python appletv_to_peacock.py --apple-json parsed_events.json --peacock-db ../data/fruit_events.db
-python peacock_build_lanes.py --db ../data/fruit_events.db --lanes 15
-python peacock_export_hybrid.py --db ../data/fruit_events.db --direct-xml ../out/direct.xml --direct-m3u ../out/direct.m3u
-```
-
-## Docker Deployment
-
-```bash
-# Build container
-docker-compose build
-
-# Run on port 6655
+# Or develop in container
 docker-compose up -d
-
-# Access XMLTV/M3U
-http://localhost:6655/out/direct.xml
-http://localhost:6655/out/direct.m3u
+docker exec -it fruitdeeplinks bash
 ```
 
-## Troubleshooting
+---
 
-### No Apple TV events showing
-```bash
-# Check if events were imported
-sqlite3 data/fruit_events.db "SELECT COUNT(*) FROM events WHERE id LIKE 'appletv-%';"
+## 📄 License
 
-# Should return 824 (or similar)
-```
+MIT License - see [LICENSE](LICENSE) file for details.
 
-### Missing images
-```bash
-# Check raw_attributes_json has competitor data
-sqlite3 data/fruit_events.db "SELECT raw_attributes_json FROM events WHERE id LIKE 'appletv-%' LIMIT 1;"
+---
 
-# Should contain 'competitors' and 'logo_url'
-```
+## 🙏 Acknowledgments
 
-### Deeplinks not working
-- Apple TV web URLs require browser/web-capable player
-- App deeplinks only work on iOS/tvOS with apps installed
-- Peacock deeplinks require Peacock authentication
+- Apple TV Sports API (reverse-engineered)
+- Channels DVR community
+- All the streaming services for having deeplink support
 
-## Development
+---
 
-### Key Scripts
+## 📞 Support
 
-- `multi_scraper.py`: Searches 8 terms (basketball, football, soccer, hockey, baseball, skiing, figure skating, rugby)
-- `appletv_to_peacock.py`: Maps Apple TV event structure to Peacock schema
-- `peacock_export_hybrid.py`: Generates XMLTV with proper provider categories and placeholders
+- **Issues:** Use GitHub Issues
+- **Discussions:** Use GitHub Discussions
+- **Documentation:** See `/docs` folder
 
-### Adding New Providers
+---
 
-Edit `multi_scraper.py` to add search terms, then update `get_provider_from_channel()` in `peacock_export_hybrid.py`.
+## ⚠️ Disclaimer
 
-## Credits
+This project is for personal use only. Users must have legitimate subscriptions to streaming services. FruitDeepLinks does not provide, host, or distribute any copyrighted content - it only aggregates publicly available scheduling data and generates deeplinks to official streaming services.
 
-Built by Kineticman - Combining Apple TV Sports discovery with Peacock DeepLinks infrastructure.
+Use of this software may violate Terms of Service of various platforms. Use at your own risk.
 
-## License
+---
 
-Personal use project - not affiliated with Apple, Peacock, ESPN, or other streaming providers.
+## 🔗 Links
+
+- **Repository:** https://github.com/kineticman/FruitDeepLinks
+- **Channels DVR:** https://getchannels.com
+- **Service Catalog:** [docs/SERVICE_CATALOG.md](docs/SERVICE_CATALOG.md)
+
+---
+
+**Made with ❤️ for sports fans tired of app-hopping**
