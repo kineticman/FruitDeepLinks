@@ -63,6 +63,46 @@ def extract_competitors(apple_event: Dict[str, Any]) -> Tuple[Optional[str], Opt
         return competitors[0].get("name"), None
     return None, None
 
+def normalize_event_structure(apple_event: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert multi_scraped.json structure to flat structure for compatibility
+    
+    Input: {id, raw_data: {data: {content: {...}}}}
+    Output: {id, title, sport_name, league_name, ...} (flat)
+    """
+    # If already flat (old format), return as-is
+    if "raw_data" not in apple_event:
+        return apple_event
+    
+    # Extract from multi_scraped.json structure
+    event_id = apple_event.get("id", "")
+    raw_data = apple_event.get("raw_data", {})
+    data = raw_data.get("data", {})
+    content = data.get("content", {})
+    
+    # Channels might be dict or list - normalize to list
+    channels_data = data.get("channels", {})
+    if isinstance(channels_data, dict):
+        channels = list(channels_data.values())
+    else:
+        channels = channels_data if channels_data else []
+    
+    # Flatten the structure
+    return {
+        "id": event_id,
+        "title": content.get("title") or content.get("shortTitle"),
+        "sport_name": content.get("sportName"),
+        "league_name": content.get("leagueName"),
+        "competitors": content.get("competitors", []),
+        "channels": channels,
+        "playables": content.get("playables", []),
+        "images": content.get("images", {}),
+        "url": content.get("url"),
+        "start_time": content.get("eventTime", {}).get("gameKickOffStartTime"),
+        "start_time_ms": content.get("eventTime", {}).get("gameKickOffStartTime"),
+        "end_time": content.get("eventTime", {}).get("tuneInTime", {}).get("endTime"),
+        "end_time_ms": content.get("eventTime", {}).get("tuneInTime", {}).get("endTime"),
+    }
+
 def build_title(apple_event: Dict[str, Any]) -> str:
     title = apple_event.get("title") or ""
     league = apple_event.get("league_name") or apple_event.get("league") or ""
@@ -87,22 +127,25 @@ def build_synopsis(apple_event: Dict[str, Any]) -> Optional[str]:
     return " - ".join(parts) if parts else None
 
 def map_apple_to_peacock(apple_event: Dict[str, Any], provider_prefix: str = "appletv") -> Dict[str, Any]:
-    apple_id = apple_event.get("id", "")
+    # Normalize structure (handles both old flat format and new multi_scraped.json format)
+    event = normalize_event_structure(apple_event)
+    
+    apple_id = event.get("id", "")
     event_id = f"{provider_prefix}-{apple_id}"
     # Times
-    start_ms = apple_event.get("start_time_ms") or iso_to_ms(apple_event.get("start_time"))
-    end_ms = apple_event.get("end_time_ms") or iso_to_ms(apple_event.get("end_time"))
+    start_ms = event.get("start_time_ms") or iso_to_ms(event.get("start_time"))
+    end_ms = event.get("end_time_ms") or iso_to_ms(event.get("end_time"))
     runtime_secs = calculate_runtime(start_ms, end_ms)
     start_utc = ms_to_iso(start_ms); end_utc = ms_to_iso(end_ms)
     # Titles
-    title = build_title(apple_event); title_brief = apple_event.get("title") or title
-    synopsis = build_synopsis(apple_event); synopsis_brief = synopsis
+    title = build_title(event); title_brief = event.get("title") or title
+    synopsis = build_synopsis(event); synopsis_brief = synopsis
     # Channel/provider
-    channels = apple_event.get("channels", [])
+    channels = event.get("channels", [])
     channel_name = channels[0].get("name") if channels else None
     provider_normalized = normalize_provider(channel_name)
     # Genres/Classification
-    sport = apple_event.get("sport_name"); league = apple_event.get("league_name")
+    sport = event.get("sport_name"); league = event.get("league_name")
     genres = [g for g in [sport, league] if g]
     classification = []
     if sport: classification.append({"type": "sport", "value": sport})
@@ -129,12 +172,12 @@ def map_apple_to_peacock(apple_event: Dict[str, Any], provider_prefix: str = "ap
         "created_ms": None, "created_utc": None,
         "last_seen_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "raw_attributes_json": json.dumps({
-            "images": apple_event.get("images", {}),
-            "competitors": apple_event.get("competitors", []),
+            "images": event.get("images", {}),
+            "competitors": event.get("competitors", []),
             "channels": channels,
-            "playables": apple_event.get("playables", []),
+            "playables": event.get("playables", []),
             "sport_name": sport, "league_name": league,
-            "apple_tv_url": apple_event.get("url"),
+            "apple_tv_url": event.get("url"),
         }),
     }
 
@@ -222,16 +265,36 @@ def upsert_images(conn: sqlite3.Connection, images: List[Tuple[str, str, str]], 
     )
 
 def extract_playables(apple_event: Dict, event_id: str) -> List[Tuple]:
-    """Extract playables from Apple event for multi-punchout support"""
-    playables_data = apple_event.get("playables", [])
+    """Extract playables from Apple event for multi-punchout support
+    
+    Handles multi_scraped.json structure: e.raw_data.data.content.playables
+    Supports both dict and list formats
+    """
+    # Handle multi_scraped.json structure (e.raw_data.data.content)
+    if "raw_data" in apple_event:
+        raw_data = apple_event.get("raw_data", {})
+        data = raw_data.get("data", {})
+        content = data.get("content", {})
+        playables_data = content.get("playables", [])
+    else:
+        # Handle old parsed format (direct access)
+        playables_data = apple_event.get("playables", [])
+    
     if not playables_data:
         return []
     
     from datetime import datetime, timezone
     now_utc = datetime.now(timezone.utc).isoformat()
     
+    # Handle dict format (from fixed multi_scraper.py main events)
+    if isinstance(playables_data, dict):
+        playables_list = list(playables_data.values())
+    else:
+        # Handle list format (from shelf events)
+        playables_list = playables_data
+    
     result = []
-    for playable in playables_data:
+    for playable in playables_list:
         playable_id = playable.get("id", "")
         if not playable_id:
             continue

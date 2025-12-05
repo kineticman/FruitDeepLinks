@@ -376,17 +376,20 @@ def flatten_sporting_events_from_canvas(event_json: dict) -> List[dict]:
         data = event_json.get("data", {}) or {}
         canvas = data.get("canvas", {}) or {}
         shelves = canvas.get("shelves", []) or []
-        playables = data.get("playables", {}) or {}
+        # NOTE: We intentionally do NOT use shelf-level playables here
+        # Each event item has its own playables dict with unique punchoutUrls
         for shelf in shelves:
             for item in shelf.get("items", []) or []:
                 if item.get("type") == "SportingEvent" or str(item.get("id", "")).startswith("umc.cse."):
                     eid = item.get("id") or item.get("contentId") or ""
                     if not eid:
                         continue
+                    # CRITICAL FIX: Use item.get("playables", {}) not shelf-level playables
+                    # This ensures each event gets its own unique deeplinks (playIDs)
                     out.append({
                         "id": eid,
                         "status": 200,
-                        "raw_data": {"data": {"content": item, "canvas": {}, "playables": playables}},
+                        "raw_data": {"data": {"content": item, "canvas": {}, "playables": item.get("playables", {})}},
                         "source": "shelf",
                     })
     except Exception:
