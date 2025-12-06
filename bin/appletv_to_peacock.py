@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# Provider channel number “namespaces” (kept for potential future use)
+# Provider channel number "namespaces" (kept for potential future use)
 PROVIDER_CHANNEL_RANGES = {
     "peacock": 9000, "espn-plus": 1000, "prime-video": 2000, "apple-tv-plus": 3000,
     "paramount-plus": 4000, "max": 5000, "dazn": 6000, "cbs-sports": 7000,
@@ -86,6 +86,35 @@ def normalize_event_structure(apple_event: Dict[str, Any]) -> Dict[str, Any]:
     else:
         channels = channels_data if channels_data else []
     
+    # CRITICAL FIX: Playables can be at BOTH data level AND content level
+    # They can be either dict OR list format - handle both!
+    data_playables = data.get("playables", {}) or {}
+    content_playables = content.get("playables", {}) or {}
+    
+    # Merge playables - handle both dict and list formats
+    merged_playables = {}
+    
+    # Handle content playables first
+    if isinstance(content_playables, dict):
+        merged_playables.update(content_playables)
+    elif isinstance(content_playables, list):
+        # Convert list to dict using playable id as key
+        for p in content_playables:
+            if isinstance(p, dict) and 'id' in p:
+                merged_playables[p['id']] = p
+    
+    # Handle data playables (takes precedence)
+    if isinstance(data_playables, dict):
+        merged_playables.update(data_playables)
+    elif isinstance(data_playables, list):
+        # Convert list to dict using playable id as key
+        for p in data_playables:
+            if isinstance(p, dict) and 'id' in p:
+                merged_playables[p['id']] = p
+    
+    # Keep as dict for consistency with extract_playables()
+    playables_final = merged_playables if merged_playables else {}
+    
     # Flatten the structure
     return {
         "id": event_id,
@@ -94,7 +123,7 @@ def normalize_event_structure(apple_event: Dict[str, Any]) -> Dict[str, Any]:
         "league_name": content.get("leagueName"),
         "competitors": content.get("competitors", []),
         "channels": channels,
-        "playables": content.get("playables", []),
+        "playables": playables_final,
         "images": content.get("images", {}),
         "url": content.get("url"),
         "start_time": content.get("eventTime", {}).get("gameKickOffStartTime"),
@@ -175,7 +204,7 @@ def map_apple_to_peacock(apple_event: Dict[str, Any], provider_prefix: str = "ap
             "images": event.get("images", {}),
             "competitors": event.get("competitors", []),
             "channels": channels,
-            "playables": event.get("playables", []),
+            "playables": event.get("playables", {}),
             "sport_name": sport, "league_name": league,
             "apple_tv_url": event.get("url"),
         }),
@@ -267,18 +296,11 @@ def upsert_images(conn: sqlite3.Connection, images: List[Tuple[str, str, str]], 
 def extract_playables(apple_event: Dict, event_id: str) -> List[Tuple]:
     """Extract playables from Apple event for multi-punchout support
     
-    Handles multi_scraped.json structure: e.raw_data.data.content.playables
-    Supports both dict and list formats
+    Handles normalized structure (flat dict with playables key)
+    Supports both dict and list formats for playables
     """
-    # Handle multi_scraped.json structure (e.raw_data.data.content)
-    if "raw_data" in apple_event:
-        raw_data = apple_event.get("raw_data", {})
-        data = raw_data.get("data", {})
-        content = data.get("content", {})
-        playables_data = content.get("playables", [])
-    else:
-        # Handle old parsed format (direct access)
-        playables_data = apple_event.get("playables", [])
+    # Get playables from normalized event structure
+    playables_data = apple_event.get("playables", {})
     
     if not playables_data:
         return []
@@ -286,20 +308,23 @@ def extract_playables(apple_event: Dict, event_id: str) -> List[Tuple]:
     from datetime import datetime, timezone
     now_utc = datetime.now(timezone.utc).isoformat()
     
-    # Handle dict format (from fixed multi_scraper.py main events)
+    # Handle dict format (most common after normalization)
     if isinstance(playables_data, dict):
         playables_list = list(playables_data.values())
     else:
-        # Handle list format (from shelf events)
+        # Handle list format (fallback)
         playables_list = playables_data
     
     result = []
     for playable in playables_list:
+        if not isinstance(playable, dict):
+            continue
+            
         playable_id = playable.get("id", "")
         if not playable_id:
             continue
         
-        # Extract deeplinks - use INDIVIDUAL playable's punchoutUrls, not shared
+        # Extract deeplinks - use INDIVIDUAL playable's punchoutUrls
         punchout = playable.get("punchoutUrls", {})
         deeplink_play = punchout.get("play") or playable.get("deeplink_play")
         deeplink_open = punchout.get("open") or playable.get("deeplink_open")
@@ -369,21 +394,31 @@ def main():
     db_path = Path(args.peacock_db)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    events = load_apple_events(args.apple_json)  # parsed format from parse_events.py
+    events = load_apple_events(args.apple_json)
     print(f"Loaded {len(events)} Apple TV events")
 
     conn = sqlite3.connect(str(db_path))
     ensure_peacock_schema(conn)
 
     inserted = 0
+    playables_extracted = 0
+    
     for e in events:
+        # Normalize ONCE - use for everything
+        normalized = normalize_event_structure(e)
+        
+        # Map to peacock schema (will normalize again internally, but that's ok)
         mapped = map_apple_to_peacock(e, provider_prefix="appletv")
         upsert_event(conn, mapped, dry=args.dry_run)
-        imgs = extract_images(e, mapped["id"])
+        
+        # Extract images from normalized event
+        imgs = extract_images(normalized, mapped["id"])
         upsert_images(conn, imgs, dry=args.dry_run)
         
-        # NEW: Extract and insert playables
-        playables = extract_playables(e, mapped["id"])
+        # Extract playables from normalized event
+        playables = extract_playables(normalized, mapped["id"])
+        if playables:
+            playables_extracted += len(playables)
         upsert_playables(conn, playables, dry=args.dry_run)
         
         inserted += 1
@@ -391,10 +426,9 @@ def main():
     if not args.dry_run:
         conn.commit()
     conn.close()
-    print(f"✓ Imported/updated {inserted} events into {db_path}")
+    
+    print(f"✅ Imported/updated {inserted} events into {db_path}")
+    print(f"✅ Extracted {playables_extracted} playables total")
 
 if __name__ == "__main__":
     main()
-# Notes:
-# - Idempotent upserts keep DB fresh across runs (parity with ingester behavior).  (Ref ingester)  # :contentReference[oaicite:7]{index=7}
-

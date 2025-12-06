@@ -53,46 +53,53 @@ def main():
     
     # Step 1: Scrape Apple TV Sports
     if skip_scrape:
-        print("\n[1/5] Scraping Apple TV Sports... SKIPPED")
+        print("\n[1/6] Scraping Apple TV Sports... SKIPPED")
         multi_scraped = OUT_DIR / "multi_scraped.json"
         if not multi_scraped.exists():
             print(f"ERROR: --skip-scrape set but {multi_scraped} not found")
             return 1
     else:
-        if not run_step(1, 5, "Scraping Apple TV Sports", [
+        if not run_step(1, 6, "Scraping Apple TV Sports", [
             "python3", "multi_scraper.py",
             "--headless",
             "--out", str(OUT_DIR / "multi_scraped.json")
         ]):
             return 1
     
-    # Step 2: Import Apple TV events (reads multi_scraped.json directly)
-    if not run_step(2, 5, "Importing Apple TV events to database", [
+    # Step 2: Ensure database schema is up to date
+    if not run_step(2, 6, "Ensuring database schema (playables table)", [
+        "python3", "migrate_add_playables.py",
+        str(DB_PATH)
+    ]):
+        return 1
+    
+    # Step 3: Import Apple TV events (reads multi_scraped.json directly)
+    if not run_step(3, 6, "Importing Apple TV events to database", [
         "python3", "appletv_to_peacock.py",
         "--apple-json", str(OUT_DIR / "multi_scraped.json"),
         "--peacock-db", str(DB_PATH)
     ]):
         return 1
     
-    # Step 3: Build virtual lanes
+    # Step 4: Build virtual lanes
     lanes = os.getenv("PEACOCK_LANES", "40")
-    if not run_step(3, 5, f"Building {lanes} virtual lanes", [
+    if not run_step(4, 6, f"Building {lanes} virtual lanes", [
         "python3", "peacock_build_lanes.py",
         "--db", str(DB_PATH),
         "--lanes", lanes
     ]):
         return 1
     
-    # Step 4: Export direct channels
-    if not run_step(4, 5, "Exporting Direct channels", [
+    # Step 5: Export direct channels
+    if not run_step(5, 6, "Exporting Direct channels", [
         "python3", "peacock_export_hybrid.py",
         "--db", str(DB_PATH)
     ]):
         return 1
     
-    # Step 5: Export virtual lanes
+    # Step 6: Export virtual lanes
     server_url = os.getenv("SERVER_URL", "http://192.168.86.80:6655")
-    if not run_step(5, 5, "Exporting Virtual Lanes", [
+    if not run_step(6, 6, "Exporting Virtual Lanes", [
         "python3", "peacock_export_lanes.py",
         "--db", str(DB_PATH),
         "--server-url", server_url

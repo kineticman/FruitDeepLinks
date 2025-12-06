@@ -232,7 +232,7 @@ def build_direct_xmltv(conn: sqlite3.Connection, xml_path: str, hours_window: in
         
         # Get actual deeplink and extract provider from it (same as M3U)
         deeplink_url = None
-        if FILTERING_AVAILABLE and enabled_services:
+        if FILTERING_AVAILABLE:
             # Try filtered playables first
             deeplink_url = get_best_deeplink_for_event(conn, event_id, enabled_services)
         
@@ -374,6 +374,7 @@ def build_direct_m3u(conn: sqlite3.Connection, m3u_path: str, hours_window: int 
     enabled_services = preferences.get("enabled_services", [])
     
     skipped_no_deeplink = 0
+    cur = conn.cursor()
 
     with open(m3u_path, "w", encoding="utf-8") as f:
         f.write("#EXTM3U\n\n")
@@ -394,7 +395,7 @@ def build_direct_m3u(conn: sqlite3.Connection, m3u_path: str, hours_window: int 
             deeplink_url = None
             event_id = event.get("id", "")
             
-            if FILTERING_AVAILABLE and enabled_services:
+            if FILTERING_AVAILABLE:
                 # Try filtered playables first
                 deeplink_url = get_best_deeplink_for_event(conn, event_id, enabled_services)
             
@@ -409,6 +410,19 @@ def build_direct_m3u(conn: sqlite3.Connection, m3u_path: str, hours_window: int 
                     deeplink_url = "https://www.peacocktv.com/deeplink?deeplinkData=" + urllib.parse.quote(
                         json.dumps(payload, separators=(",", ":"), ensure_ascii=False), safe=""
                     )
+            
+            if not deeplink_url:
+                # NEW: Apple TV fallback - use playable_url from playables table
+                cur.execute('''
+                    SELECT playable_url 
+                    FROM playables 
+                    WHERE event_id = ? AND playable_url IS NOT NULL 
+                    ORDER BY priority ASC
+                    LIMIT 1
+                ''', (event_id,))
+                row = cur.fetchone()
+                if row:
+                    deeplink_url = row[0]
             
             # Skip events with no suitable deeplink
             if not deeplink_url:
@@ -487,4 +501,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
