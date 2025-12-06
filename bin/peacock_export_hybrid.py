@@ -274,7 +274,6 @@ def build_direct_xmltv(conn: sqlite3.Connection, xml_path: str, hours_window: in
             except Exception as e:
                 # Fallback to channel_name if all else fails
                 provider = get_provider_from_channel(channel_name)
-            pass  # Fall back to channel_name-based provider
 
         chan = ET.SubElement(tv, "channel", id=chan_id)
         dn = ET.SubElement(chan, "display-name")
@@ -433,12 +432,25 @@ def build_direct_m3u(conn: sqlite3.Connection, m3u_path: str, hours_window: int 
             actual_provider = provider  # Default to channel_name-based provider
             try:
                 if FILTERING_AVAILABLE:
-                    from provider_utils import extract_provider_from_url, get_provider_display_name
+                    from logical_service_mapper import get_logical_service_for_playable, get_service_display_name
+                    from provider_utils import extract_provider_from_url
+                    
+                    # Extract raw provider scheme
                     scheme = extract_provider_from_url(deeplink_url)
                     if scheme:
-                        actual_provider = get_provider_display_name(scheme)
-            except:
-                pass  # Fall back to channel_name-based provider
+                        # Get logical service (handles web URL mapping)
+                        logical_service = get_logical_service_for_playable(
+                            provider=scheme if scheme not in ('http', 'https') else scheme,
+                            deeplink_play=deeplink_url,
+                            deeplink_open=None,
+                            playable_url=None,
+                            event_id=event_id,
+                            conn=conn
+                        )
+                        actual_provider = get_service_display_name(logical_service)
+            except Exception as e:
+                # Fallback to channel_name if all else fails
+                actual_provider = get_provider_from_channel(channel_name)
 
             f.write(
                 f'#EXTINF:-1 tvg-id="{chan_id}" tvg-name="{title}" group-title="{actual_provider}"{logo_attr},{title}\n'
