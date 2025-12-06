@@ -172,13 +172,19 @@ def get_event_image_url(conn: sqlite3.Connection, event: Dict) -> Optional[str]:
     return None
 
 # -------------------- Event selection (24h) --------------------
-def get_direct_events(conn: sqlite3.Connection, hours_window: int = 24, 
-                     apply_filters: bool = True) -> List[Dict]:
+
+def get_direct_events(
+    conn: sqlite3.Connection,
+    hours_window: int = 24,
+    apply_filters: bool = True,
+    log_summary: bool = False,
+) -> List[Dict]:
     """Get events for direct export, optionally applying user filters"""
     cur = conn.cursor()
     now = datetime.now(timezone.utc)
     window_end = now + timedelta(hours=hours_window)
-    cur.execute("""
+    cur.execute(
+        """
         SELECT e.id, e.pvid, e.slug, e.title, e.channel_name,
                e.synopsis, e.synopsis_brief, e.genres_json, e.classification_json,
                e.start_utc, e.end_utc, e.raw_attributes_json
@@ -190,29 +196,87 @@ def get_direct_events(conn: sqlite3.Connection, hours_window: int = 24,
                  datetime(e.end_utc) ASC,
                  e.title ASC,
                  e.id ASC
-    """, (now.isoformat(), window_end.isoformat()))
-    
+        """,
+        (now.isoformat(), window_end.isoformat()),
+    )
     all_events = [dict(row) for row in cur.fetchall()]
-    
+
     # Apply content filters if enabled
     if apply_filters and FILTERING_AVAILABLE:
         preferences = load_user_preferences(conn)
-        filtered_events = []
+        filtered_events: List[Dict] = []
         for event in all_events:
             if should_include_event(event, preferences):
                 filtered_events.append(event)
-        
-        if len(filtered_events) < len(all_events):
-            print(f"  Filtered: {len(all_events)} -> {len(filtered_events)} events (removed {len(all_events) - len(filtered_events)})")
-        
-        return filtered_events
-    
-    return all_events
 
-# -------------------- XMLTV --------------------
+        if log_summary:
+            enabled_services = preferences.get("enabled_services", [])
+            disabled_sports = preferences.get("disabled_sports", [])
+            disabled_leagues = preferences.get("disabled_leagues", [])
+
+            # Compute disabled services relative to all logical services seen in DB
+            disabled_services: List[str] = []
+            try:
+                from logical_service_mapper import get_all_logical_services_with_counts
+
+                service_counts = get_all_logical_services_with_counts(conn)
+                all_services = sorted(service_counts.keys())
+                if enabled_services:
+                    disabled_services = [s for s in all_services if s not in enabled_services]
+                else:
+                    # enabled_services == [] means ALL are allowed
+                    disabled_services = []
+            except Exception:
+                # If logical_service_mapper is unavailable, skip disabled-services breakdown
+                disabled_services = []
+
+            print("  Filter settings:")
+            print(
+                "    Enabled services ({count}): {items}".format(
+                    count=len(enabled_services),
+                    items=", ".join(sorted(enabled_services)) if enabled_services else "ALL",
+                )
+            )
+            if disabled_services:
+                print(
+                    "    Disabled services ({count}): {items}".format(
+                        count=len(disabled_services),
+                        items=", ".join(disabled_services),
+                    )
+                )
+            else:
+                print("    Disabled services (0): None")
+            print(
+                "    Disabled sports ({count}): {items}".format(
+                    count=len(disabled_sports),
+                    items=", ".join(sorted(disabled_sports)) if disabled_sports else "None",
+                )
+            )
+            print(
+                "    Disabled leagues ({count}): {items}".format(
+                    count=len(disabled_leagues),
+                    items=", ".join(sorted(disabled_leagues)) if disabled_leagues else "None",
+                )
+            )
+            removed = len(all_events) - len(filtered_events)
+            print(
+                "    Events kept: {kept} / {total} (removed {removed})".format(
+                    kept=len(filtered_events),
+                    total=len(all_events),
+                    removed=removed,
+                )
+            )
+
+        return filtered_events
+
+    # If filters were requested but filter_integration isn't available, say so once
+    if log_summary and apply_filters and not FILTERING_AVAILABLE:
+        print("  Filter settings: filtering requested but filter_integration is not available")
+
+    return all_events
 def build_direct_xmltv(conn: sqlite3.Connection, xml_path: str, hours_window: int = 24, 
                        epg_prefix: str = "fdl.", apply_filters: bool = True):
-    events = get_direct_events(conn, hours_window=hours_window, apply_filters=apply_filters)
+    events = get_direct_events(conn, hours_window=hours_window, apply_filters=apply_filters, log_summary=True)
     print(f"Direct XMLTV: {len(events)} event channels (within {hours_window}h)")
     
     # Load user preferences for deeplink selection
@@ -223,12 +287,6 @@ def build_direct_xmltv(conn: sqlite3.Connection, xml_path: str, hours_window: in
     tv = ET.Element("tv")
     tv.set("generator-info-name", "FruitDeepLinks - Direct")
     tv.set("generator-info-url", "https://github.com/yourusername/FruitDeepLinks")
-
-    # Cursor for playables lookup (used when deriving provider/deeplink)
-    cur = conn.cursor()
-
-    # Cursor for playables lookup (used when deriving provider/deeplink)
-    cur = conn.cursor()
 
     for idx, event in enumerate(events, start=1):
         chan_id = stable_channel_id(event, epg_prefix)
@@ -256,27 +314,6 @@ def build_direct_xmltv(conn: sqlite3.Connection, xml_path: str, hours_window: in
                 )
         
         # Extract actual provider from the deeplink URL
-        if not deeplink_url:
-            # Web / Apple TV fallback - use playable_url from playables table (same as M3U)
-            try:
-                cur.execute(
-                    """
-                    SELECT playable_url
-                    FROM playables
-                    WHERE event_id = ? AND playable_url IS NOT NULL
-                    ORDER BY priority ASC
-                    LIMIT 1
-                    """,
-                    (event_id,),
-                )
-                row = cur.fetchone()
-                if row:
-                    deeplink_url = row[0]
-            except Exception:
-                # If playables table doesn't exist yet or query fails,
-                # just skip this fallback and leave deeplink_url as-is.
-                pass
-
         provider = "Sports"  # Default fallback
         if deeplink_url:
             try:
@@ -400,6 +437,12 @@ def build_direct_m3u(conn: sqlite3.Connection, m3u_path: str, hours_window: int 
     enabled_services = preferences.get("enabled_services", [])
     
     skipped_no_deeplink = 0
+    reason_counts: Dict[str, int] = {}
+    service_skip_counts: Dict[str, int] = {}
+
+    def bump(reason: str) -> None:
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
     cur = conn.cursor()
 
     with open(m3u_path, "w", encoding="utf-8") as f:
@@ -452,6 +495,70 @@ def build_direct_m3u(conn: sqlite3.Connection, m3u_path: str, hours_window: int 
             
             # Skip events with no suitable deeplink
             if not deeplink_url:
+                # Classify why this event ended up without a deeplink
+                reason = "unknown"
+
+                raw_attrs = event.get("raw_attributes_json") or ""
+                has_raw_url = ("http://" in raw_attrs) or ("https://" in raw_attrs) or ("videos://" in raw_attrs)
+
+                # Inspect playables to see if this is service-filter related
+                try:
+                    cur.execute(
+                        """SELECT provider, playable_url, deeplink_play, deeplink_open
+                               FROM playables
+                               WHERE event_id = ?""",
+                        (event_id,),
+                    )
+                    p_rows = cur.fetchall()
+                except Exception:
+                    p_rows = []
+
+                logical_services = set()
+                if p_rows:
+                    try:
+                        from logical_service_mapper import get_logical_service_for_playable
+                    except Exception:
+                        get_logical_service_for_playable = None
+
+                    if get_logical_service_for_playable is not None:
+                        for r in p_rows:
+                            try:
+                                ls = get_logical_service_for_playable(
+                                    provider=r["provider"],
+                                    deeplink_play=r["deeplink_play"],
+                                    deeplink_open=r["deeplink_open"],
+                                    playable_url=r["playable_url"],
+                                    event_id=event_id,
+                                    conn=conn,
+                                )
+                                if ls:
+                                    logical_services.add(ls)
+                            except Exception:
+                                continue
+
+                if p_rows and not logical_services:
+                    # We had playables but couldn't classify them
+                    reason = "no_logical_service"
+                elif p_rows and logical_services:
+                    if enabled_services:
+                        # All logical services for this event are currently DISABLED
+                        if not any(ls in enabled_services for ls in logical_services):
+                            reason = "filtered_by_services"
+                            # Track which logical services were responsible for the skip
+                            for ls in logical_services:
+                                service_skip_counts[ls] = service_skip_counts.get(ls, 0) + 1
+                        else:
+                            # We have at least one allowed service but still ended up without a URL
+                            reason = "no_url_for_allowed_services"
+                    else:
+                        # No enabled_services list means 'all services allowed'
+                        reason = "no_url_for_any_service"
+                elif not p_rows and has_raw_url:
+                    reason = "raw_attributes_only"
+                elif not p_rows and not has_raw_url:
+                    reason = "no_playables_no_rawattrs"
+
+                bump(reason)
                 skipped_no_deeplink += 1
                 continue
             
@@ -486,6 +593,14 @@ def build_direct_m3u(conn: sqlite3.Connection, m3u_path: str, hours_window: int 
     
     if skipped_no_deeplink > 0:
         print(f"  Skipped {skipped_no_deeplink} events with no suitable deeplinks")
+        for reason, count in sorted(reason_counts.items(), key=lambda kv: -kv[1]):
+            print(f"    - {reason}: {count}")
+        if service_skip_counts:
+            # Extra detail for filtered_by_services: which logical services were disabled
+            breakdown = ", ".join(
+                f"{svc}: {cnt}" for svc, cnt in sorted(service_skip_counts.items(), key=lambda kv: -kv[1])
+            )
+            print(f"      filtered_by_services breakdown: {breakdown}")
 
     Path(m3u_path).parent.mkdir(parents=True, exist_ok=True)
     print(f"Wrote Direct M3U: {m3u_path}")
