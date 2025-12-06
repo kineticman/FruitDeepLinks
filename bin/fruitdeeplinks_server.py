@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 fruitdeeplinks_server.py - Web server for FruitDeepLinks
-Features: Admin panel, live logging, stream proxying, filtering (future)
+Features: Admin panel, live logging, stream proxying, filtering (future),
+auto-refresh with APScheduler
 """
 
 import os
@@ -14,8 +15,26 @@ import time
 from pathlib import Path
 from datetime import datetime
 from collections import deque
-from flask import Flask, render_template_string, jsonify, request, send_file, Response, stream_with_context
+
+from flask import (
+    Flask,
+    render_template_string,
+    jsonify,
+    request,
+    send_file,
+    Response,
+    stream_with_context,
+)
 from flask_cors import CORS
+
+# APScheduler (for auto-refresh)
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+
+    APSCHEDULER_AVAILABLE = True
+except ImportError:
+    BackgroundScheduler = None
+    APSCHEDULER_AVAILABLE = False
 
 # Import provider utilities
 try:
@@ -25,15 +44,18 @@ except ImportError:
     # Fallback if provider_utils not available
     def get_provider_display_name(provider):
         return provider.upper()
+
     def get_all_providers_from_db(conn):
         return []
+
 
 # Import logical service mapper
 try:
     from logical_service_mapper import (
         get_all_logical_services_with_counts,
-        get_service_display_name as get_logical_service_display_name
+        get_service_display_name as get_logical_service_display_name,
     )
+
     LOGICAL_SERVICES_AVAILABLE = True
 except ImportError:
     LOGICAL_SERVICES_AVAILABLE = False
@@ -55,24 +77,40 @@ refresh_status = {
     "running": False,
     "last_run": None,
     "last_status": None,
-    "current_step": None
+    "current_step": None,
+    "last_run_manual": None,
+    "last_status_manual": None,
+    "last_run_auto": None,
+    "last_status_auto": None,
 }
+
+# APScheduler globals
+scheduler = None
+auto_refresh_job = None
+auto_refresh_settings = {
+    "enabled": False,
+    "time": "02:30",  # HH:MM local time
+}
+
 
 # ==================== Logging ====================
 class LogCapture:
     """Captures logs and stores them in memory"""
+
     def __init__(self):
         self.enabled = True
-    
+
     def write(self, message):
         if self.enabled and message.strip():
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             log_buffer.append(f"[{timestamp}] {message.strip()}")
-    
+
     def flush(self):
         pass
 
+
 log_capture = LogCapture()
+
 
 def log(message, level="INFO"):
     """Add a log message"""
@@ -81,61 +119,109 @@ def log(message, level="INFO"):
     log_buffer.append(log_line)
     print(log_line)
 
-# ==================== Database Queries ====================
+
+# ==================== Database / Pref Utilities ====================
 def get_db_connection():
     """Get database connection"""
     if not DB_PATH.exists():
         return None
     return sqlite3.connect(str(DB_PATH))
 
+
+def _load_raw_preferences():
+    """
+    Load raw key/value prefs from user_preferences table (no JSON decoding).
+    Used for auto-refresh settings so they can coexist with filters.
+    """
+    prefs = {}
+    conn = get_db_connection()
+    if not conn:
+        return prefs
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='user_preferences'"
+        )
+        if not cur.fetchone():
+            conn.close()
+            return prefs
+
+        cur.execute("SELECT key, value FROM user_preferences")
+        for key, value in cur.fetchall():
+            prefs[key] = value
+        conn.close()
+    except Exception as e:
+        log(f"Error loading raw preferences: {e}", "ERROR")
+    return prefs
+
+
 def get_user_preferences():
     """Get user filtering preferences"""
     conn = get_db_connection()
     if not conn:
         return {"enabled_services": [], "disabled_sports": [], "disabled_leagues": []}
-    
+
     try:
         cur = conn.cursor()
         # Check if user_preferences table exists
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_preferences'")
+        cur.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='user_preferences'"
+        )
         if not cur.fetchone():
-            return {"enabled_services": [], "disabled_sports": [], "disabled_leagues": []}
-        
+            return {
+                "enabled_services": [],
+                "disabled_sports": [],
+                "disabled_leagues": [],
+            }
+
         prefs = {}
         cur.execute("SELECT key, value FROM user_preferences")
         for row in cur.fetchall():
             key, value = row
             try:
                 prefs[key] = json.loads(value) if value else []
-            except:
+            except Exception:
                 prefs[key] = []
-        
+
         conn.close()
         return {
             "enabled_services": prefs.get("enabled_services", []),
             "disabled_sports": prefs.get("disabled_sports", []),
-            "disabled_leagues": prefs.get("disabled_leagues", [])
+            "disabled_leagues": prefs.get("disabled_leagues", []),
         }
     except Exception as e:
         log(f"Error loading preferences: {e}", "ERROR")
         return {"enabled_services": [], "disabled_sports": [], "disabled_leagues": []}
+
 
 def save_user_preferences(prefs):
     """Save user filtering preferences"""
     conn = get_db_connection()
     if not conn:
         return False
-    
+
     try:
         cur = conn.cursor()
-        now = datetime.now().isoformat()
-        
+        now = datetime.utcnow().isoformat()
+
+        # Make sure table exists (in case this is first write)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_utc TEXT
+            )
+        """
+        )
+
         for key, value in prefs.items():
             cur.execute(
                 "INSERT OR REPLACE INTO user_preferences (key, value, updated_utc) VALUES (?, ?, ?)",
-                (key, json.dumps(value), now)
+                (key, json.dumps(value), now),
             )
-        
+
         conn.commit()
         conn.close()
         return True
@@ -143,59 +229,135 @@ def save_user_preferences(prefs):
         log(f"Error saving preferences: {e}", "ERROR")
         return False
 
+
+# -------- Auto-refresh settings (stored in user_preferences) --------
+def get_auto_refresh_settings():
+    """Get auto-refresh settings from DB or defaults"""
+    # Defaults, with optional env overrides
+    settings = {
+        "enabled": os.getenv("AUTO_REFRESH_ENABLED", "1").lower()
+        not in ("0", "false", "no"),
+        "time": os.getenv("AUTO_REFRESH_TIME", "02:30"),
+    }
+
+    prefs = _load_raw_preferences()
+    if not prefs:
+        return settings
+
+    if "auto_refresh_enabled" in prefs:
+        try:
+            settings["enabled"] = bool(json.loads(prefs["auto_refresh_enabled"]))
+        except Exception:
+            pass
+
+    if "auto_refresh_time" in prefs:
+        try:
+            settings["time"] = json.loads(prefs["auto_refresh_time"])
+        except Exception:
+            settings["time"] = prefs["auto_refresh_time"]
+
+    return settings
+
+
+def save_auto_refresh_settings(settings):
+    """Persist auto-refresh settings to DB"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_utc TEXT
+            )
+        """
+        )
+        now = datetime.utcnow().isoformat()
+
+        cur.execute(
+            "INSERT OR REPLACE INTO user_preferences (key, value, updated_utc) VALUES (?, ?, ?)",
+            ("auto_refresh_enabled", json.dumps(bool(settings.get("enabled", False))), now),
+        )
+        cur.execute(
+            "INSERT OR REPLACE INTO user_preferences (key, value, updated_utc) VALUES (?, ?, ?)",
+            ("auto_refresh_time", json.dumps(settings.get("time", "02:30")), now),
+        )
+
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        log(f"Error saving auto-refresh settings: {e}", "ERROR")
+        return False
+
+
 def get_available_filters():
     """Get available sports, leagues, and providers for filtering"""
     conn = get_db_connection()
     if not conn:
         return {"providers": [], "sports": [], "leagues": []}
-    
+
     try:
         cur = conn.cursor()
-        
+
         # Get providers using logical service mapping
         providers = []
         try:
             if LOGICAL_SERVICES_AVAILABLE:
                 # Use logical service mapper to get web services broken down
                 service_counts = get_all_logical_services_with_counts(conn)
-                
-                for service_code, count in sorted(service_counts.items(), key=lambda x: -x[1]):
+
+                for service_code, count in sorted(
+                    service_counts.items(), key=lambda x: -x[1]
+                ):
                     display_name = get_logical_service_display_name(service_code)
-                    providers.append({
-                        "scheme": service_code,
-                        "name": display_name,
-                        "count": count
-                    })
+                    providers.append(
+                        {
+                            "scheme": service_code,
+                            "name": display_name,
+                            "count": count,
+                        }
+                    )
             else:
                 # Fallback: use raw provider grouping
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT provider, COUNT(*) as count
                     FROM playables
                     WHERE provider IS NOT NULL AND provider != ''
                     GROUP BY provider
                     ORDER BY count DESC
-                """)
+                """
+                )
                 for row in cur.fetchall():
                     provider, count = row
                     display_name = get_provider_display_name(provider)
-                    providers.append({
-                        "scheme": provider,
-                        "name": display_name,
-                        "count": count
-                    })
+                    providers.append(
+                        {
+                            "scheme": provider,
+                            "name": display_name,
+                            "count": count,
+                        }
+                    )
         except Exception as e:
             log(f"Error loading providers: {e}", "ERROR")
-        
+
         # Get sports from genres_json - simpler approach
         sports = {}
-        cur.execute("""
+        cur.execute(
+            """
             SELECT genres_json, COUNT(*) as event_count
             FROM events 
             WHERE end_utc > datetime('now')
             AND genres_json IS NOT NULL 
             AND genres_json != '[]'
             GROUP BY genres_json
-        """)
+        """
+        )
         for row in cur.fetchall():
             genres_json, event_count = row
             try:
@@ -203,110 +365,263 @@ def get_available_filters():
                 for genre in genres:
                     if genre and isinstance(genre, str):
                         sports[genre] = sports.get(genre, 0) + event_count
-            except:
+            except Exception:
                 pass
-        
-        sports_list = [{"name": k, "count": v} for k, v in sorted(sports.items(), key=lambda x: -x[1])]
-        
+
+        sports_list = [
+            {"name": k, "count": v}
+            for k, v in sorted(sports.items(), key=lambda x: -x[1])
+        ]
+
         # Get leagues from classification_json
         leagues = {}
-        cur.execute("""
+        cur.execute(
+            """
             SELECT classification_json, COUNT(*) as event_count
             FROM events
             WHERE end_utc > datetime('now')
             AND classification_json IS NOT NULL
             AND classification_json != '[]'
             GROUP BY classification_json
-        """)
+        """
+        )
         for row in cur.fetchall():
             class_json, event_count = row
             try:
                 classifications = json.loads(class_json)
                 for item in classifications:
-                    if isinstance(item, dict) and item.get('type') == 'league':
-                        league_name = item.get('value')
+                    if isinstance(item, dict) and item.get("type") == "league":
+                        league_name = item.get("value")
                         if league_name:
                             leagues[league_name] = leagues.get(league_name, 0) + event_count
-            except:
+            except Exception:
                 pass
-        
-        leagues_list = [{"name": k, "count": v} for k, v in sorted(leagues.items(), key=lambda x: -x[1])[:50]]
-        
+
+        leagues_list = [
+            {"name": k, "count": v}
+            for k, v in sorted(leagues.items(), key=lambda x: -x[1])[:50]
+        ]
+
         conn.close()
         return {
             "providers": providers,
             "sports": sports_list,
-            "leagues": leagues_list
+            "leagues": leagues_list,
         }
     except Exception as e:
         log(f"Error getting filters: {e}", "ERROR")
         return {"providers": [], "sports": [], "leagues": []}
 
+
 def get_db_stats():
-    """Get database statistics"""
+    """Get database statistics + file timestamp/size"""
     if not DB_PATH.exists():
         return {"error": "Database not found"}
-    
+
     try:
+        stats = {}
+
+        # File-level info
+        stat = DB_PATH.stat()
+        stats["db_path"] = str(DB_PATH)
+        stats["db_size"] = stat.st_size
+        stats["db_modified"] = datetime.fromtimestamp(stat.st_mtime).isoformat()
+
         conn = sqlite3.connect(str(DB_PATH))
         cur = conn.cursor()
-        
-        stats = {}
-        
+
         # Total events
         cur.execute("SELECT COUNT(*) FROM events")
         stats["total_events"] = cur.fetchone()[0]
-        
+
         # Future events
         cur.execute("SELECT COUNT(*) FROM events WHERE end_utc > datetime('now')")
         stats["future_events"] = cur.fetchone()[0]
-        
-        # Events by provider
-        cur.execute("""
+
+        # Events by provider (top 10)
+        cur.execute(
+            """
             SELECT channel_name, COUNT(*) as count 
             FROM events 
             WHERE end_utc > datetime('now')
             GROUP BY channel_name 
             ORDER BY count DESC 
             LIMIT 10
-        """)
+        """
+        )
         stats["top_providers"] = [
-            {"name": row[0], "count": row[1]} 
-            for row in cur.fetchall()
+            {"name": row[0], "count": row[1]} for row in cur.fetchall()
         ]
-        
-        # Lane statistics
+
+        # Lane statistics (if tables exist)
         try:
             cur.execute("SELECT COUNT(*) FROM lanes")
             stats["lane_count"] = cur.fetchone()[0]
-            
+
             cur.execute("SELECT COUNT(*) FROM lane_events WHERE is_placeholder = 0")
             stats["scheduled_events"] = cur.fetchone()[0]
-            
+
             cur.execute("SELECT COUNT(*) FROM lane_events WHERE is_placeholder = 1")
             stats["placeholders"] = cur.fetchone()[0]
-        except:
+        except Exception:
             stats["lane_count"] = 0
             stats["scheduled_events"] = 0
             stats["placeholders"] = 0
-        
+
         conn.close()
         return stats
-        
+
     except Exception as e:
         return {"error": str(e)}
 
-# ==================== File Serving ====================
+
+# ==================== Auto-refresh + Refresh Runner ====================
+def schedule_auto_refresh_from_settings():
+    """Create/refresh the APScheduler job based on current settings"""
+    global auto_refresh_job, scheduler, auto_refresh_settings
+
+    if not scheduler:
+        return
+
+    # Clear existing job
+    if auto_refresh_job is not None:
+        try:
+            auto_refresh_job.remove()
+        except Exception:
+            pass
+        auto_refresh_job = None
+
+    if not auto_refresh_settings.get("enabled"):
+        log("Auto-refresh disabled; no daily job scheduled", "INFO")
+        return
+
+    time_str = auto_refresh_settings.get("time", "02:30")
+    try:
+        hour, minute = [int(x) for x in time_str.split(":", 1)]
+    except Exception:
+        log(f"Invalid auto refresh time '{time_str}', disabling job", "ERROR")
+        auto_refresh_settings["enabled"] = False
+        return
+
+    try:
+        auto_refresh_job = scheduler.add_job(
+            func=lambda: run_refresh(skip_scrape=False, source="auto"),
+            trigger="cron",
+            hour=hour,
+            minute=minute,
+            id="daily_auto_refresh",
+            replace_existing=True,
+        )
+        log(
+            f"Auto-refresh scheduled daily at {hour:02d}:{minute:02d} (scheduler local TZ)",
+            "INFO",
+        )
+    except Exception as e:
+        log(f"Failed to schedule auto-refresh: {e}", "ERROR")
+
+
+def start_scheduler_if_available():
+    """Start APScheduler in background for auto-refresh"""
+    global scheduler, auto_refresh_settings
+
+    if not APSCHEDULER_AVAILABLE:
+        log("APScheduler not installed; auto-refresh disabled", "ERROR")
+        return
+
+    try:
+        scheduler = BackgroundScheduler(timezone=os.getenv("TZ", "America/New_York"))
+        scheduler.start()
+        log("APScheduler scheduler started", "INFO")
+
+        auto_refresh_settings = get_auto_refresh_settings()
+        schedule_auto_refresh_from_settings()
+    except Exception as e:
+        log(f"Error starting APScheduler: {e}", "ERROR")
+
+
+def run_refresh(skip_scrape=False, source="manual"):
+    """
+    Shared refresh runner for manual and scheduled runs.
+
+    source: "manual" or "auto" (for status breakdown)
+    """
+    global refresh_status
+
+    if refresh_status["running"]:
+        log("Refresh requested but one is already running; skipping", "WARNING")
+        return
+
+    refresh_status["running"] = True
+    refresh_status["current_step"] = "Starting refresh..."
+    label = "Auto" if source == "auto" else "Manual"
+    log(f"{label} refresh triggered (skip_scrape={skip_scrape})", "INFO")
+
+    outcome = "error"
+
+    try:
+        cmd = ["python3", "-u", str(BIN_DIR / "daily_refresh.py")]
+        if skip_scrape:
+            cmd.append("--skip-scrape")
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+
+        for line in process.stdout:
+            line = line.rstrip("\n")
+            if not line:
+                continue
+            log_buffer.append(line)
+            # Try to surface step info like "[1/5] ..."
+            if "[" in line and "/" in line and "]" in line:
+                refresh_status["current_step"] = line.strip()
+
+        process.wait()
+
+        if process.returncode == 0:
+            outcome = "success"
+            log(f"{label} refresh completed successfully", "INFO")
+        else:
+            outcome = "failed"
+            log(f"{label} refresh failed with code {process.returncode}", "ERROR")
+
+    except Exception as e:
+        outcome = "error"
+        log(f"{label} refresh error: {e}", "ERROR")
+    finally:
+        refresh_status["running"] = False
+        refresh_status["current_step"] = None
+        now_iso = datetime.now().isoformat()
+
+        # Overall last run
+        refresh_status["last_run"] = now_iso
+        refresh_status["last_status"] = outcome
+
+        # Source-specific breakdown
+        if source == "auto":
+            refresh_status["last_run_auto"] = now_iso
+            refresh_status["last_status_auto"] = outcome
+        else:
+            refresh_status["last_run_manual"] = now_iso
+            refresh_status["last_status_manual"] = outcome
+
+
+# ==================== File Serving / API ====================
 @app.route("/")
 def index():
     """Admin dashboard"""
     return render_template_string(ADMIN_TEMPLATE)
 
+
 @app.route("/api/status")
 def api_status():
     """Get system status"""
     stats = get_db_stats()
-    
+
     # File info
     files = {}
     for file_path in list(OUT_DIR.glob("*.xml")) + list(OUT_DIR.glob("*.m3u")):
@@ -314,29 +629,45 @@ def api_status():
             stat = file_path.stat()
             files[file_path.name] = {
                 "size": stat.st_size,
-                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
             }
-    
-    return jsonify({
-        "status": "online",
-        "database": stats,
-        "files": files,
-        "refresh": refresh_status,
-        "timestamp": datetime.now().isoformat()
-    })
+
+    # Auto-refresh status snapshot
+    auto_settings = get_auto_refresh_settings()
+    next_run = None
+    if auto_refresh_job and auto_settings.get("enabled"):
+        try:
+            next_run = auto_refresh_job.next_run_time.isoformat()
+        except Exception:
+            next_run = None
+
+    return jsonify(
+        {
+            "status": "online",
+            "database": stats,
+            "files": files,
+            "refresh": refresh_status,
+            "auto_refresh": {
+                "enabled": auto_settings.get("enabled", False),
+                "time": auto_settings.get("time", "02:30"),
+                "next_run": next_run,
+            },
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
+
 
 @app.route("/api/logs")
 def api_logs():
     """Get recent logs"""
     count = request.args.get("count", 100, type=int)
-    return jsonify({
-        "logs": list(log_buffer)[-count:],
-        "count": len(log_buffer)
-    })
+    return jsonify({"logs": list(log_buffer)[-count:], "count": len(log_buffer)})
+
 
 @app.route("/api/logs/stream")
 def api_logs_stream():
     """Stream logs in real-time (SSE)"""
+
     def generate():
         last_index = len(log_buffer)
         while True:
@@ -346,114 +677,205 @@ def api_logs_stream():
                     yield f"data: {json.dumps({'log': log_line})}\n\n"
                 last_index = current_index
             time.sleep(0.5)
-    
+
     return Response(generate(), mimetype="text/event-stream")
+
 
 @app.route("/api/refresh", methods=["POST"])
 def api_refresh():
     """Trigger a manual refresh"""
     if refresh_status["running"]:
         return jsonify({"error": "Refresh already running"}), 409
-    
+
     skip_scrape = request.json.get("skip_scrape", False) if request.json else False
-    
-    def run_refresh():
-        refresh_status["running"] = True
-        refresh_status["current_step"] = "Starting refresh..."
-        log("Manual refresh triggered", "INFO")
-        
-        try:
-            cmd = ["python3", "-u", str(BIN_DIR / "daily_refresh.py")]
-            if skip_scrape:
-                cmd.append("--skip-scrape")
-            
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
-            )
-            
-            for line in process.stdout:
-                log_buffer.append(line.strip())
-                if "[" in line and "/" in line and "]" in line:
-                    refresh_status["current_step"] = line.strip()
-            
-            process.wait()
-            
-            if process.returncode == 0:
-                refresh_status["last_status"] = "success"
-                log("Refresh completed successfully", "INFO")
-            else:
-                refresh_status["last_status"] = "failed"
-                log(f"Refresh failed with code {process.returncode}", "ERROR")
-                
-        except Exception as e:
-            refresh_status["last_status"] = "error"
-            log(f"Refresh error: {str(e)}", "ERROR")
-        
-        finally:
-            refresh_status["running"] = False
-            refresh_status["last_run"] = datetime.now().isoformat()
-    
-    thread = threading.Thread(target=run_refresh, daemon=True)
+
+    # Run in a background thread so the HTTP request returns immediately
+    thread = threading.Thread(
+        target=lambda: run_refresh(skip_scrape=skip_scrape, source="manual"),
+        daemon=True,
+    )
     thread.start()
     return jsonify({"status": "started"})
+
+
+@app.route("/api/auto-refresh", methods=["GET", "POST"])
+def api_auto_refresh():
+    """Get or update auto-refresh scheduler settings"""
+    global auto_refresh_settings
+
+    if request.method == "GET":
+        auto_refresh_settings = get_auto_refresh_settings()
+        next_run = None
+        if auto_refresh_job and auto_refresh_settings.get("enabled"):
+            try:
+                next_run = auto_refresh_job.next_run_time.isoformat()
+            except Exception:
+                next_run = None
+
+        return jsonify(
+            {
+                "enabled": auto_refresh_settings.get("enabled", False),
+                "time": auto_refresh_settings.get("time", "02:30"),
+                "next_run": next_run,
+            }
+        )
+
+    data = request.json or {}
+    enabled = bool(data.get("enabled", False))
+    time_str = data.get("time", "02:30")
+
+    # Validate HH:MM
+    try:
+        hour, minute = [int(x) for x in time_str.split(":", 1)]
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError
+        time_str = f"{hour:02d}:{minute:02d}"
+    except Exception:
+        return jsonify({"error": "Invalid time format, use HH:MM (24h)"}), 400
+
+    auto_refresh_settings = {"enabled": enabled, "time": time_str}
+
+    if not save_auto_refresh_settings(auto_refresh_settings):
+        return jsonify({"error": "Failed to save settings"}), 500
+
+    schedule_auto_refresh_from_settings()
+
+    next_run = None
+    if auto_refresh_job and auto_refresh_settings.get("enabled"):
+        try:
+            next_run = auto_refresh_job.next_run_time.isoformat()
+        except Exception:
+            next_run = None
+
+    return jsonify(
+        {
+            "enabled": auto_refresh_settings["enabled"],
+            "time": auto_refresh_settings["time"],
+            "next_run": next_run,
+        }
+    )
+
 
 @app.route("/api/apply-filters", methods=["POST"])
 def api_apply_filters():
     """Apply current filter settings by regenerating exports only"""
     if refresh_status["running"]:
         return jsonify({"error": "Refresh already running"}), 409
-    
+
     def run_apply_filters():
         refresh_status["running"] = True
         refresh_status["current_step"] = "Applying filters..."
         log("Applying filter settings (regenerating exports)", "INFO")
-        
+
         try:
             # Only run export scripts, skip scraping/importing
             scripts = [
-                ("peacock_build_lanes.py", ["python3", "-u", str(BIN_DIR / "peacock_build_lanes.py"), "--db", str(DB_PATH), "--lanes", os.getenv("PEACOCK_LANES", "50")]),
-                ("peacock_export_hybrid.py", ["python3", "-u", str(BIN_DIR / "peacock_export_hybrid.py"), "--db", str(DB_PATH)]),
-                ("peacock_export_lanes.py", ["python3", "-u", str(BIN_DIR / "peacock_export_lanes.py"), "--db", str(DB_PATH), "--server-url", os.getenv("SERVER_URL", "http://192.168.86.80:6655")])
+                (
+                    "peacock_build_lanes.py",
+                    [
+                        "python3",
+                        "-u",
+                        str(BIN_DIR / "peacock_build_lanes.py"),
+                        "--db",
+                        str(DB_PATH),
+                        "--lanes",
+                        os.getenv("PEACOCK_LANES", "50"),
+                    ],
+                ),
+                (
+                    "peacock_export_hybrid.py",
+                    [
+                        "python3",
+                        "-u",
+                        str(BIN_DIR / "peacock_export_hybrid.py"),
+                        "--db",
+                        str(DB_PATH),
+                    ],
+                ),
+                (
+                    "peacock_export_lanes.py",
+                    [
+                        "python3",
+                        "-u",
+                        str(BIN_DIR / "peacock_export_lanes.py"),
+                        "--db",
+                        str(DB_PATH),
+                        "--server-url",
+                        os.getenv("SERVER_URL", "http://192.168.86.80:6655"),
+                    ],
+                ),
             ]
-            
+
             for script_name, cmd in scripts:
                 refresh_status["current_step"] = f"Running {script_name}..."
                 log(f"Running {script_name}", "INFO")
-                
+
                 process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    bufsize=1
+                    bufsize=1,
                 )
-                
+
                 for line in process.stdout:
                     log_buffer.append(line.strip())
-                
+
                 process.wait()
-                
+
                 if process.returncode != 0:
                     raise Exception(f"{script_name} failed with code {process.returncode}")
-            
+
             refresh_status["last_status"] = "success"
             log("Filters applied successfully!", "INFO")
-                
+
         except Exception as e:
             refresh_status["last_status"] = "error"
             log(f"Apply filters error: {str(e)}", "ERROR")
-        
+
         finally:
             refresh_status["running"] = False
-            refresh_status["last_run"] = datetime.now().isoformat()
-    
+            refresh_status["current_step"] = None
+            now_iso = datetime.now().isoformat()
+            refresh_status["last_run"] = now_iso
+
     thread = threading.Thread(target=run_apply_filters, daemon=True)
     thread.start()
     return jsonify({"status": "started"})
+
+
+# ==================== Filters APIs ====================
+@app.route("/filters")
+def filters_page():
+    """Filters configuration page"""
+    return render_template_string(FILTERS_TEMPLATE)
+
+
+@app.route("/api/filters")
+def api_filters():
+    """Get available filters (providers, sports, leagues)"""
+    filters = get_available_filters()
+    prefs = get_user_preferences()
+    return jsonify({"filters": filters, "preferences": prefs})
+
+
+@app.route("/api/filters/preferences", methods=["GET", "POST"])
+def api_filters_preferences():
+    """Get or update user filter preferences"""
+    if request.method == "GET":
+        return jsonify(get_user_preferences())
+
+    elif request.method == "POST":
+        prefs = request.json
+        if save_user_preferences(prefs):
+            log("Filter preferences updated", "INFO")
+            return jsonify({"status": "success"})
+        else:
+            return (
+                jsonify({"status": "error", "message": "Failed to save preferences"}),
+                500,
+            )
+
 
 # ==================== File Downloads ====================
 @app.route("/out/<filename>")
@@ -462,57 +884,33 @@ def serve_file(filename):
     file_path = OUT_DIR / filename
     if not file_path.exists():
         return jsonify({"error": "File not found"}), 404
-    
+
     return send_file(str(file_path), as_attachment=False)
+
 
 @app.route("/xmltv/lanes")
 def serve_lanes_xmltv():
     """Serve lanes XMLTV guide"""
     return send_file(str(OUT_DIR / "peacock_lanes.xml"))
 
+
 @app.route("/m3u/lanes")
 def serve_lanes_m3u():
     """Serve lanes M3U playlist"""
     return send_file(str(OUT_DIR / "peacock_lanes.m3u"))
+
 
 @app.route("/xmltv/direct")
 def serve_direct_xmltv():
     """Serve direct XMLTV guide"""
     return send_file(str(OUT_DIR / "direct.xml"))
 
+
 @app.route("/m3u/direct")
 def serve_direct_m3u():
     """Serve direct M3U playlist"""
     return send_file(str(OUT_DIR / "direct.m3u"))
 
-@app.route("/filters")
-def filters_page():
-    """Filters configuration page"""
-    return render_template_string(FILTERS_TEMPLATE)
-
-@app.route("/api/filters")
-def api_filters():
-    """Get available filters (providers, sports, leagues)"""
-    filters = get_available_filters()
-    prefs = get_user_preferences()
-    return jsonify({
-        "filters": filters,
-        "preferences": prefs
-    })
-
-@app.route("/api/filters/preferences", methods=["GET", "POST"])
-def api_filters_preferences():
-    """Get or update user filter preferences"""
-    if request.method == "GET":
-        return jsonify(get_user_preferences())
-    
-    elif request.method == "POST":
-        prefs = request.json
-        if save_user_preferences(prefs):
-            log("Filter preferences updated", "INFO")
-            return jsonify({"status": "success"})
-        else:
-            return jsonify({"status": "error", "message": "Failed to save preferences"}), 500
 
 # ==================== Stream Proxying (Future) ====================
 @app.route("/lanes/<int:lane_id>/stream.m3u8")
@@ -521,17 +919,18 @@ def lane_stream(lane_id):
     Stream endpoint for a lane
     TODO: Implement actual stream proxying based on current schedule
     """
-    # For now, return a placeholder
-    # In the future, this will:
-    # 1. Check what event is currently scheduled on this lane
-    # 2. Proxy to the actual provider's stream
-    # 3. Handle authentication/deeplinks
-    
-    return jsonify({
-        "error": "Stream proxying not yet implemented",
-        "lane_id": lane_id,
-        "message": "Use direct deeplinks for now"
-    }), 501
+
+    return (
+        jsonify(
+            {
+                "error": "Stream proxying not yet implemented",
+                "lane_id": lane_id,
+                "message": "Use direct deeplinks for now",
+            }
+        ),
+        501,
+    )
+
 
 @app.route("/api/lanes/<int:lane_id>/schedule")
 def lane_schedule(lane_id):
@@ -540,10 +939,11 @@ def lane_schedule(lane_id):
         conn = sqlite3.connect(str(DB_PATH))
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        
+
         now = datetime.now().isoformat()
-        
-        cur.execute("""
+
+        cur.execute(
+            """
             SELECT le.*, e.title, e.channel_name, e.synopsis
             FROM lane_events le
             LEFT JOIN events e ON le.event_id = e.id
@@ -551,28 +951,34 @@ def lane_schedule(lane_id):
               AND le.end_utc >= ?
             ORDER BY le.start_utc
             LIMIT 10
-        """, (lane_id, now))
-        
+        """,
+            (lane_id, now),
+        )
+
         schedule = [dict(row) for row in cur.fetchall()]
         conn.close()
-        
+
         return jsonify({"lane_id": lane_id, "schedule": schedule})
-        
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 # ==================== Health Check ====================
 @app.route("/health")
 def health():
     """Health check endpoint"""
     db_ok = DB_PATH.exists()
-    return jsonify({
-        "status": "healthy" if db_ok else "degraded",
-        "database": "ok" if db_ok else "missing",
-        "timestamp": datetime.now().isoformat()
-    })
+    return jsonify(
+        {
+            "status": "healthy" if db_ok else "degraded",
+            "database": "ok" if db_ok else "missing",
+            "timestamp": datetime.now().isoformat(),
+        }
+    )
 
-# ==================== Admin HTML Template ====================
+
+# ==================== HTML Templates ====================
 FILTERS_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -1155,6 +1561,26 @@ ADMIN_TEMPLATE = """
                 <div id="refresh-status" style="margin-bottom: 15px;">Loading...</div>
                 <button class="btn" onclick="triggerRefresh(false)" id="btn-refresh">Full Refresh</button>
                 <button class="btn btn-secondary" onclick="triggerRefresh(true)" id="btn-refresh-skip">Skip Scrape</button>
+
+                <div style="margin-top:15px; padding-top:15px; border-top:1px solid #334155;">
+                    <h3 style="font-size:15px; margin-bottom:8px;">⏰ Auto Refresh</h3>
+                    <div style="margin-bottom:8px;">
+                        <label class="stat-label">
+                            Time (local):
+                            <input type="time" id="auto-time" style="margin-left:8px; padding:4px; border-radius:4px; border:1px solid #334155; background:#0f172a; color:#e2e8f0;">
+                        </label>
+                    </div>
+                    <div style="margin-bottom:8px;">
+                        <label class="stat-label">
+                            <input type="checkbox" id="auto-enabled" style="margin-right:6px;">
+                            Enable daily auto refresh
+                        </label>
+                    </div>
+                    <div class="stat-label" id="auto-next-run"></div>
+                    <div style="margin-top:10px;">
+                        <button class="btn btn-secondary" onclick="saveAutoRefresh()" id="btn-save-auto">Save Auto Settings</button>
+                    </div>
+                </div>
             </div>
         </div>
         
@@ -1181,11 +1607,15 @@ ADMIN_TEMPLATE = """
                     dbStats.innerHTML = `<div class="stat-value" style="color: #f87171;">Error: ${data.database.error}</div>`;
                 } else {
                     const db = data.database;
+                    const dbMod = db.db_modified ? new Date(db.db_modified).toLocaleString() : 'n/a';
+                    const dbSize = db.db_size ? (db.db_size / 1024 / 1024).toFixed(2) + ' MB' : 'n/a';
                     dbStats.innerHTML = `
                         <div class="stat"><span class="stat-label">Total Events</span><span class="stat-value">${db.total_events || 0}</span></div>
                         <div class="stat"><span class="stat-label">Future Events</span><span class="stat-value">${db.future_events || 0}</span></div>
                         <div class="stat"><span class="stat-label">Lanes</span><span class="stat-value">${db.lane_count || 0}</span></div>
                         <div class="stat"><span class="stat-label">Scheduled</span><span class="stat-value">${db.scheduled_events || 0}</span></div>
+                        <div class="stat"><span class="stat-label">DB Last Updated</span><span class="stat-value">${dbMod}</span></div>
+                        <div class="stat"><span class="stat-label">DB Size</span><span class="stat-value">${dbSize}</span></div>
                     `;
                 }
                 
@@ -1216,14 +1646,42 @@ ADMIN_TEMPLATE = """
                 } else {
                     btnRefresh.disabled = false;
                     btnRefreshSkip.disabled = false;
-                    if (refresh.last_run) {
+                    
+                    const pieces = [];
+                    if (refresh.last_run_manual) {
+                        const manualStatus = refresh.last_status_manual || refresh.last_status;
+                        let manualBadge = '';
+                        if (manualStatus === 'success') {
+                            manualBadge = '<span class="status-success">✓ Success</span>';
+                        } else if (manualStatus) {
+                            manualBadge = '<span class="status-failed">✗ ' + manualStatus + '</span>';
+                        }
+                        pieces.push('Last manual refresh: ' + new Date(refresh.last_run_manual).toLocaleString() + ' ' + manualBadge);
+                    }
+                    if (refresh.last_run_auto) {
+                        const autoStatus = refresh.last_status_auto;
+                        let autoBadge = '';
+                        if (autoStatus === 'success') {
+                            autoBadge = '<span class="status-success">✓ Success</span>';
+                        } else if (autoStatus) {
+                            autoBadge = '<span class="status-failed">✗ ' + autoStatus + '</span>';
+                        }
+                        pieces.push('Last auto refresh: ' + new Date(refresh.last_run_auto).toLocaleString() + ' ' + autoBadge);
+                    }
+                    if (!pieces.length && refresh.last_run) {
                         const status = refresh.last_status === 'success' 
                             ? '<span class="status-success">✓ Success</span>'
-                            : '<span class="status-failed">✗ Failed</span>';
-                        refreshStatus.innerHTML = `Last run: ${new Date(refresh.last_run).toLocaleString()} ${status}`;
-                    } else {
-                        refreshStatus.innerHTML = 'No refresh run yet';
+                            : refresh.last_status
+                                ? '<span class="status-failed">✗ ' + refresh.last_status + '</span>'
+                                : '';
+                        pieces.push('Last refresh: ' + new Date(refresh.last_run).toLocaleString() + ' ' + status);
                     }
+                    refreshStatus.innerHTML = pieces.length ? pieces.join('<br>') : 'No refresh run yet';
+                }
+
+                // Auto-refresh status block
+                if (data.auto_refresh) {
+                    applyAutoSettingsToDom(data.auto_refresh);
                 }
                 
             } catch (err) {
@@ -1251,6 +1709,50 @@ ADMIN_TEMPLATE = """
                 }
             } catch (err) {
                 alert('Error: ' + err.message);
+            }
+        }
+
+        async function saveAutoRefresh() {
+            try {
+                const enabled = document.getElementById('auto-enabled').checked;
+                const time = document.getElementById('auto-time').value || '02:30';
+                const res = await fetch('/api/auto-refresh', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ enabled, time })
+                });
+                if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    alert(data.error || 'Failed to save auto-refresh settings');
+                    return;
+                }
+                const dataJson = await res.json();
+                applyAutoSettingsToDom(dataJson);
+            } catch (err) {
+                alert('Error saving auto refresh: ' + err.message);
+            }
+        }
+
+        function applyAutoSettingsToDom(auto) {
+            const timeInput = document.getElementById('auto-time');
+            const enabledInput = document.getElementById('auto-enabled');
+            const label = document.getElementById('auto-next-run');
+
+            if (timeInput && document.activeElement !== timeInput) {
+                timeInput.value = auto.time || '02:30';
+            }
+            if (enabledInput && document.activeElement !== enabledInput) {
+                enabledInput.checked = !!auto.enabled;
+            }
+
+            if (auto.enabled) {
+                if (auto.next_run) {
+                    label.textContent = 'Next auto run: ' + new Date(auto.next_run).toLocaleString();
+                } else {
+                    label.textContent = 'Next auto run: scheduling...';
+                }
+            } else {
+                label.textContent = 'Auto refresh is disabled';
             }
         }
         
@@ -1305,11 +1807,22 @@ ADMIN_TEMPLATE = """
 # ==================== Main ====================
 if __name__ == "__main__":
     log("FruitDeepLinks server starting...", "INFO")
-    
+
     port = int(os.getenv("PORT", 6655))
     host = os.getenv("HOST", "0.0.0.0")
-    
+
     log(f"Server running on http://{host}:{port}", "INFO")
     log(f"Admin dashboard: http://{host}:{port}/", "INFO")
-    
-    app.run(host=host, port=port, debug=False, threaded=True)
+
+    # Start APScheduler-based auto-refresh if available
+    start_scheduler_if_available()
+
+    try:
+        app.run(host=host, port=port, debug=False, threaded=True)
+    finally:
+        if scheduler:
+            try:
+                scheduler.shutdown(wait=False)
+            except Exception:
+                pass
+

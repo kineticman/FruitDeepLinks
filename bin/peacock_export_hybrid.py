@@ -224,6 +224,12 @@ def build_direct_xmltv(conn: sqlite3.Connection, xml_path: str, hours_window: in
     tv.set("generator-info-name", "FruitDeepLinks - Direct")
     tv.set("generator-info-url", "https://github.com/yourusername/FruitDeepLinks")
 
+    # Cursor for playables lookup (used when deriving provider/deeplink)
+    cur = conn.cursor()
+
+    # Cursor for playables lookup (used when deriving provider/deeplink)
+    cur = conn.cursor()
+
     for idx, event in enumerate(events, start=1):
         chan_id = stable_channel_id(event, epg_prefix)
         title = event.get("title") or f"Sports Event {idx}"
@@ -250,6 +256,27 @@ def build_direct_xmltv(conn: sqlite3.Connection, xml_path: str, hours_window: in
                 )
         
         # Extract actual provider from the deeplink URL
+        if not deeplink_url:
+            # Web / Apple TV fallback - use playable_url from playables table (same as M3U)
+            try:
+                cur.execute(
+                    """
+                    SELECT playable_url
+                    FROM playables
+                    WHERE event_id = ? AND playable_url IS NOT NULL
+                    ORDER BY priority ASC
+                    LIMIT 1
+                    """,
+                    (event_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    deeplink_url = row[0]
+            except Exception:
+                # If playables table doesn't exist yet or query fails,
+                # just skip this fallback and leave deeplink_url as-is.
+                pass
+
         provider = "Sports"  # Default fallback
         if deeplink_url:
             try:
