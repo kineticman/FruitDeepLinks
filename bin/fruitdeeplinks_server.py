@@ -26,6 +26,7 @@ from flask import (
     stream_with_context,
 )
 from flask_cors import CORS
+import urllib.parse
 
 # APScheduler (for auto-refresh)
 try:
@@ -475,6 +476,270 @@ def get_db_stats():
         return {"error": str(e)}
 
 
+# Import filter integration helpers (shared with CLI exporters)
+try:
+    from filter_integration import (
+        load_user_preferences,
+        should_include_event,
+        get_best_deeplink_for_event,
+        get_fallback_deeplink,
+    )
+    FILTERING_AVAILABLE = True
+except ImportError:
+    FILTERING_AVAILABLE = False
+
+    def load_user_preferences(conn):
+        return {"enabled_services": [], "disabled_sports": [], "disabled_leagues": []}
+
+    def should_include_event(event, prefs):
+        return True
+
+    def get_best_deeplink_for_event(conn, event_id, enabled_services):
+        return None
+
+    def get_fallback_deeplink(event):
+        return None
+
+
+def get_event_link_columns(conn):
+    """Inspect the events table and determine UID and deeplink columns.
+
+    Returns (uid_col, primary_deeplink_col, full_deeplink_col).
+    Some columns may be None if not present.
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute("PRAGMA table_info(events)")
+        rows = cur.fetchall()
+    except Exception:
+        return "id", None, None
+
+    column_names = {row[1] for row in rows}
+
+    # Event UID column
+    for candidate in ("event_uid", "event_id", "uid", "pvid"):
+        if candidate in column_names:
+            uid_col = candidate
+            break
+    else:
+        uid_col = "id"  # Fallback to primary key
+
+    # Primary deeplink column
+    primary_deeplink_col = None
+    if "deeplink_url" in column_names:
+        primary_deeplink_col = "deeplink_url"
+    elif "deeplink" in column_names:
+        primary_deeplink_col = "deeplink"
+    elif "deeplink_url_full" in column_names:
+        primary_deeplink_col = "deeplink_url_full"
+
+    # Full deeplink column (if present)
+    full_deeplink_col = "deeplink_url_full" if "deeplink_url_full" in column_names else None
+
+    return uid_col, primary_deeplink_col, full_deeplink_col
+
+
+def get_event_link_info(conn, event_id, uid_col, primary_deeplink_col, full_deeplink_col):
+    """Fetch UID + deeplink info for a given event_id.
+
+    Returns dict with:
+      {
+        "event_uid": str | None,
+        "deeplink_url": str | None,
+        "deeplink_url_full": str | None,
+      }
+
+    Resolution priority (mirrors direct.m3u exporter):
+      1. Explicit deeplink columns in `events` table, if present and non-null.
+      2. `filter_integration.get_best_deeplink_for_event` (respects enabled services).
+      3. `filter_integration.get_fallback_deeplink` using raw_attributes_json.
+      4. Peacock web deeplink (for non-Apple events with pvid).
+      5. Apple TV fallback using `playables.playable_url`.
+      6. Final fallback: `apple_tv_url` from events.raw_attributes_json.
+    """
+    cur = conn.cursor()
+
+    # Inspect schema for columns we care about
+    try:
+        cur.execute("PRAGMA table_info(events)")
+        schema_rows = cur.fetchall()
+        column_names = {row[1] for row in schema_rows}
+    except Exception:
+        column_names = set()
+
+    columns = []
+    # UID column (if present)
+    if uid_col and uid_col in column_names:
+        columns.append(uid_col)
+    # Primary key id
+    if "id" in column_names and "id" not in columns:
+        columns.append("id")
+    # Optional helpers
+    if "pvid" in column_names:
+        columns.append("pvid")
+    if "channel_name" in column_names:
+        columns.append("channel_name")
+    if "raw_attributes_json" in column_names:
+        columns.append("raw_attributes_json")
+    # Explicit deeplink columns, if they exist
+    if primary_deeplink_col and primary_deeplink_col in column_names and primary_deeplink_col not in columns:
+        columns.append(primary_deeplink_col)
+    if full_deeplink_col and full_deeplink_col in column_names and full_deeplink_col not in columns:
+        columns.append(full_deeplink_col)
+
+    if not columns:
+        return {"event_uid": None, "deeplink_url": None, "deeplink_url_full": None}
+
+    col_expr = ", ".join(columns)
+    try:
+        cur.execute(f"SELECT {col_expr} FROM events WHERE id = ?", (event_id,))
+        row = cur.fetchone()
+    except Exception:
+        return {"event_uid": None, "deeplink_url": None, "deeplink_url_full": None}
+
+    if not row:
+        return {"event_uid": None, "deeplink_url": None, "deeplink_url_full": None}
+
+    data = dict(zip(columns, row))
+
+    event_uid = data.get(uid_col) if uid_col in data else None
+    pvid = data.get("pvid")
+    channel_name = data.get("channel_name")
+    raw_json = data.get("raw_attributes_json")
+
+    # explicit deeplink columns (if any)
+    primary_value = data.get(primary_deeplink_col) if primary_deeplink_col else None
+    full_value = data.get(full_deeplink_col) if full_deeplink_col else None
+
+    # Build a minimal event dict for filter_integration fallback
+    event_row = {
+        "id": event_id,
+        "pvid": pvid,
+        "channel_name": channel_name,
+        "raw_attributes_json": raw_json,
+    }
+
+    # Start with explicit columns
+    deeplink_url = primary_value or full_value
+
+    # 2. filter_integration best deeplink / fallback
+    if not deeplink_url and FILTERING_AVAILABLE:
+        try:
+            prefs = load_user_preferences(conn)
+        except Exception:
+            prefs = {"enabled_services": []}
+        enabled_services = prefs.get("enabled_services", [])
+
+        # Try best deeplink for event
+        try:
+            candidate = get_best_deeplink_for_event(conn, event_id, enabled_services)
+        except Exception:
+            candidate = None
+        if candidate:
+            deeplink_url = candidate
+        else:
+            # fallback based on raw_attributes_json
+            try:
+                fallback = get_fallback_deeplink(event_row)
+            except Exception:
+                fallback = None
+            if fallback:
+                deeplink_url = fallback
+
+    # 3. Peacock web fallback (for non-Apple events with pvid)
+    if not deeplink_url and pvid and not str(event_id).startswith("appletv-"):
+        try:
+            payload = {"pvid": pvid, "type": "PROGRAMME", "action": "PLAY"}
+            deeplink_url = "https://www.peacocktv.com/deeplink?deeplinkData=" + urllib.parse.quote(
+                json.dumps(payload, separators=(",", ":"), ensure_ascii=False), safe=""
+            )
+        except Exception:
+            pass
+
+    # 4. Apple TV: playable_url from playables table
+    if not deeplink_url:
+        try:
+            cur.execute(
+                """
+                SELECT playable_url
+                FROM playables
+                WHERE event_id = ? AND playable_url IS NOT NULL
+                ORDER BY priority ASC
+                LIMIT 1
+                """,
+                (event_id,),
+            )
+            prow = cur.fetchone()
+            if prow and prow[0]:
+                deeplink_url = prow[0]
+        except Exception:
+            pass
+
+    # 5. Final fallback: apple_tv_url from raw_attributes_json (if present)
+    apple_url = None
+    if raw_json:
+        try:
+            raw = json.loads(raw_json)
+            apple_url = raw.get("apple_tv_url")
+        except Exception:
+            apple_url = None
+
+    if not deeplink_url and apple_url:
+        deeplink_url = apple_url
+
+    # deeplink_url_full: prefer explicit full_value, then deeplink_url, then apple_url
+    deeplink_full = full_value or deeplink_url or apple_url
+
+    return {
+        "event_uid": event_uid,
+        "deeplink_url": deeplink_url,
+        "deeplink_url_full": deeplink_full,
+    }
+
+
+def get_current_events_by_lane(conn, at_ts=None):
+    """Return dict of lane_id -> minimal current event row at the given time.
+
+    Uses lane_events + events to find the event where:
+      datetime(start_utc) <= datetime(at_ts) < datetime(end_utc)
+    """
+    from datetime import datetime as _dt
+
+    if at_ts is None:
+        at_ts = _dt.utcnow().isoformat(timespec="seconds")
+
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                le.lane_id,
+                le.event_id,
+                le.start_utc,
+                le.end_utc,
+                le.is_placeholder,
+                e.title,
+                e.channel_name,
+                e.synopsis
+            FROM lane_events le
+            LEFT JOIN events e ON le.event_id = e.id
+            WHERE datetime(le.start_utc) <= datetime(?)
+              AND datetime(le.end_utc) > datetime(?)
+            ORDER BY le.lane_id, le.start_utc
+            """,
+            (at_ts, at_ts),
+        )
+    except Exception:
+        return {}
+
+    current_by_lane = {}
+    for row in cur.fetchall():
+        lane_id = row["lane_id"]
+        if lane_id not in current_by_lane:
+            current_by_lane[lane_id] = dict(row)
+    return current_by_lane
+
 # ==================== Auto-refresh + Refresh Runner ====================
 def schedule_auto_refresh_from_settings():
     """Create/refresh the APScheduler job based on current settings"""
@@ -616,6 +881,12 @@ def index():
     """Admin dashboard"""
     return render_template_string(ADMIN_TEMPLATE)
 
+
+
+@app.route("/api")
+def api_helper():
+    """Simple HTML API helper page"""
+    return render_template_string(API_HELPER_TEMPLATE)
 
 @app.route("/api/status")
 def api_status():
@@ -931,6 +1202,221 @@ def lane_stream(lane_id):
         501,
     )
 
+
+@app.route("/api/lanes")
+def api_lanes():
+    """List all lanes with basic counts and current event (if any)."""
+    if not DB_PATH.exists():
+        return jsonify({"error": "Database not found"}), 500
+
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        # Event counts per lane (future + ongoing events)
+        cur.execute(
+            """
+            SELECT le.lane_id, COUNT(*) AS event_count
+            FROM lane_events le
+            JOIN events e ON le.event_id = e.id
+            WHERE datetime(e.end_utc) >= datetime('now')
+            GROUP BY le.lane_id
+            ORDER BY le.lane_id
+            """
+        )
+        lane_rows = cur.fetchall()
+
+        # Current events snapshot
+        current_by_lane = get_current_events_by_lane(conn)
+
+        lanes = []
+        for row in lane_rows:
+            lane_id = row["lane_id"]
+            lane_info = {
+                "lane_id": lane_id,
+                "event_count": row["event_count"],
+                "current": current_by_lane.get(lane_id),
+            }
+            lanes.append(lane_info)
+
+        conn.close()
+        return jsonify(lanes)
+
+    except Exception as e:
+        log(f"/api/lanes error: {e}", "ERROR")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/whatson/<int:lane_id>")
+def whatson_lane(lane_id):
+    """Get what's currently playing on a specific lane.
+
+    JSON (default):
+      GET /whatson/1
+      GET /whatson/1?include=deeplink
+      GET /whatson/1?deeplink=1
+      GET /whatson/1?dynamic=1
+
+    Plain text deeplink:
+      GET /whatson/1?format=txt&param=deeplink_url
+    """
+    if not DB_PATH.exists():
+        if request.args.get("format") == "txt":
+            return Response("", mimetype="text/plain")
+        return jsonify({"ok": False, "error": "Database not found"}), 500
+
+    from datetime import datetime as _dt
+
+    at_ts = request.args.get("at")
+    if not at_ts:
+        at_ts = _dt.utcnow().isoformat(timespec="seconds")
+
+    want_deeplink = False
+    include_param = request.args.get("include")
+    if include_param == "deeplink":
+        want_deeplink = True
+    if request.args.get("deeplink") in ("1", "true", "yes"):
+        want_deeplink = True
+    if request.args.get("dynamic") in ("1", "true", "yes"):
+        want_deeplink = True
+
+    fmt = (request.args.get("format") or "json").lower()
+    param = request.args.get("param") or "event_uid"
+
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        # Find the single current event for this lane at the given time
+        cur.execute(
+            """
+            SELECT
+                le.event_id,
+                le.start_utc,
+                le.end_utc,
+                le.is_placeholder,
+                e.title,
+                e.channel_name,
+                e.synopsis
+            FROM lane_events le
+            LEFT JOIN events e ON le.event_id = e.id
+            WHERE le.lane_id = ?
+              AND datetime(le.start_utc) <= datetime(?)
+              AND datetime(le.end_utc) > datetime(?)
+            ORDER BY le.start_utc DESC
+            LIMIT 1
+            """,
+            (lane_id, at_ts, at_ts),
+        )
+        row = cur.fetchone()
+
+        uid_col, primary_col, full_col = get_event_link_columns(conn)
+
+        event_uid = None
+        deeplink_url = None
+        deeplink_url_full = None
+
+        if row:
+            event_id = row["event_id"]
+            link_info = get_event_link_info(conn, event_id, uid_col, primary_col, full_col)
+            event_uid = link_info.get("event_uid")
+            deeplink_url = link_info.get("deeplink_url")
+            deeplink_url_full = link_info.get("deeplink_url_full")
+
+        conn.close()
+
+        # Plain text mode
+        if fmt == "txt":
+            value = ""
+            if param == "event_uid":
+                value = event_uid or ""
+            elif param == "deeplink_url_full":
+                value = (deeplink_url_full or deeplink_url or "") or ""
+            else:  # default "deeplink_url"
+                value = (deeplink_url or deeplink_url_full or "") or ""
+
+            return Response(value, mimetype="text/plain")
+
+        # JSON mode
+        payload = {
+            "ok": True,
+            "lane": lane_id,
+            "event_uid": event_uid,
+            "at": at_ts,
+        }
+
+        if want_deeplink:
+            payload["deeplink_url"] = deeplink_url
+            payload["deeplink_url_full"] = deeplink_url_full
+
+        return jsonify(payload)
+
+    except Exception as e:
+        log(f"/whatson/{lane_id} error: {e}", "ERROR")
+        if fmt == "txt":
+            return Response("", mimetype="text/plain")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/whatson/all")
+def whatson_all():
+    """Get status across all lanes at once (JSON only)."""
+    if not DB_PATH.exists():
+        return jsonify({"ok": False, "error": "Database not found"}), 500
+
+    from datetime import datetime as _dt
+
+    at_ts = request.args.get("at")
+    if not at_ts:
+        at_ts = _dt.utcnow().isoformat(timespec="seconds")
+
+    want_deeplink = False
+    include_param = request.args.get("include")
+    if include_param == "deeplink":
+        want_deeplink = True
+    if request.args.get("deeplink") in ("1", "true", "yes"):
+        want_deeplink = True
+    if request.args.get("dynamic") in ("1", "true", "yes"):
+        want_deeplink = True
+
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.row_factory = sqlite3.Row
+
+        current_by_lane = get_current_events_by_lane(conn, at_ts=at_ts)
+
+        uid_col, primary_col, full_col = get_event_link_columns(conn)
+
+        items = []
+        for lane_id, row in sorted(current_by_lane.items(), key=lambda kv: kv[0]):
+            event_id = row.get("event_id")
+            event_uid = None
+            deeplink_url = None
+            deeplink_url_full = None
+            if event_id is not None:
+                link_info = get_event_link_info(conn, event_id, uid_col, primary_col, full_col)
+                event_uid = link_info.get("event_uid")
+                deeplink_url = link_info.get("deeplink_url")
+                deeplink_url_full = link_info.get("deeplink_url_full")
+
+            item = {
+                "lane": lane_id,
+                "event_uid": event_uid,
+            }
+            if want_deeplink:
+                item["deeplink_url"] = deeplink_url
+                item["deeplink_url_full"] = deeplink_url_full
+            items.append(item)
+
+        conn.close()
+
+        return jsonify({"ok": True, "at": at_ts, "items": items})
+
+    except Exception as e:
+        log(f"/whatson/all error: {e}", "ERROR")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/api/lanes/<int:lane_id>/schedule")
 def lane_schedule(lane_id):
@@ -1543,6 +2029,7 @@ ADMIN_TEMPLATE = """
         
         <div style="margin-bottom: 20px;">
             <a href="/filters" style="display: inline-block; padding: 10px 20px; background: #3b82f6; color: white; text-decoration: none; border-radius: 6px; font-weight: 600;">⚙️ Filters & Settings</a>
+            <a href="/api" style="display: inline-block; padding: 10px 20px; background: #0f172a; border: 1px solid #1f2937; border-radius: 6px; font-weight: 600; margin-left: 8px;">📚 API Helper</a>
         </div>
         
         <div class="grid">
@@ -1803,6 +2290,134 @@ ADMIN_TEMPLATE = """
 </body>
 </html>
 """
+API_HELPER_TEMPLATE = """<!DOCTYPE html>
+<html>
+<head>
+    <title>FruitDeepLinks API Helper</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #020617;
+            color: #e2e8f0;
+            padding: 20px;
+        }
+        a { color: #38bdf8; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 { color: #60a5fa; margin-bottom: 4px; }
+        .subtitle { color: #94a3b8; margin-bottom: 20px; }
+        .card {
+            background: #020617;
+            border: 1px solid #1f2937;
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin-bottom: 16px;
+        }
+        .card h2 { font-size: 18px; margin-bottom: 8px; color: #f97316; }
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+            font-size: 13px;
+            background: #020617;
+            padding: 2px 4px;
+            border-radius: 4px;
+        }
+        pre {
+            background: #020617;
+            padding: 8px 10px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 13px;
+            border: 1px solid #1f2937;
+        }
+        .tag {
+            display: inline-block;
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-right: 6px;
+            margin-bottom: 4px;
+            background: #111827;
+            border: 1px solid #1f2937;
+            color: #a5b4fc;
+        }
+        .small { font-size: 13px; color: #9ca3af; }
+        .back-link { margin-bottom: 16px; display: inline-block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">⬅ Back to Admin Dashboard</a>
+        <h1>🍎 FruitDeepLinks API Helper</h1>
+        <p class="subtitle">Quick reference for common HTTP endpoints.</p>
+
+        <div class="card">
+            <h2>Health &amp; Status</h2>
+            <div class="small">
+                <span class="tag">GET</span><code>/health</code> &mdash; basic health probe<br>
+                <span class="tag">GET</span><code>/api/status</code> &mdash; detailed DB + output status
+            </div>
+            <pre>curl "$BASE/health"
+curl "$BASE/api/status"</pre>
+        </div>
+
+        <div class="card">
+            <h2>XMLTV &amp; M3U</h2>
+            <div class="small">
+                <span class="tag">GET</span><code>/xmltv/direct</code><br>
+                <span class="tag">GET</span><code>/m3u/direct</code><br>
+                <span class="tag">GET</span><code>/xmltv/lanes</code><br>
+                <span class="tag">GET</span><code>/m3u/lanes</code>
+            </div>
+            <pre>curl -o direct.xml "$BASE/xmltv/direct"
+curl -o direct.m3u "$BASE/m3u/direct"</pre>
+        </div>
+
+        <div class="card">
+            <h2>Lane What&apos;s On</h2>
+            <div class="small">
+                <span class="tag">GET</span><code>/whatson/&lt;lane&gt;</code> (JSON)<br>
+                <span class="tag">GET</span><code>/whatson/&lt;lane&gt;?include=deeplink</code><br>
+                <span class="tag">GET</span><code>/whatson/&lt;lane&gt;?format=txt&amp;param=deeplink_url</code>
+            </div>
+            <pre># JSON: lane 1, include deeplink fields
+curl "$BASE/whatson/1?include=deeplink"
+
+# Plain text: best deeplink for lane 1
+curl "$BASE/whatson/1?format=txt&amp;param=deeplink_url"</pre>
+        </div>
+
+        <div class="card">
+            <h2>Filters</h2>
+            <div class="small">
+                <span class="tag">GET</span><code>/api/filters</code> &mdash; available values + preferences<br>
+                <span class="tag">GET</span><code>/api/filters/preferences</code><br>
+                <span class="tag">POST</span><code>/api/filters/preferences</code>
+            </div>
+            <pre># Inspect current preferences
+curl "$BASE/api/filters/preferences"
+
+# Update enabled services (example)
+curl -X POST "$BASE/api/filters/preferences" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled_services":["sportscenter","peacock_web"]}'</pre>
+        </div>
+
+        <div class="card">
+            <h2>Logs</h2>
+            <div class="small">
+                <span class="tag">GET</span><code>/api/logs?count=100</code><br>
+                <span class="tag">GET</span><code>/api/logs/stream</code> (SSE)
+            </div>
+            <pre>curl "$BASE/api/logs?count=100"</pre>
+        </div>
+
+        <p class="small">Tip: set <code>BASE=http://HOST:6655</code> in your shell to copy/paste these examples.</p>
+    </div>
+</body>
+</html>"""
+
 
 # ==================== Main ====================
 if __name__ == "__main__":
@@ -1825,4 +2440,3 @@ if __name__ == "__main__":
                 scheduler.shutdown(wait=False)
             except Exception:
                 pass
-
