@@ -79,16 +79,16 @@ def main():
 
     # Step 3: Import Apple TV events (reads multi_scraped.json directly)
     if not run_step(3, 6, "Importing Apple TV events to database", [
-        "python3", "appletv_to_peacock.py",
+        "python3", "fruit_import_appletv.py",
         "--apple-json", str(OUT_DIR / "multi_scraped.json"),
-        "--peacock-db", str(DB_PATH),
+        "--fruit-db", str(DB_PATH),
     ]):
         return 1
 
     # Step 4: Build virtual lanes
-    lanes = os.getenv("PEACOCK_LANES", "40")
+    lanes = os.getenv("FRUIT_LANES", os.getenv("PEACOCK_LANES", "40"))
     if not run_step(4, 6, f"Building {lanes} virtual lanes", [
-        "python3", "peacock_build_lanes.py",
+        "python3", "fruit_build_lanes.py",
         "--db", str(DB_PATH),
         "--lanes", lanes,
     ]):
@@ -96,7 +96,7 @@ def main():
 
     # Step 5: Export direct channels
     if not run_step(5, 6, "Exporting Direct channels", [
-        "python3", "peacock_export_hybrid.py",
+        "python3", "fruit_export_hybrid.py",
         "--db", str(DB_PATH),
     ]):
         return 1
@@ -104,7 +104,7 @@ def main():
     # Step 6: Export virtual lanes
     server_url = os.getenv("SERVER_URL", "http://192.168.86.80:6655")
     if not run_step(6, 6, "Exporting Virtual Lanes", [
-        "python3", "peacock_export_lanes.py",
+        "python3", "fruit_export_lanes.py",
         "--db", str(DB_PATH),
         "--server-url", server_url,
     ]):

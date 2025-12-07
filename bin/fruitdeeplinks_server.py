@@ -63,7 +63,7 @@ except ImportError:
     print("Warning: logical_service_mapper not available, using basic provider grouping")
 
 # Configuration
-DB_PATH = Path(os.getenv("PEACOCK_DB_PATH", "/app/data/fruit_events.db"))
+DB_PATH = Path(os.getenv("FRUIT_DB_PATH") or os.getenv("PEACOCK_DB_PATH") or "/app/data/fruit_events.db")
 OUT_DIR = Path(os.getenv("OUT_DIR", "/app/out"))
 BIN_DIR = Path(os.getenv("BIN_DIR", "/app/bin"))
 LOG_DIR = Path(os.getenv("LOG_DIR", "/app/logs"))
@@ -1042,33 +1042,33 @@ def api_apply_filters():
             # Only run export scripts, skip scraping/importing
             scripts = [
                 (
-                    "peacock_build_lanes.py",
+                    "fruit_build_lanes.py",
                     [
                         "python3",
                         "-u",
-                        str(BIN_DIR / "peacock_build_lanes.py"),
+                        str(BIN_DIR / "fruit_build_lanes.py"),
                         "--db",
                         str(DB_PATH),
                         "--lanes",
-                        os.getenv("PEACOCK_LANES", "50"),
+                        os.getenv("FRUIT_LANES", os.getenv("PEACOCK_LANES", "50")),
                     ],
                 ),
                 (
-                    "peacock_export_hybrid.py",
+                    "fruit_export_hybrid.py",
                     [
                         "python3",
                         "-u",
-                        str(BIN_DIR / "peacock_export_hybrid.py"),
+                        str(BIN_DIR / "fruit_export_hybrid.py"),
                         "--db",
                         str(DB_PATH),
                     ],
                 ),
                 (
-                    "peacock_export_lanes.py",
+                    "fruit_export_lanes.py",
                     [
                         "python3",
                         "-u",
-                        str(BIN_DIR / "peacock_export_lanes.py"),
+                        str(BIN_DIR / "fruit_export_lanes.py"),
                         "--db",
                         str(DB_PATH),
                         "--server-url",
