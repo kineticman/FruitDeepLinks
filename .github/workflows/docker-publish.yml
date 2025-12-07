@@ -10,7 +10,8 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: peacockdeeplinks
+  # Name of the image in GHCR
+  IMAGE_NAME: fruitdeeplinks
 
 jobs:
   build-and-push:
@@ -20,17 +21,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Log in to GHCR using your PAT stored as GHCR_PAT
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_PAT }}
 
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
+          # Resulting image: ghcr.io/<owner>/fruitdeeplinks:<tag>
           images: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest        # always push :latest
@@ -45,3 +48,4 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
