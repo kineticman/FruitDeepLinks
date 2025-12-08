@@ -51,46 +51,164 @@ def get_provider_from_channel(channel_name: str) -> str:
     else:
         return channel_name
 
-def get_event_image_url(conn: sqlite3.Connection, event_id: str) -> Optional[str]:
-    """Get best image URL for an event"""
+# -------------------- Image helper (matches fruit_export_hybrid) --------------------
+def get_event_image_url(conn: sqlite3.Connection, event: Dict) -> Optional[str]:
+    """
+    Resolve a best-guess image URL for a lane event.
+
+    Priority:
+      1. event_images table (if populated)
+      2. Root Apple images, in this order:
+         - shelfItemImagePost   (=> gen/1280x720Sports.TVAPoM02.jpg?... style)
+         - shelfItemImage
+         - shelfItemImageLive
+         - shelfImageLogo
+         - hero / scene169 / landscape / posterArt
+      3. Competitor team logos (teamLogo*, scoreLogo, eventLogo) – SKIP masterArtLogo
+      4. competitor.logo_url
+      5. Playable-level images
+
+    All templated URLs ({w}x{h}{c}.{f}) are normalized to 1280x720, jpg.
+    """
+
+    def _normalize_url(url: Optional[str]) -> Optional[str]:
+        if not url:
+            return None
+        # Normalize all Apple/ESPN templates to 1280x720 jpg
+        replacements = {
+            "{w}": "1280",
+            "{h}": "720",
+            "{f}": "jpg",
+            "{c}": "",          # strips the 'bb' / other format tokens
+        }
+        for token, repl in replacements.items():
+            url = url.replace(token, repl)
+        return url
+
+    def _extract(val) -> Optional[str]:
+        if isinstance(val, str):
+            u = val
+        elif isinstance(val, dict):
+            u = val.get("url") or val.get("href")
+        else:
+            return None
+        return _normalize_url(u)
+
+    cur = conn.cursor()
+
+    # 1) event_images table (legacy / ESPN pipelines)
+    event_id = event.get("id") or event.get("event_id")
     if event_id:
-        cur = conn.cursor()
-        # Try event_images table first
-        for img_type in ["landscape", "scene169", "titleArt169"]:
-            cur.execute("SELECT url FROM event_images WHERE event_id=? AND img_type=? LIMIT 1",
-                        (event_id, img_type))
+        for img_type in ["landscape", "scene169", "titleArt169", "scene34"]:
+            cur.execute(
+                "SELECT url FROM event_images WHERE event_id=? AND img_type=? LIMIT 1",
+                (event_id, img_type),
+            )
             row = cur.fetchone()
-            if row:
-                return row["url"]
-        
-        # Try raw_attributes_json
-        cur.execute("SELECT raw_attributes_json FROM events WHERE id=? LIMIT 1", (event_id,))
+            if row and row["url"]:
+                url = _normalize_url(row["url"])
+                if url:
+                    return url
+
+        cur.execute(
+            "SELECT url FROM event_images WHERE event_id=? LIMIT 1",
+            (event_id,),
+        )
         row = cur.fetchone()
-        if row and row["raw_attributes_json"]:
-            try:
-                attrs = json.loads(row["raw_attributes_json"])
-                # Check competitors for logos
-                if "competitors" in attrs and isinstance(attrs["competitors"], list):
-                    for comp in attrs["competitors"]:
-                        logo_url = comp.get("logo_url")
-                        if logo_url:
-                            return (logo_url
-                                    .replace("{w}", "400")
-                                    .replace("{h}", "400")
-                                    .replace("{f}", "png"))
-                # Check images
-                if "images" in attrs and attrs["images"]:
-                    images = attrs["images"]
-                    for key in ["showTile2x1", "showTile16x9", "showTile2x3"]:
-                        if key in images and images[key]:
-                            return images[key]
-                # Check playables
-                if "playables" in attrs and isinstance(attrs["playables"], list):
-                    for playable in attrs["playables"]:
-                        if playable.get("image"):
-                            return playable["image"]
-            except Exception:
-                pass
+        if row and row["url"]:
+            url = _normalize_url(row["url"])
+            if url:
+                return url
+
+    # 2) raw_attributes_json (Apple / ESPN blobs)
+    raw_json = event.get("raw_attributes_json")
+    if not raw_json:
+        return None
+
+    try:
+        attrs = json.loads(raw_json)
+    except Exception:
+        return None
+
+    # 2a) Root Apple images (this is where your desired schema lives)
+    images = attrs.get("images") or {}
+    if isinstance(images, dict):
+        # IMPORTANT: prefer shelfItemImagePost first
+        root_pref = [
+            "shelfItemImagePost",   # -> gen/1280x720Sports.TVAPoM02.jpg?... (your example)
+            "shelfItemImage",
+            "shelfItemImageLive",
+            "shelfImageLogo",
+            # Generic/ESPN-ish fallbacks
+            "hero",
+            "scene169",
+            "landscape",
+            "posterArt",
+        ]
+        for key in root_pref:
+            if key in images:
+                url = _extract(images[key])
+                if url:
+                    return url
+
+        # As a last resort, any root image
+        for key, val in images.items():
+            url = _extract(val)
+            if url:
+                return url
+
+    # 3) Competitor team logos – skip masterArtLogo
+    competitors = attrs.get("competitors") or []
+    if isinstance(competitors, list):
+        preferred_keys = ["teamLogoDark", "teamLogoLight", "teamLogo", "scoreLogo", "eventLogo"]
+
+        # Preferred keys
+        for comp in competitors:
+            if not isinstance(comp, dict):
+                continue
+            imgs = comp.get("images") or {}
+            if not isinstance(imgs, dict):
+                continue
+            for key in preferred_keys:
+                if key in imgs:
+                    url = _extract(imgs[key])
+                    if url:
+                        return url
+
+        # Any other competitor image EXCEPT masterArtLogo
+        for comp in competitors:
+            if not isinstance(comp, dict):
+                continue
+            imgs = comp.get("images") or {}
+            if not isinstance(imgs, dict):
+                continue
+            for key, val in imgs.items():
+                if key == "masterArtLogo":
+                    continue
+                url = _extract(val)
+                if url:
+                    return url
+
+        # Fallback competitor.logo_url
+        for comp in competitors:
+            if not isinstance(comp, dict):
+                continue
+            url = _normalize_url(comp.get("logo_url"))
+            if url:
+                return url
+
+    # 4) Playable-level images
+    playables = attrs.get("playables") or []
+    if isinstance(playables, list):
+        for playable in playables:
+            if not isinstance(playable, dict):
+                continue
+            for key in ("image", "cardImage", "imageUrl", "image_url"):
+                if key in playable:
+                    url = _extract(playable[key])
+                    if url:
+                        return url
+
     return None
 
 # -------------------- Lanes XMLTV --------------------
@@ -108,14 +226,20 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
     
     print(f"Lanes XMLTV: {len(lanes)} virtual channels")
     
-    # Get all lane events
+    # Get all lane events (include raw_attributes_json so we can use Apple images)
     cur.execute("""
-        SELECT le.*, e.title, e.synopsis, e.channel_name, e.genres_json, e.pvid
-        FROM lane_events le
-        LEFT JOIN events e ON le.event_id = e.id
-        ORDER BY le.lane_id, datetime(le.start_utc)
+        SELECT le.*,
+               e.title,
+               e.synopsis,
+               e.channel_name,
+               e.genres_json,
+               e.pvid,
+               e.raw_attributes_json
+          FROM lane_events le
+          LEFT JOIN events e ON le.event_id = e.id
+         ORDER BY le.lane_id, datetime(le.start_utc)
     """)
-    lane_events = {}
+    lane_events: Dict[int, List[Dict]] = {}
     for row in cur.fetchall():
         lane_id = row["lane_id"]
         if lane_id not in lane_events:
@@ -155,10 +279,13 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
             if end_utc <= start_utc:
                 end_utc = start_utc + timedelta(hours=1)
             
-            prog = ET.SubElement(tv, "programme",
-                                channel=chan_id,
-                                start=xmltv_time(start_utc),
-                                stop=xmltv_time(end_utc))
+            prog = ET.SubElement(
+                tv,
+                "programme",
+                channel=chan_id,
+                start=xmltv_time(start_utc),
+                stop=xmltv_time(end_utc),
+            )
             
             # Title
             title = event.get("title") or "Sports Event"
@@ -190,12 +317,10 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
                 except Exception:
                     pass
             
-            # Image
-            event_id = event.get("event_id")
-            if event_id:
-                img_url = get_event_image_url(conn, event_id)
-                if img_url:
-                    ET.SubElement(prog, "icon", src=img_url)
+            # Image (uses same Apple shelf logic as direct exporter)
+            img_url = get_event_image_url(conn, event)
+            if img_url:
+                ET.SubElement(prog, "icon", src=img_url)
             
             total_programmes += 1
     
@@ -319,3 +444,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
