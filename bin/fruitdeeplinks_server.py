@@ -1148,6 +1148,95 @@ def api_filters_preferences():
             )
 
 
+
+
+# ==================== Provider Lanes API ====================
+@app.route("/api/provider_lanes", methods=["GET", "POST"])
+def api_provider_lanes():
+    """
+    Get or update per-provider ADB lane configuration.
+
+    GET: returns list of providers with ADB flags.
+    POST: expects JSON array or {"providers": [...]}.
+    """
+    conn = get_db_connection()
+    if conn is None:
+        return (
+            jsonify({"status": "error", "message": "Database not found"}),
+            500,
+        )
+
+    conn.row_factory = sqlite3.Row
+    try:
+        if request.method == "GET":
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT provider_code, adb_enabled, adb_lane_count,
+                       created_at, updated_at
+                  FROM provider_lanes
+                 ORDER BY provider_code
+                """
+            )
+            rows = [dict(row) for row in cur.fetchall()]
+            return jsonify({"status": "success", "providers": rows})
+
+        # POST
+        payload = request.get_json(silent=True) or {}
+        providers = payload.get("providers")
+        if providers is None and isinstance(payload, list):
+            providers = payload
+
+        if not isinstance(providers, list):
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "Expected JSON list or {\"providers\": [...]} payload",
+                    }
+                ),
+                400,
+            )
+
+        updated = 0
+        cur = conn.cursor()
+        for item in providers:
+            if not isinstance(item, dict):
+                continue
+            code = (item.get("provider_code") or "").strip()
+            if not code:
+                continue
+
+            # Normalize values
+            enabled_raw = item.get("adb_enabled")
+            lane_raw = item.get("adb_lane_count", 0)
+
+            adb_enabled = 1 if enabled_raw in (1, True, "1", "true", "True") else 0
+            try:
+                adb_lane_count = int(lane_raw or 0)
+            except (TypeError, ValueError):
+                adb_lane_count = 0
+
+            cur.execute(
+                """
+                INSERT INTO provider_lanes (provider_code, adb_enabled, adb_lane_count, updated_at)
+                VALUES (?, ?, ?, datetime('now'))
+                ON CONFLICT(provider_code) DO UPDATE SET
+                    adb_enabled = excluded.adb_enabled,
+                    adb_lane_count = excluded.adb_lane_count,
+                    updated_at = datetime('now')
+                """,
+                (code, adb_enabled, adb_lane_count),
+            )
+            updated += 1
+
+        conn.commit()
+        log(f"Updated provider_lanes for {updated} provider(s)", "INFO")
+        return jsonify({"status": "success", "updated": updated})
+    finally:
+        conn.close()
+
+
 # ==================== File Downloads ====================
 @app.route("/out/<filename>")
 def serve_file(filename):
@@ -1484,6 +1573,8 @@ FILTERS_TEMPLATE = """
         .container { max-width: 1400px; margin: 0 auto; }
         h1 { font-size: 32px; margin-bottom: 10px; }
         .subtitle { color: #94a3b8; margin-bottom: 30px; }
+        .nav-bar { margin-bottom: 20px; }
+
         .nav {
             margin-bottom: 30px;
             display: flex;
@@ -1689,7 +1780,31 @@ FILTERS_TEMPLATE = """
             <div id="providers-loading" class="loading">Loading services...</div>
             <div id="providers-grid" class="filter-grid" style="display: none;"></div>
         </div>
-        
+
+        <div class="card">
+            <h2>📡 ADB Lane Providers</h2>
+            <p class="section-description">
+                Configure which providers should expose ADB lanes and how many lanes each gets.
+                This is used by ADBTuner integrations. Changes here do not affect your normal Channels DVR view.
+            </p>
+            <div id="provider-lanes-loading" class="loading">Loading provider lanes...</div>
+            <div id="provider-lanes-empty" class="loading" style="display: none;">No providers found. Run a refresh first.</div>
+            <div id="provider-lanes-table-wrapper" style="display: none; overflow-x: auto;">
+                <table class="provider-lanes-table">
+                    <thead>
+                        <tr>
+                            <th style="min-width: 140px;">Provider Code</th>
+                            <th style="min-width: 180px;">Name</th>
+                            <th style="min-width: 80px; text-align: right;">Events</th>
+                            <th style="min-width: 120px; text-align: center;">ADB Enabled</th>
+                            <th style="min-width: 120px;">ADB Lanes</th>
+                        </tr>
+                    </thead>
+                    <tbody id="provider-lanes-tbody"></tbody>
+                </table>
+            </div>
+        </div>
+
         <div class="card">
             <h2>🏀 Sports Filter</h2>
             <p class="section-description">
@@ -1728,31 +1843,150 @@ FILTERS_TEMPLATE = """
             sports: [],
             leagues: []
         };
+
+        let providerLanes = [];
+
         
         async function loadFilters() {
             try {
                 const res = await fetch('/api/filters');
                 const data = await res.json();
-                
+
                 availableFilters = data.filters;
                 currentPreferences = data.preferences;
-                
+
                 // If no enabled services, default to ALL enabled
                 if (currentPreferences.enabled_services.length === 0) {
                     currentPreferences.enabled_services = availableFilters.providers.map(p => p.scheme);
                 }
-                
+
                 renderProviders();
                 renderSports();
                 renderLeagues();
                 updateStats();
-                
+                loadProviderLanes();
+
             } catch (err) {
                 console.error('Failed to load filters:', err);
                 showStatus('Failed to load filters', 'error');
             }
         }
-        
+
+
+        async function loadProviderLanes() {
+   const loading = document.getElementById('provider-lanes-loading');
+            const empty = document.getElementById('provider-lanes-empty');
+            const wrapper = document.getElementById('provider-lanes-table-wrapper');
+            const tbody = document.getElementById('provider-lanes-tbody');
+
+            if (!loading || !wrapper || !tbody) {
+                return;
+            }
+
+            loading.style.display = 'block';
+            empty.style.display = 'none';
+            wrapper.style.display = 'none';
+            tbody.innerHTML = '';
+
+            try {
+                const res = await fetch('/api/provider_lanes');
+                if (!res.ok) {
+                    loading.textContent = 'Failed to load provider lanes.';
+                    return;
+                }
+                const data = await res.json();
+                providerLanes = Array.isArray(data.providers) ? data.providers : [];
+                renderProviderLanes();
+            } catch (err) {
+                console.error('Error loading provider lanes', err);
+                loading.textContent = 'Error loading provider lanes.';
+            }
+        }
+
+        function getProviderMeta(code) {
+            if (!availableFilters || !Array.isArray(availableFilters.providers)) {
+                return { name: code, count: 0 };
+            }
+            const match = availableFilters.providers.find(p => p.scheme === code);
+            if (!match) {
+                return { name: code, count: 0 };
+            }
+            return { name: match.name || code, count: match.count || 0 };
+        }
+
+        function renderProviderLanes() {
+            const loading = document.getElementById('provider-lanes-loading');
+            const empty = document.getElementById('provider-lanes-empty');
+            const wrapper = document.getElementById('provider-lanes-table-wrapper');
+            const tbody = document.getElementById('provider-lanes-tbody');
+
+            if (!loading || !wrapper || !tbody) {
+                return;
+            }
+
+            if (!providerLanes || providerLanes.length === 0) {
+                loading.style.display = 'none';
+                empty.style.display = 'block';
+                wrapper.style.display = 'none';
+                return;
+            }
+
+            tbody.innerHTML = providerLanes.map(row => {
+                const code = row.provider_code;
+                const enabled = row.adb_enabled ? 1 : 0;
+                const laneCount = row.adb_lane_count || 0;
+                const meta = getProviderMeta(code);
+                const safeCode = String(code).replace(/"/g, '&quot;');
+
+                return `
+                    <tr>
+                        <td><code>${safeCode}</code></td>
+                        <td>${meta.name}</td>
+                        <td style="text-align: right;">${meta.count}</td>
+                        <td style="text-align: center;">
+                            <input type="checkbox"
+                                   ${enabled ? 'checked' : ''}
+                                   onchange="toggleProviderLane('${safeCode}', this.checked)">
+                        </td>
+                        <td>
+                            <input type="number"
+                                   min="0"
+                                   value="${laneCount}"
+                                   onchange="updateProviderLaneCount('${safeCode}', this.value)">
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            loading.style.display = 'none';
+            empty.style.display = 'none';
+            wrapper.style.display = 'block';
+        }
+
+        function toggleProviderLane(code, isChecked) {
+            providerLanes = providerLanes.map(row => {
+                if (row.provider_code === code) {
+                    return Object.assign({}, row, {
+                        adb_enabled: isChecked ? 1 : 0
+                    });
+                }
+                return row;
+            });
+        }
+
+        function updateProviderLaneCount(code, value) {
+            const num = parseInt(value, 10);
+            const laneCount = Number.isFinite(num) && num >= 0 ? num : 0;
+            providerLanes = providerLanes.map(row => {
+                if (row.provider_code === code) {
+                    return Object.assign({}, row, {
+                        adb_lane_count: laneCount
+                    });
+                }
+                return row;
+            });
+        }
+
         function renderProviders() {
             const grid = document.getElementById('providers-grid');
             const loading = document.getElementById('providers-loading');
@@ -1866,22 +2100,41 @@ FILTERS_TEMPLATE = """
         
         async function savePreferences() {
             try {
-                const res = await fetch('/api/filters/preferences', {
+                // Save core filter preferences
+                const filtersRes = await fetch('/api/filters/preferences', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify(currentPreferences)
                 });
-                
-                if (res.ok) {
+
+                // Save provider lanes configuration
+                const lanesPayload = {
+                    providers: (providerLanes || []).map(row => ({
+                        provider_code: row.provider_code,
+                        adb_enabled: row.adb_enabled ? 1 : 0,
+                        adb_lane_count: row.adb_lane_count || 0
+                    }))
+                };
+
+                const lanesRes = await fetch('/api/provider_lanes', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(lanesPayload)
+                });
+
+                if (filtersRes.ok && lanesRes.ok) {
                     showStatus('✓ Settings saved! Click "Apply Filters Now" to regenerate channels.', 'success');
+                } else if (!filtersRes.ok) {
+                    showStatus('✗ Failed to save core filter settings', 'error');
                 } else {
-                    showStatus('✗ Failed to save settings', 'error');
+                    showStatus('✗ Failed to save ADB provider lane settings', 'error');
                 }
             } catch (err) {
+                console.error('Error saving settings', err);
                 showStatus('✗ Error saving settings', 'error');
             }
         }
-        
+
         async function applyFilters() {
             // Save first, then apply
             try {
@@ -2014,6 +2267,36 @@ ADMIN_TEMPLATE = """
         .status-running { color: #fbbf24; }
         .status-success { color: #34d399; }
         .status-failed { color: #f87171; }
+        
+        .provider-lanes-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        .provider-lanes-table th,
+        .provider-lanes-table td {
+            border-bottom: 1px solid #334155;
+            padding: 8px 6px;
+            text-align: left;
+        }
+        .provider-lanes-table th {
+            font-weight: 600;
+            color: #e2e8f0;
+            background: #0f172a;
+        }
+        .provider-lanes-table tr:hover {
+            background: #111827;
+        }
+        .provider-lanes-table input[type="number"] {
+            width: 80px;
+            padding: 4px 6px;
+            border-radius: 4px;
+            border: 1px solid #334155;
+            background: #020617;
+            color: #e2e8f0;
+        }
+
         .file-list { list-style: none; }
         .file-item { padding: 8px 0; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; }
         .file-item:last-child { border-bottom: none; }
@@ -2027,9 +2310,9 @@ ADMIN_TEMPLATE = """
         <h1>🍎 FruitDeepLinks Admin</h1>
         <p class="subtitle">Multi-source sports event aggregator</p>
         
-        <div style="margin-bottom: 20px;">
-            <a href="/filters" style="display: inline-block; padding: 10px 20px; background: #3b82f6; color: white; text-decoration: none; border-radius: 6px; font-weight: 600;">⚙️ Filters & Settings</a>
-            <a href="/api" style="display: inline-block; padding: 10px 20px; background: #0f172a; border: 1px solid #1f2937; border-radius: 6px; font-weight: 600; margin-left: 8px;">📚 API Helper</a>
+        <div class="nav-bar">
+            <a href="/filters" class="btn btn-secondary">⚙️ Filters & Settings</a>
+            <a href="/api" class="btn btn-secondary">📚 API Helper</a>
         </div>
         
         <div class="grid">

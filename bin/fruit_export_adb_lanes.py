@@ -1,0 +1,631 @@
+#!/usr/bin/env python
+"""
+fruit_export_adb_lanes.py
+
+Export provider-based ADB lanes (adb_lanes table) to a single XMLTV file:
+
+  out/adb_lanes.xml
+
+- One <channel> per (provider_code, lane_number) using channel_id from adb_lanes.
+- One <programme> per adb_lanes row, joined to events for title/description.
+
+Assumptions:
+  - adb_lanes(provider_code, lane_number, channel_id, event_id, start_utc, stop_utc)
+  - events(id, start_utc, end_utc, title, synopsis, title_brief, synopsis_brief, ...)
+
+If your schema differs, adjust the SQL queries below.
+"""
+
+import argparse
+import logging
+import os
+import sqlite3
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
+import xml.etree.ElementTree as ET
+from typing import Optional, Dict
+import json
+
+DEFAULT_DB_PATH = Path(__file__).resolve().parents[1] / "data" / "fruit_events.db"
+DEFAULT_OUT_DIR = Path(__file__).resolve().parents[1] / "out"
+DEFAULT_SERVER_URL = os.getenv("FRUIT_SERVER_URL") or "http://localhost:6655"
+
+
+def get_logger() -> logging.Logger:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
+    return logging.getLogger("fruit_export_adb_lanes")
+
+
+def iso_to_xmltv(ts: str) -> str:
+    """
+    Convert ISO-8601 UTC string (e.g. '2025-12-06T00:00:00+00:00')
+    into XMLTV time format 'YYYYMMDDHHMMSS +0000'.
+    """
+    if not ts:
+        # Fallback: now
+        dt = datetime.now(timezone.utc)
+    else:
+        try:
+            dt = datetime.fromisoformat(ts)
+        except Exception:
+            # Try stripping Z or offset if weird
+            try:
+                if ts.endswith("Z"):
+                    dt = datetime.fromisoformat(ts[:-1]).replace(tzinfo=timezone.utc)
+                else:
+                    dt = datetime.fromisoformat(ts)
+            except Exception:
+                dt = datetime.now(timezone.utc)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y%m%d%H%M%S +0000")
+
+
+def snap_to_quarter(dt: datetime) -> datetime:
+    """Snap a datetime down to the nearest 15-minute boundary."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    minute_block = (dt.minute // 15) * 15
+    return dt.replace(minute=minute_block, second=0, microsecond=0)
+
+
+def snap_up_to_quarter(dt: datetime) -> datetime:
+    """Snap a datetime up to the next 15-minute boundary (or keep if already aligned)."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if dt.minute % 15 == 0 and dt.second == 0 and dt.microsecond == 0:
+        return dt
+    remainder = dt.minute % 15
+    delta_min = 15 - remainder
+    return (dt + timedelta(minutes=delta_min)).replace(second=0, microsecond=0)
+
+
+def _add_categories(prog_el: ET.Element, provider_label: str, genres_json: Optional[str]) -> None:
+    """Attach provider/sports/genre categories to a <programme> element."""
+    if provider_label:
+        ET.SubElement(prog_el, "category").text = provider_label
+    # Always tag as Sports
+    ET.SubElement(prog_el, "category").text = "Sports"
+    if genres_json:
+        try:
+            genres = json.loads(genres_json) or []
+            for g in genres:
+                if not g:
+                    continue
+                if g == provider_label or g == "Sports":
+                    continue
+                ET.SubElement(prog_el, "category").text = str(g)
+        except Exception:
+            # Best-effort only; don't break export on bad JSON
+            pass
+
+
+
+def get_event_image_url(conn: sqlite3.Connection, event: Dict) -> Optional[str]:
+    """
+    Resolve a best-guess image URL for an event.
+
+    Priority:
+      1. event_images table (if populated)
+      2. Root Apple images, in this order:
+         - shelfItemImagePost   (=> gen/1280x720Sports.TVAPoM02.jpg?... style)
+         - shelfItemImage
+         - shelfItemImageLive
+         - shelfImageLogo
+      3. Competitor team logos (teamLogo*, scoreLogo, eventLogo) – SKIP masterArtLogo
+      4. competitor.logo_url
+      5. Playable-level images
+
+    All templated URLs ({w}x{h}{c}.{f}) are normalized to 1280x720, jpg.
+    """
+
+    def _normalize_url(url: Optional[str]) -> Optional[str]:
+        if not url:
+            return None
+        # Normalize all Apple/ESPN templates to 1280x720 jpg
+        replacements = {
+            "{w}": "1280",
+            "{h}": "720",
+            "{f}": "jpg",
+            "{c}": "",          # strips the 'bb' / other format tokens
+        }
+        for token, repl in replacements.items():
+            url = url.replace(token, repl)
+        return url
+
+    def _extract(val) -> Optional[str]:
+        if isinstance(val, str):
+            u = val
+        elif isinstance(val, dict):
+            u = val.get("url") or val.get("href")
+        else:
+            return None
+        return _normalize_url(u)
+
+    cur = conn.cursor()
+
+    # 1) event_images table (legacy / ESPN pipelines)
+    event_id = event.get("id") or event.get("event_id")
+    if event_id:
+        for img_type in ["landscape", "scene169", "titleArt169", "scene34"]:
+            cur.execute(
+                "SELECT url FROM event_images WHERE event_id=? AND img_type=? LIMIT 1",
+                (event_id, img_type),
+            )
+            row = cur.fetchone()
+            if row and row["url"]:
+                url = _normalize_url(row["url"])
+                if url:
+                    return url
+
+        cur.execute(
+            "SELECT url FROM event_images WHERE event_id=? LIMIT 1",
+            (event_id,),
+        )
+        row = cur.fetchone()
+        if row and row["url"]:
+            url = _normalize_url(row["url"])
+            if url:
+                return url
+
+    # 2) raw_attributes_json (Apple / ESPN blobs)
+    raw_json = event.get("raw_attributes_json")
+    if not raw_json:
+        return None
+
+    try:
+        attrs = json.loads(raw_json)
+    except Exception:
+        return None
+
+    # 2) Root Apple images (this is where your desired schema lives)
+    images = attrs.get("images") or {}
+    if isinstance(images, dict):
+        # IMPORTANT: prefer shelfItemImagePost first
+        root_pref = [
+            "shelfItemImagePost",   # -> gen/1280x720Sports.TVAPoM02.jpg?... (your example)
+            "shelfItemImage",
+            "shelfItemImageLive",
+            "shelfImageLogo",
+            # Generic/ESPN-ish fallbacks
+            "hero",
+            "scene169",
+            "landscape",
+            "posterArt",
+        ]
+        for key in root_pref:
+            if key in images:
+                url = _extract(images[key])
+                if url:
+                    return url
+
+        # As a last resort, any root image
+        for key, val in images.items():
+            url = _extract(val)
+            if url:
+                return url
+
+    # 3) Competitor team logos – skip masterArtLogo
+    competitors = attrs.get("competitors") or []
+    if isinstance(competitors, list):
+        preferred_keys = ["teamLogoDark", "teamLogoLight", "teamLogo", "scoreLogo", "eventLogo"]
+
+        # Preferred keys
+        for comp in competitors:
+            if not isinstance(comp, dict):
+                continue
+            imgs = comp.get("images") or {}
+            if not isinstance(imgs, dict):
+                continue
+            for key in preferred_keys:
+                if key in imgs:
+                    url = _extract(imgs[key])
+                    if url:
+                        return url
+
+        # Any other competitor image EXCEPT masterArtLogo
+        for comp in competitors:
+            if not isinstance(comp, dict):
+                continue
+            imgs = comp.get("images") or {}
+            if not isinstance(imgs, dict):
+                continue
+            for key, val in imgs.items():
+                if key == "masterArtLogo":
+                    continue
+                url = _extract(val)
+                if url:
+                    return url
+
+        # Fallback competitor.logo_url
+        for comp in competitors:
+            if not isinstance(comp, dict):
+                continue
+            url = _normalize_url(comp.get("logo_url"))
+            if url:
+                return url
+
+    # 4) Playable-level images
+    playables = attrs.get("playables") or []
+    if isinstance(playables, list):
+        for playable in playables:
+            if not isinstance(playable, dict):
+                continue
+            for key in ("image", "cardImage", "imageUrl", "image_url"):
+                if key in playable:
+                    url = _extract(playable[key])
+                    if url:
+                        return url
+
+    return None
+
+
+# -------------------- Event
+
+
+def _add_placeholder_blocks(
+    tv: ET.Element,
+    channel_id: str,
+    provider_label: str,
+    gap_start: datetime,
+    gap_end: datetime,
+) -> None:
+    """Fill a [gap_start, gap_end) interval with <=1h placeholder blocks."""
+    if gap_end <= gap_start:
+        return
+
+    cur = snap_up_to_quarter(gap_start)
+    while cur < gap_end:
+        block_end = min(cur + timedelta(hours=1), gap_end)
+        if (block_end - cur).total_seconds() < 60:
+            # Skip tiny slivers
+            break
+
+        prog_el = ET.SubElement(
+            tv,
+            "programme",
+            channel=str(channel_id),
+            start=iso_to_xmltv(cur.isoformat()),
+            stop=iso_to_xmltv(block_end.isoformat()),
+        )
+        title_el = ET.SubElement(prog_el, "title")
+        title_el.text = "Idle"
+
+        desc_el = ET.SubElement(prog_el, "desc")
+        desc_el.text = f"No active event on {provider_label}."
+
+        
+        cur = block_end
+
+
+
+def export_adb_lanes(db_path: Path, out_dir: Path, server_url: str) -> Path:
+    log = get_logger()
+    log.info("Using database: %s", db_path)
+    log.info("Output directory: %s", out_dir)
+    log.info("Server URL for ADB M3U: %s", server_url)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "adb_lanes.xml"
+    m3u_path = out_dir / "adb_lanes.m3u"
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+
+        # Ensure adb_lanes exists and has rows
+        cur.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='adb_lanes';"
+        )
+        if not cur.fetchone():
+            raise RuntimeError(
+                "adb_lanes table not found. Run migrate_add_adb_lanes.py and fruit_build_adb_lanes.py first."
+            )
+
+        cur.execute("SELECT COUNT(*) FROM adb_lanes;")
+        total_rows = cur.fetchone()[0]
+        if total_rows == 0:
+            log.warning("adb_lanes table is empty; exporting an XMLTV skeleton.")
+        else:
+            log.info("adb_lanes has %d row(s).", total_rows)
+
+        # Build channels: distinct provider_code, lane_number, channel_id
+        cur.execute(
+            """
+            SELECT provider_code, lane_number, channel_id
+              FROM adb_lanes
+             GROUP BY provider_code, lane_number, channel_id
+             ORDER BY provider_code, lane_number;
+            """
+        )
+        channels = cur.fetchall()
+        log.info("Found %d distinct ADB channels.", len(channels))
+
+        # Build programmes: join adb_lanes -> events for titles / synopses
+        # We assume events.id, events.start_utc, events.end_utc, events.title, events.synopsis
+        cur.execute(
+            """
+            SELECT
+                   a.channel_id,
+                   a.provider_code,
+                   a.start_utc,
+                   a.stop_utc,
+                   a.event_id,
+                   e.*
+              FROM adb_lanes a
+              JOIN events e
+                ON e.id = a.event_id
+             ORDER BY a.channel_id, a.start_utc;
+            """
+        )
+        programmes = cur.fetchall()
+        log.info("Will export %d programme entries.", len(programmes))
+
+        # Build XMLTV tree
+        tv = ET.Element("tv")
+        tv.set("source-info-name", "FruitDeepLinks ADB View")
+        tv.set("generator-info-name", "fruit_export_adb_lanes.py")
+
+        # Channels
+        for row in channels:
+            provider_code = row["provider_code"]
+            lane_number = row["lane_number"]
+            channel_id = row["channel_id"]
+
+            ch_el = ET.SubElement(tv, "channel", id=str(channel_id))
+
+            # Display name: PROVIDER 01 (e.g., AIV 01)
+            display_name = f"{provider_code.upper()} {int(lane_number):02d}"
+            dn_el = ET.SubElement(ch_el, "display-name")
+            dn_el.text = display_name
+
+        # Programmes with placeholders and rich categories
+        # Group rows by channel so we can fill gaps per-lane.
+        now = datetime.now(timezone.utc)
+        pre_start = snap_to_quarter(now) - timedelta(hours=1)
+
+        by_channel: dict[str, list[sqlite3.Row]] = {}
+        max_end_by_channel: dict[str, datetime] = {}
+
+        for row in programmes:
+            ch_id = row["channel_id"]
+            by_channel.setdefault(ch_id, []).append(row)
+            stop_iso = row["stop_utc"]
+            if stop_iso:
+                try:
+                    dt_stop = datetime.fromisoformat(stop_iso)
+                except Exception:
+                    continue
+                if dt_stop.tzinfo is None:
+                    dt_stop = dt_stop.replace(tzinfo=timezone.utc)
+                else:
+                    dt_stop = dt_stop.astimezone(timezone.utc)
+                prev = max_end_by_channel.get(ch_id)
+                if prev is None or dt_stop > prev:
+                    max_end_by_channel[ch_id] = dt_stop
+
+        for channel_id, events in by_channel.items():
+            events_sorted = sorted(
+                events,
+                key=lambda r: r["start_utc"] or "",
+            )
+            if not events_sorted:
+                continue
+
+            provider_code = events_sorted[0]["provider_code"]
+            provider_label = (provider_code or "").upper()
+
+            # Determine per-channel post window
+            last_end = max_end_by_channel.get(channel_id, now)
+            post_end = last_end + timedelta(hours=24)
+
+            cursor = pre_start
+
+            for row in events_sorted:
+                start_iso = row["start_utc"]
+                stop_iso = row["stop_utc"]
+                if not start_iso or not stop_iso:
+                    continue
+
+                try:
+                    start_dt = datetime.fromisoformat(start_iso)
+                    stop_dt = datetime.fromisoformat(stop_iso)
+                except Exception:
+                    continue
+
+                if start_dt.tzinfo is None:
+                    start_dt = start_dt.replace(tzinfo=timezone.utc)
+                else:
+                    start_dt = start_dt.astimezone(timezone.utc)
+                if stop_dt.tzinfo is None:
+                    stop_dt = stop_dt.replace(tzinfo=timezone.utc)
+                else:
+                    stop_dt = stop_dt.astimezone(timezone.utc)
+
+                # Fill gap from cursor -> event start (bounded by pre_start/post_end)
+                gap_start = max(cursor, pre_start)
+                gap_end = min(start_dt, post_end)
+                if gap_end > gap_start:
+                    _add_placeholder_blocks(tv, channel_id, provider_label, gap_start, gap_end)
+
+                # Emit real programme
+                start_attr = iso_to_xmltv(start_dt.isoformat())
+                stop_attr = iso_to_xmltv(stop_dt.isoformat())
+
+                title = row["title"] or row["title_brief"] or "Event"
+                synopsis = row["synopsis"] or row["synopsis_brief"] or ""
+                genres_json = row["genres_json"]
+
+                prog_el = ET.SubElement(
+                    tv,
+                    "programme",
+                    channel=str(channel_id),
+                    start=start_attr,
+                    stop=stop_attr,
+                )
+                title_el = ET.SubElement(prog_el, "title")
+                title_el.text = title
+
+                if synopsis:
+                    desc_el = ET.SubElement(prog_el, "desc")
+                    desc_el.text = synopsis
+
+                _add_categories(prog_el, provider_label, genres_json)
+
+                # Add rich image icon using shared FruitDeepLinks resolver
+                image_url = get_event_image_url(conn, dict(row)) if row is not None else None
+                if image_url:
+                    icon_el = ET.SubElement(prog_el, "icon")
+                    icon_el.set("src", image_url)
+
+                cursor = max(cursor, stop_dt)
+
+            # Tail placeholders out to post_end
+            if cursor < post_end:
+                gap_start = max(cursor, pre_start)
+                gap_end = post_end
+                if gap_end > gap_start:
+                    _add_placeholder_blocks(tv, channel_id, provider_label, gap_start, gap_end)
+
+        tree = ET.ElementTree(tv)
+        tree.write(out_path, encoding="utf-8", xml_declaration=True)
+        log.info("Wrote XMLTV file: %s", out_path)
+        # Also build an ADB-specific M3U playlist that matches these channel IDs.
+        build_adb_m3u(conn, m3u_path, server_url, log)
+        return out_path
+    finally:
+        conn.close()
+
+
+
+def build_adb_m3u(
+    conn: sqlite3.Connection,
+    m3u_path: Path,
+    server_url: str,
+    log: logging.Logger,
+) -> None:
+    """Build M3U playlists for ADB lanes.
+
+    - Writes a *global* playlist at ``m3u_path`` that contains one entry
+      per (provider_code, lane_number).
+    - Also writes a *provider-specific* playlist for each provider at
+      ``adb_lanes_<provider_code>.m3u`` in the same directory.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT provider_code,
+               lane_number,
+               channel_id
+          FROM adb_lanes
+         GROUP BY provider_code, lane_number, channel_id
+         ORDER BY provider_code, lane_number;
+        """
+    )
+    rows = cur.fetchall()
+    if not rows:
+        log.warning("No rows in adb_lanes; skipping M3U export.")
+        return
+
+    # Group rows by provider_code so we can write per-provider M3Us.
+    by_provider: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        by_provider.setdefault(row["provider_code"], []).append(row)
+
+    # 1) Global M3U with ALL providers.
+    log.info("ADB M3U (global): %d virtual channels", len(rows))
+    m3u_path.parent.mkdir(parents=True, exist_ok=True)
+    with m3u_path.open("w", encoding="utf-8") as f:
+        f.write("#EXTM3U\n\n")
+        for row in rows:
+            provider_code = row["provider_code"]
+            lane_number = int(row["lane_number"])
+            channel_id = row["channel_id"] or f"{provider_code}{lane_number:02d}"
+
+            name = f"{provider_code} lane {lane_number:02d}"
+            chno = lane_number
+
+            stream_url = (
+                server_url.rstrip("/")
+                + f"/api/adb/lanes/{provider_code}/{lane_number}/deeplink?format=text"
+            )
+
+            f.write(
+                f'#EXTINF:-1 tvg-id="{channel_id}" tvg-chno="{chno}" '
+                f'group-title="ADB {provider_code}",{name}\n'
+            )
+            f.write(stream_url + "\n\n")
+
+    log.info("Wrote global ADB lanes M3U: %s", m3u_path)
+
+    # 2) Per-provider M3Us: adb_lanes_<provider_code>.m3u
+    base_dir = m3u_path.parent
+    for provider_code, provider_rows in sorted(by_provider.items()):
+        provider_file = base_dir / f"adb_lanes_{provider_code}.m3u"
+        log.info(
+            "ADB M3U (%s): %d virtual channels",
+            provider_code,
+            len(provider_rows),
+        )
+        with provider_file.open("w", encoding="utf-8") as f:
+            f.write("#EXTM3U\n\n")
+            for row in provider_rows:
+                lane_number = int(row["lane_number"])
+                channel_id = row["channel_id"] or f"{provider_code}{lane_number:02d}"
+
+                name = f"{provider_code} lane {lane_number:02d}"
+                chno = lane_number
+
+                stream_url = (
+                    server_url.rstrip("/")
+                    + f"/api/adb/lanes/{provider_code}/{lane_number}/deeplink?format=text"
+                )
+
+                f.write(
+                    f'#EXTINF:-1 tvg-id="{channel_id}" tvg-chno="{chno}" '
+                    f'group-title="ADB {provider_code}",{name}\n'
+                )
+                f.write(stream_url + "\n\n")
+
+        log.info("Wrote provider ADB lanes M3U for %s: %s", provider_code, provider_file)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Export ADB lanes (adb_lanes) to XMLTV (adb_lanes.xml)."
+    )
+    parser.add_argument(
+        "--db",
+        dest="db_path",
+        type=Path,
+        default=DEFAULT_DB_PATH,
+        help=f"Path to SQLite DB (default: {DEFAULT_DB_PATH})",
+    )
+    parser.add_argument(
+        "--out-dir",
+        dest="out_dir",
+        type=Path,
+        default=DEFAULT_OUT_DIR,
+        help=f"Output directory (default: {DEFAULT_OUT_DIR})",
+    )
+    parser.add_argument(
+        "--server-url",
+        dest="server_url",
+        default=DEFAULT_SERVER_URL,
+        help=(
+            "Base server URL used in M3U entries "
+            f"(default: {DEFAULT_SERVER_URL})"
+        ),
+    )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    export_adb_lanes(args.db_path, args.out_dir, args.server_url)
