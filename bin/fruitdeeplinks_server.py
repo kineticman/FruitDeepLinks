@@ -1179,6 +1179,36 @@ def api_provider_lanes():
                 """
             )
             rows = [dict(row) for row in cur.fetchall()]
+
+            # Augment with logical web services (e.g., max, peacock_web) so they
+            # can appear in the ADB Lane Providers table even though their raw
+            # provider is "https".
+            try:
+                if LOGICAL_SERVICES_AVAILABLE:
+                    service_counts = get_all_logical_services_with_counts(conn)
+                    existing_codes = {row["provider_code"] for row in rows}
+                    extra_rows = []
+                    for service_code, _count in service_counts.items():
+                        if service_code in existing_codes:
+                            continue
+                        # Skip generic buckets; those are either already present
+                        # or not useful for user-facing ADB config.
+                        if service_code in ("http", "https"):
+                            continue
+                        extra_rows.append(
+                            {
+                                "provider_code": service_code,
+                                "adb_enabled": 0,
+                                "adb_lane_count": 0,
+                                "created_at": None,
+                                "updated_at": None,
+                            }
+                        )
+                    if extra_rows:
+                        rows.extend(sorted(extra_rows, key=lambda r: r["provider_code"]))
+            except Exception as e:
+                log(f"api_provider_lanes: failed to merge logical services: {e}", "ERROR")
+
             return jsonify({"status": "success", "providers": rows})
 
         # POST

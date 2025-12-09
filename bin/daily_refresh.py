@@ -144,16 +144,21 @@ def main():
         return 1
 
     # Step 9: Build ADB lanes per provider (adb_lanes table)
-    # Uses default DB path inside the script
+    # Explicitly pass DB path so this matches manual testing
     if not run_step(9, total_steps, "Building ADB lanes per provider", [
         "python3", "fruit_build_adb_lanes.py",
+        "--db", str(DB_PATH),
     ]):
         return 1
 
     # Step 10: Export ADB XMLTV + M3U playlists
-    # Uses default DB path; exporter writes adb_lanes.xml and adb_lanes*.m3u
+    # Explicitly pass DB, OUT_DIR and SERVER_URL (mirrors manual CLI usage)
+    server_url = os.getenv("SERVER_URL", "http://192.168.86.80:6655")
     if not run_step(10, total_steps, "Exporting ADB lanes XMLTV and M3U", [
         "python3", "fruit_export_adb_lanes.py",
+        "--db", str(DB_PATH),
+        "--out-dir", str(OUT_DIR),
+        "--server-url", server_url,
     ]):
         return 1
 
