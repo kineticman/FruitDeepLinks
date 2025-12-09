@@ -408,15 +408,101 @@ def try_cached_auth(driver) -> Tuple[Optional[str], Optional[str]]:
         return (None, None)
     return (utscf, utsk)
 
-def capture_auth_from_logs(driver) -> Tuple[Optional[str], Optional[str]]:
-    print("\n== MANUAL STEP ==\nOpen any sporting event tile in the Chrome window, then press Enter here.")
-    input("Press Enter when ready...")
-    time.sleep(2)
+def capture_auth_from_logs(driver, auto_click: bool = True) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Capture auth tokens from network logs.
+    
+    Args:
+        driver: Selenium WebDriver instance
+        auto_click: If True, automatically clicks an event tile to trigger auth request.
+                   If False, falls back to manual user interaction.
+    
+    Returns:
+        Tuple of (utscf, utsk) tokens, or (None, None) if capture failed
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    if auto_click:
+        print("\n== AUTO AUTH CAPTURE ==")
+        print("Attempting to automatically capture auth tokens...")
+        
+        # Clear any existing performance logs
+        try:
+            _ = driver.get_log("performance")
+        except Exception:
+            pass
+        
+        # Try to find and click an event tile
+        try:
+            from selenium.webdriver.common.by import By
+            from selenium.webdriver.support.ui import WebDriverWait
+            from selenium.webdriver.support import expected_conditions as EC
+            
+            # Wait for page to load and find clickable event tiles
+            # Apple TV uses various selectors for event tiles
+            tile_selectors = [
+                "a[href*='/sporting-event/']",  # Direct link to sporting event
+                "[data-test-id*='sporting-event']",  # Data test ID
+                ".shelf-item a",  # Shelf item links
+                "picture[data-test-id] ~ a",  # Links next to images
+            ]
+            
+            tile = None
+            for selector in tile_selectors:
+                try:
+                    logger.info(f"Trying selector: {selector}")
+                    tile = WebDriverWait(driver, 5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                    if tile:
+                        logger.info(f"Found event tile with selector: {selector}")
+                        break
+                except Exception as e:
+                    logger.debug(f"Selector {selector} failed: {e}")
+                    continue
+            
+            if not tile:
+                print("  ⚠ Could not find event tile automatically")
+                print("  Falling back to manual mode...")
+                auto_click = False
+            else:
+                print(f"  ✓ Found event tile, clicking...")
+                
+                # Scroll tile into view
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tile)
+                time.sleep(0.5)
+                
+                # Click the tile
+                try:
+                    tile.click()
+                except Exception:
+                    # If regular click fails, try JavaScript click
+                    driver.execute_script("arguments[0].click();", tile)
+                
+                print("  ✓ Clicked event tile")
+                time.sleep(2)  # Wait for network requests to complete
+                
+        except Exception as e:
+            logger.error(f"Auto-click failed: {e}")
+            print(f"  ✗ Auto-click failed: {e}")
+            print("  Falling back to manual mode...")
+            auto_click = False
+    
+    # Manual fallback
+    if not auto_click:
+        print("\n== MANUAL AUTH CAPTURE ==")
+        print("Please click any sporting event tile in the browser window, then press Enter here.")
+        input("Press Enter when ready...")
+        time.sleep(2)
+    
+    # Extract tokens from performance logs
     utscf = utsk = None
     try:
         logs = driver.get_log("performance")
     except Exception:
         logs = []
+    
     for entry in logs:
         try:
             msg = json.loads(entry["message"]).get("message", {})
@@ -430,8 +516,13 @@ def capture_auth_from_logs(driver) -> Tuple[Optional[str], Optional[str]]:
                         break
         except Exception:
             continue
+    
     if utscf and utsk:
         save_auth(utscf, utsk)
+        print(f"  ✓ Auth tokens captured and saved!")
+    else:
+        print(f"  ✗ Failed to capture auth tokens from network logs")
+    
     return utscf, utsk
 
 # ------------------------------ seed ordering ------------------------------
@@ -492,7 +583,7 @@ def scrape_search_term(
     for i, event_id in enumerate(seeds_used_list, 1):
         # Time guards
         if term_time_limit and (time.time() - term_started) > term_time_limit:
-            print(f"  term time limit reached ({term_time_limit:.0f}s) — stopping term")
+            print(f"  term time limit reached ({term_time_limit:.0f}s) â€” stopping term")
             break
 
         print(f"  [Seed {i}/{len(seeds_used_list)} of {len(seed_ids_all)}] {event_id}")
@@ -513,7 +604,7 @@ def scrape_search_term(
             print(f"    error: {e}")
         
         # Progress summary after each seed
-        print(f"    → Found {new_here} new event(s) | Total new this term: {total_new} | Total unique: {len(seen_ids)}")
+        print(f"    â†’ Found {new_here} new event(s) | Total new this term: {total_new} | Total unique: {len(seen_ids)}")
 
         window.append(1 if new_here > 0 else 0)
 
@@ -613,6 +704,7 @@ def main():
     ap.add_argument("--scroll-seconds", type=float, default=5.0)
     ap.add_argument("--leagues", action="store_true", help="also crawl league canvases")
     ap.add_argument("--headless", action="store_true")
+    ap.add_argument("--manual-auth", action="store_true", help="disable automatic auth token capture (require manual click)")
     ap.add_argument("--no-network", action="store_true", help="disable CDP network harvesting (HTML-only)")
     ap.add_argument("--net-filter", default="", help="comma-separated substrings to filter network URLs (e.g. 'v3/sporting-events,leagues')")
     ap.add_argument("--out", default=str(get_project_root() / "out" / "multi_scraped.json"))
@@ -639,9 +731,10 @@ def main():
         time.sleep(1.2)
         utscf, utsk = try_cached_auth(driver)
         if not utscf or not utsk:
-            utscf, utsk = capture_auth_from_logs(driver)
+            # Auto-click is enabled unless --manual-auth flag is set
+            utscf, utsk = capture_auth_from_logs(driver, auto_click=not args.manual_auth)
             if not utscf or not utsk:
-                print("✗ failed to obtain utscf/utsk"); sys.exit(1)
+                print("âœ— failed to obtain utscf/utsk"); sys.exit(1)
 
         seen_ids: Set[str] = set()
         all_events: List[dict] = []
@@ -650,7 +743,7 @@ def main():
 
         for t in terms:
             if global_time_exceeded():
-                print("Global time limit reached — stopping run")
+                print("Global time limit reached â€” stopping run")
                 break
 
             # Pre-scan
@@ -693,7 +786,7 @@ def main():
             drain_perf_log(driver)  # final flush after term
 
             if global_time_exceeded():
-                print("Global time limit reached — stopping run")
+                print("Global time limit reached â€” stopping run")
                 break
 
         if args.leagues and not global_time_exceeded():
