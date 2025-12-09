@@ -4,49 +4,48 @@ services:
     build: .
     container_name: fruitdeeplinks
     hostname: fruitdeeplinks
-    shm_size: '2gb'  # Chrome needs more shared memory in Docker
+    shm_size: '2gb'
     environment:
       # Timezone
-      - TZ=America/New_York
-      # Database path
-      - PEACOCK_DB_PATH=/app/data/fruit_events.db
+      - TZ=${TZ:-America/New_York}
+      
+      # Database
+      - FRUIT_DB_PATH=/app/data/fruit_events.db
+      
       # Lane configuration
-      - PEACOCK_LANES=50
-      - PEACOCK_LANE_START_CH=9000
-      - PEACOCK_DAYS_AHEAD=7
-      # Padding and placeholders
-      - PEACOCK_PADDING_MINUTES=30
-      - PEACOCK_PLACEHOLDER_BLOCK_MINUTES=60
-      - PEACOCK_PLACEHOLDER_EXTRA_DAYS=5
-      # Apple TV Scraper settings
-      - HEADLESS=true
-      - NO_NETWORK=false
-      # Server URL for M3U export (THIS IS YOUR FRUITDEEPLINKS SERVER IP)
-      - SERVER_URL=http://192.168.86.80:6655
-      # Channels DVR IP (where Channels DVR is running)
-      - CHANNELS_DVR_IP=192.168.86.72
-      - CHANNELS_SOURCE_NAME=appletvdeeper
+      - FRUIT_LANES=${FRUIT_LANES:-50}
+      - FRUIT_LANE_START_CH=${FRUIT_LANE_START_CH:-9000}
+      - FRUIT_DAYS_AHEAD=${FRUIT_DAYS_AHEAD:-7}
+      - FRUIT_PADDING_MINUTES=${FRUIT_PADDING_MINUTES:-45}
+      - FRUIT_PLACEHOLDER_BLOCK_MINUTES=${FRUIT_PLACEHOLDER_BLOCK_MINUTES:-60}
+      - FRUIT_PLACEHOLDER_EXTRA_DAYS=${FRUIT_PLACEHOLDER_EXTRA_DAYS:-5}
+      
+      # Scraper
+      - HEADLESS=${HEADLESS:-true}
+      - NO_NETWORK=${NO_NETWORK:-false}
+      
+      # Server (UPDATE THESE FOR YOUR NETWORK)
+      - SERVER_URL=${SERVER_URL:-http://localhost:6655}
+      - PORT=${PORT:-6655}
+      - HOST=${HOST:-0.0.0.0}
+      
+      # Channels DVR (optional)
+      - CHANNELS_DVR_IP=${CHANNELS_DVR_IP:-}
+      - CHANNELS_SOURCE_NAME=${CHANNELS_SOURCE_NAME:-fruitdeeplinks}
+      
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
-      # Code and scripts (ADDED - needed for server to run)
       - ./bin:/app/bin
-      # Templates for web UI (ADDED - needed for refactored server)
       - ./templates:/app/templates
-      # Persistent database and output files
       - ./data:/app/data
       - ./out:/app/out
       - ./logs:/app/logs
-      # Optional: Mount config for easy editing
-      - ./config:/app/config
     restart: unless-stopped
-    # Expose web server
     ports:
-      - "6655:6655"
-    # Logging configuration
+      - "${PORT:-6655}:6655"
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-networks:
-  default:
-    name: fruitdeeplinks_network
