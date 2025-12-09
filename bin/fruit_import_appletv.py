@@ -51,9 +51,92 @@ def ms_to_iso(ts_ms: Optional[int]) -> Optional[str]:
     if ts_ms is None: return None
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat(timespec="seconds")
 
-def calculate_runtime(start_ms: Optional[int], end_ms: Optional[int]) -> Optional[int]:
-    if start_ms and end_ms: return int((end_ms - start_ms) / 1000)
+PREFERRED_WIDTH = 1280
+PREFERRED_HEIGHT = 720
+PREFERRED_FMT = "jpg"
+
+def concretize_apple_image(url_template: Optional[str],
+                           width: int = PREFERRED_WIDTH,
+                           height: int = PREFERRED_HEIGHT,
+                           fmt: str = PREFERRED_FMT) -> Optional[str]:
+    """Fill Apple image {w}x{h} / {f} templates with concrete values."""
+    if not url_template or not isinstance(url_template, str):
+        return None
+    url = url_template.replace("{w}x{h}", f"{width}x{height}")
+    url = url.replace("{f}", fmt)
+    return url
+
+def select_best_apple_image(images: Dict[str, Any]) -> Optional[str]:
+    """Pick a hero image for Apple Sports events.
+
+    Preference (expanded with more fallbacks):
+      1) Versus-style 'gen/...Sports.TVAPo...' (usually shelfItemImagePost)
+      2) Live tile (shelfItemImageLive)
+      3) Regular shelf images (shelfItemImage)
+      4) Logo fallback (shelfImageLogo)
+      5) Any other image with reasonable dimensions
+    """
+    if not images:
+        return None
+
+    def extract_url(img_obj):
+        """Extract URL from image object (handles dict, str, or nested formats)"""
+        if isinstance(img_obj, str):
+            return img_obj
+        if isinstance(img_obj, dict):
+            return img_obj.get("url") or img_obj.get("href")
+        return None
+
+    # Priority list - try these in order
+    priority_keys = [
+        ("shelfItemImagePost", lambda u: "Sports.TVAP" in u),  # Versus-style (best) - accepts TVAPo, TVAPrM, etc
+        ("shelfItemImage", lambda u: "Sports.TVAP" in u),  # Regular shelf with sports format
+        ("shelfItemImageLive", None),  # Live tile
+        ("shelfItemImage", None),  # Regular shelf image (any format)
+        ("shelfImageLogo", None),  # Logo
+        ("shelfImage", None),  # Generic shelf
+        ("hero", None),  # Hero image
+        ("posterArt", None),  # Poster
+        ("scene169", None),  # 16:9 scene
+        ("landscape", None),  # Landscape format
+    ]
+
+    for key, condition in priority_keys:
+        img_obj = images.get(key)
+        if img_obj:
+            url = extract_url(img_obj)
+            if url and isinstance(url, str):
+                # Apply condition if present
+                if condition and not condition(url):
+                    continue
+                concrete = concretize_apple_image(url)
+                if concrete:
+                    return concrete
+
+    # Last resort: try any image in the dict
+    for key, img_obj in images.items():
+        url = extract_url(img_obj)
+        if url and isinstance(url, str):
+            # Skip if it's clearly a logo or icon (usually small)
+            if any(skip in key.lower() for skip in ['logo', 'icon', 'badge', 'thumbnail']):
+                continue
+            concrete = concretize_apple_image(url)
+            if concrete:
+                return concrete
+
     return None
+
+def calculate_runtime(start_ms: Optional[int], end_ms: Optional[int]) -> Optional[int]:
+    """Compute runtime in seconds from millisecond timestamps with basic sanity checks."""
+    if start_ms is None or end_ms is None:
+        return None
+    dur = int((end_ms - start_ms) / 1000)
+    if dur <= 0:
+        return None
+    # Guardrail: treat anything over 12 hours as suspicious and skip
+    if dur > 12 * 60 * 60:
+        return None
+    return dur
 
 def extract_competitors(apple_event: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
     competitors = apple_event.get("competitors", [])
@@ -116,6 +199,21 @@ def normalize_event_structure(apple_event: Dict[str, Any]) -> Dict[str, Any]:
     playables_final = merged_playables if merged_playables else {}
     
     # Flatten the structure
+
+    # --- Time handling -----------------------------------------------------
+    event_time = content.get("eventTime", {}) or {}
+    tune_in = event_time.get("tuneInTime") or {}
+    live_badge = event_time.get("liveBadgeTime") or {}
+
+    ti_start = tune_in.get("startTime") if isinstance(tune_in, dict) else None
+    ti_end = tune_in.get("endTime") if isinstance(tune_in, dict) else None
+    lb_start = live_badge.get("startTime") if isinstance(live_badge, dict) else None
+    lb_end = live_badge.get("endTime") if isinstance(live_badge, dict) else None
+
+    kickoff = event_time.get("gameKickOffStartTime")
+    start_ms = ti_start or lb_start or kickoff
+    end_ms = ti_end or lb_end or None
+
     return {
         "id": event_id,
         "title": content.get("title") or content.get("shortTitle"),
@@ -126,10 +224,12 @@ def normalize_event_structure(apple_event: Dict[str, Any]) -> Dict[str, Any]:
         "playables": playables_final,
         "images": content.get("images", {}),
         "url": content.get("url"),
-        "start_time": content.get("eventTime", {}).get("gameKickOffStartTime"),
-        "start_time_ms": content.get("eventTime", {}).get("gameKickOffStartTime"),
-        "end_time": content.get("eventTime", {}).get("tuneInTime", {}).get("endTime"),
-        "end_time_ms": content.get("eventTime", {}).get("tuneInTime", {}).get("endTime"),
+        # Preserve original kickoff as start_time for reference
+        "start_time": kickoff,
+        # Use normalized window for ms fields that feed the DB
+        "start_time_ms": start_ms,
+        "end_time": ti_end or lb_end,
+        "end_time_ms": end_ms,
     }
 
 def build_title(apple_event: Dict[str, Any]) -> str:
@@ -173,6 +273,29 @@ def map_apple_to_fruit(apple_event: Dict[str, Any], provider_prefix: str = "appl
     channels = event.get("channels", [])
     channel_name = channels[0].get("name") if channels else None
     provider_normalized = normalize_provider(channel_name)
+    images_struct = event.get("images") or {}
+    hero_image_url = select_best_apple_image(images_struct)
+    
+    # Fallback: if no event image, try competitor team logos
+    if not hero_image_url:
+        competitors = event.get("competitors", [])
+        for comp in competitors:
+            if not isinstance(comp, dict):
+                continue
+            comp_images = comp.get("images") or {}
+            if comp_images:
+                # Try team logos first
+                for key in ["teamLogoDark", "teamLogoLight", "teamLogo"]:
+                    img_obj = comp_images.get(key)
+                    if img_obj:
+                        url = img_obj.get("url") if isinstance(img_obj, dict) else (img_obj if isinstance(img_obj, str) else None)
+                        if url:
+                            hero_image_url = concretize_apple_image(url)
+                            if hero_image_url:
+                                break
+            if hero_image_url:
+                break
+    
     # Genres/Classification
     sport = event.get("sport_name"); league = event.get("league_name")
     genres = [g for g in [sport, league] if g]
@@ -189,6 +312,7 @@ def map_apple_to_fruit(apple_event: Dict[str, Any], provider_prefix: str = "appl
         "synopsis_brief": synopsis_brief,
         "channel_name": channel_name,
         "channel_provider_id": provider_normalized,
+        "hero_image_url": hero_image_url,
         "airing_type": "live",
         "classification_json": json.dumps(classification),
         "genres_json": json.dumps(genres),
@@ -239,12 +363,21 @@ def ensure_events_schema(conn: sqlite3.Connection):
         airing_type TEXT, classification_json TEXT, genres_json TEXT, content_segments_json TEXT,
         is_free INTEGER, is_premium INTEGER, runtime_secs INTEGER, start_ms INTEGER, end_ms INTEGER,
         start_utc TEXT, end_utc TEXT, created_ms INTEGER, created_utc TEXT,
+        hero_image_url TEXT,
         last_seen_utc TEXT, raw_attributes_json TEXT)""")
     cur.execute("""CREATE TABLE IF NOT EXISTS event_images (
         event_id TEXT, img_type TEXT, url TEXT, PRIMARY KEY (event_id, img_type, url))""")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_events_pvid ON events(pvid)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_events_time ON events(start_utc, end_utc)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_event_images_event ON event_images(event_id)")
+
+    # Ensure hero_image_url column exists on existing databases
+    cur.execute("PRAGMA table_info(events)")
+    cols = [row[1] for row in cur.fetchall()]
+    if "hero_image_url" not in cols:
+        cur.execute("ALTER TABLE events ADD COLUMN hero_image_url TEXT")
+        conn.commit()
+
     conn.commit()
 
 def upsert_event(conn: sqlite3.Connection, event: Dict[str, Any], dry: bool = False):
@@ -260,14 +393,14 @@ def upsert_event(conn: sqlite3.Connection, event: Dict[str, Any], dry: bool = Fa
             classification_json, genres_json, content_segments_json,
             is_free, is_premium, runtime_secs,
             start_ms, end_ms, start_utc, end_utc,
-            created_ms, created_utc, last_seen_utc, raw_attributes_json
+            created_ms, created_utc, hero_image_url, last_seen_utc, raw_attributes_json
         ) VALUES (
             :id, :pvid, :slug, :title, :title_brief, :synopsis, :synopsis_brief,
             :channel_name, :channel_provider_id, :airing_type,
             :classification_json, :genres_json, :content_segments_json,
             :is_free, :is_premium, :runtime_secs,
             :start_ms, :end_ms, :start_utc, :end_utc,
-            :created_ms, :created_utc, :last_seen_utc, :raw_attributes_json
+            :created_ms, :created_utc, :hero_image_url, :last_seen_utc, :raw_attributes_json
         )
         ON CONFLICT(id) DO UPDATE SET
             pvid=excluded.pvid, slug=excluded.slug, title=excluded.title,
@@ -277,6 +410,7 @@ def upsert_event(conn: sqlite3.Connection, event: Dict[str, Any], dry: bool = Fa
             genres_json=excluded.genres_json, content_segments_json=excluded.content_segments_json,
             is_free=excluded.is_free, is_premium=excluded.is_premium, runtime_secs=excluded.runtime_secs,
             start_ms=excluded.start_ms, end_ms=excluded.end_ms, start_utc=excluded.start_utc, end_utc=excluded.end_utc,
+            hero_image_url=excluded.hero_image_url,
             last_seen_utc=excluded.last_seen_utc, raw_attributes_json=excluded.raw_attributes_json
         """,
         event,
@@ -431,8 +565,8 @@ def main():
         conn.commit()
     conn.close()
     
-    print(f"✅ Imported/updated {inserted} events into {db_path}")
-    print(f"✅ Extracted {playables_extracted} playables total")
+    print(f"âœ… Imported/updated {inserted} events into {db_path}")
+    print(f"âœ… Extracted {playables_extracted} playables total")
 
 if __name__ == "__main__":
     main()

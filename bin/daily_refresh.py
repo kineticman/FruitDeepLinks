@@ -8,6 +8,7 @@ Orchestrates the full pipeline: scrape → import → plan → export
 import os
 import sys
 import subprocess
+import sqlite3
 from pathlib import Path
 from datetime import datetime
 
@@ -50,63 +51,109 @@ def main():
     print(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*60)
 
+    # Total steps in this pipeline
+    total_steps = 10
+
     # Check for --skip-scrape flag
     skip_scrape = "--skip-scrape" in sys.argv
 
     # Step 1: Scrape Apple TV Sports
     if skip_scrape:
-        print("\n[1/6] Scraping Apple TV Sports. SKIPPED")
+        print("\n" + "="*60)
+        print(f"[1/{total_steps}] Scraping Apple TV Sports. SKIPPED")
+        print("="*60)
         multi_scraped = OUT_DIR / "multi_scraped.json"
         if not multi_scraped.exists():
             print(f"ERROR: --skip-scrape set but {multi_scraped} not found")
             return 1
     else:
-        if not run_step(1, 6, "Scraping Apple TV Sports", [
+        if not run_step(1, total_steps, "Scraping Apple TV Sports", [
             "python3", "multi_scraper.py",
             "--headless",
             "--out", str(OUT_DIR / "multi_scraped.json"),
         ]):
             return 1
 
-    # Step 2: Ensure database schema is up to date
+    # Fresh-install safety: ensure DB file exists before migrations
+    if not DB_PATH.exists():
+        print("\n" + "="*60)
+        print("Database file not found; creating new empty database.")
+        print("="*60)
+        try:
+            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            sqlite3.connect(DB_PATH).close()
+            print(f"✔ Created new DB at {DB_PATH}")
+        except Exception as e:
+            print(f"✗ Failed to create DB at {DB_PATH}: {e}")
+            return 1
+
+    # Step 2: Ensure database schema (playables table)
     # FIX: pass --db and --yes to migrate_add_playables.py
-    if not run_step(2, 6, "Ensuring database schema (playables table)", [
+    if not run_step(2, total_steps, "Ensuring database schema (playables table)", [
         "python3", "migrate_add_playables.py",
         "--db", str(DB_PATH),
         "--yes",
     ]):
         return 1
 
-    # Step 3: Import Apple TV events (reads multi_scraped.json directly)
-    if not run_step(3, 6, "Importing Apple TV events to database", [
+    # Step 3: Ensure database schema (provider_lanes table)
+    # Uses default DB path inside the script
+    if not run_step(3, total_steps, "Ensuring database schema (provider_lanes table)", [
+        "python3", "migrate_add_provider_lanes.py",
+    ]):
+        return 1
+
+    # Step 4: Ensure database schema (adb_lanes table)
+    # Uses default DB path inside the script
+    if not run_step(4, total_steps, "Ensuring database schema (adb_lanes table)", [
+        "python3", "migrate_add_adb_lanes.py",
+    ]):
+        return 1
+
+    # Step 5: Import Apple TV events (reads multi_scraped.json directly)
+    if not run_step(5, total_steps, "Importing Apple TV events to database", [
         "python3", "fruit_import_appletv.py",
         "--apple-json", str(OUT_DIR / "multi_scraped.json"),
         "--fruit-db", str(DB_PATH),
     ]):
         return 1
 
-    # Step 4: Build virtual lanes
+    # Step 6: Build virtual lanes (Channels-style direct lanes)
     lanes = os.getenv("FRUIT_LANES", os.getenv("PEACOCK_LANES", "40"))
-    if not run_step(4, 6, f"Building {lanes} virtual lanes", [
+    if not run_step(6, total_steps, f"Building {lanes} virtual lanes", [
         "python3", "fruit_build_lanes.py",
         "--db", str(DB_PATH),
         "--lanes", lanes,
     ]):
         return 1
 
-    # Step 5: Export direct channels
-    if not run_step(5, 6, "Exporting Direct channels", [
+    # Step 7: Export direct channels (primary XML/M3U)
+    if not run_step(7, total_steps, "Exporting Direct channels", [
         "python3", "fruit_export_hybrid.py",
         "--db", str(DB_PATH),
     ]):
         return 1
 
-    # Step 6: Export virtual lanes
+    # Step 8: Export virtual lanes (existing hybrid lane view)
     server_url = os.getenv("SERVER_URL", "http://192.168.86.80:6655")
-    if not run_step(6, 6, "Exporting Virtual Lanes", [
+    if not run_step(8, total_steps, "Exporting Virtual Lanes", [
         "python3", "fruit_export_lanes.py",
         "--db", str(DB_PATH),
         "--server-url", server_url,
+    ]):
+        return 1
+
+    # Step 9: Build ADB lanes per provider (adb_lanes table)
+    # Uses default DB path inside the script
+    if not run_step(9, total_steps, "Building ADB lanes per provider", [
+        "python3", "fruit_build_adb_lanes.py",
+    ]):
+        return 1
+
+    # Step 10: Export ADB XMLTV + M3U playlists
+    # Uses default DB path; exporter writes adb_lanes.xml and adb_lanes*.m3u
+    if not run_step(10, total_steps, "Exporting ADB lanes XMLTV and M3U", [
+        "python3", "fruit_export_adb_lanes.py",
     ]):
         return 1
 

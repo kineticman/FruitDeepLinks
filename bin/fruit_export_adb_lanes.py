@@ -106,165 +106,9 @@ def _add_categories(prog_el: ET.Element, provider_label: str, genres_json: Optio
 
 
 
-def get_event_image_url(conn: sqlite3.Connection, event: Dict) -> Optional[str]:
-    """
-    Resolve a best-guess image URL for an event.
-
-    Priority:
-      1. event_images table (if populated)
-      2. Root Apple images, in this order:
-         - shelfItemImagePost   (=> gen/1280x720Sports.TVAPoM02.jpg?... style)
-         - shelfItemImage
-         - shelfItemImageLive
-         - shelfImageLogo
-      3. Competitor team logos (teamLogo*, scoreLogo, eventLogo) – SKIP masterArtLogo
-      4. competitor.logo_url
-      5. Playable-level images
-
-    All templated URLs ({w}x{h}{c}.{f}) are normalized to 1280x720, jpg.
-    """
-
-    def _normalize_url(url: Optional[str]) -> Optional[str]:
-        if not url:
-            return None
-        # Normalize all Apple/ESPN templates to 1280x720 jpg
-        replacements = {
-            "{w}": "1280",
-            "{h}": "720",
-            "{f}": "jpg",
-            "{c}": "",          # strips the 'bb' / other format tokens
-        }
-        for token, repl in replacements.items():
-            url = url.replace(token, repl)
-        return url
-
-    def _extract(val) -> Optional[str]:
-        if isinstance(val, str):
-            u = val
-        elif isinstance(val, dict):
-            u = val.get("url") or val.get("href")
-        else:
-            return None
-        return _normalize_url(u)
-
-    cur = conn.cursor()
-
-    # 1) event_images table (legacy / ESPN pipelines)
-    event_id = event.get("id") or event.get("event_id")
-    if event_id:
-        for img_type in ["landscape", "scene169", "titleArt169", "scene34"]:
-            cur.execute(
-                "SELECT url FROM event_images WHERE event_id=? AND img_type=? LIMIT 1",
-                (event_id, img_type),
-            )
-            row = cur.fetchone()
-            if row and row["url"]:
-                url = _normalize_url(row["url"])
-                if url:
-                    return url
-
-        cur.execute(
-            "SELECT url FROM event_images WHERE event_id=? LIMIT 1",
-            (event_id,),
-        )
-        row = cur.fetchone()
-        if row and row["url"]:
-            url = _normalize_url(row["url"])
-            if url:
-                return url
-
-    # 2) raw_attributes_json (Apple / ESPN blobs)
-    raw_json = event.get("raw_attributes_json")
-    if not raw_json:
-        return None
-
-    try:
-        attrs = json.loads(raw_json)
-    except Exception:
-        return None
-
-    # 2) Root Apple images (this is where your desired schema lives)
-    images = attrs.get("images") or {}
-    if isinstance(images, dict):
-        # IMPORTANT: prefer shelfItemImagePost first
-        root_pref = [
-            "shelfItemImagePost",   # -> gen/1280x720Sports.TVAPoM02.jpg?... (your example)
-            "shelfItemImage",
-            "shelfItemImageLive",
-            "shelfImageLogo",
-            # Generic/ESPN-ish fallbacks
-            "hero",
-            "scene169",
-            "landscape",
-            "posterArt",
-        ]
-        for key in root_pref:
-            if key in images:
-                url = _extract(images[key])
-                if url:
-                    return url
-
-        # As a last resort, any root image
-        for key, val in images.items():
-            url = _extract(val)
-            if url:
-                return url
-
-    # 3) Competitor team logos – skip masterArtLogo
-    competitors = attrs.get("competitors") or []
-    if isinstance(competitors, list):
-        preferred_keys = ["teamLogoDark", "teamLogoLight", "teamLogo", "scoreLogo", "eventLogo"]
-
-        # Preferred keys
-        for comp in competitors:
-            if not isinstance(comp, dict):
-                continue
-            imgs = comp.get("images") or {}
-            if not isinstance(imgs, dict):
-                continue
-            for key in preferred_keys:
-                if key in imgs:
-                    url = _extract(imgs[key])
-                    if url:
-                        return url
-
-        # Any other competitor image EXCEPT masterArtLogo
-        for comp in competitors:
-            if not isinstance(comp, dict):
-                continue
-            imgs = comp.get("images") or {}
-            if not isinstance(imgs, dict):
-                continue
-            for key, val in imgs.items():
-                if key == "masterArtLogo":
-                    continue
-                url = _extract(val)
-                if url:
-                    return url
-
-        # Fallback competitor.logo_url
-        for comp in competitors:
-            if not isinstance(comp, dict):
-                continue
-            url = _normalize_url(comp.get("logo_url"))
-            if url:
-                return url
-
-    # 4) Playable-level images
-    playables = attrs.get("playables") or []
-    if isinstance(playables, list):
-        for playable in playables:
-            if not isinstance(playable, dict):
-                continue
-            for key in ("image", "cardImage", "imageUrl", "image_url"):
-                if key in playable:
-                    url = _extract(playable[key])
-                    if url:
-                        return url
-
-    return None
-
-
+def get_event_image_url(event: Dict) -> Optional[str]:
+    """Simply return hero_image_url from events table (pre-selected during import)."""
+    return event.get("hero_image_url")
 # -------------------- Event
 
 
@@ -478,8 +322,8 @@ def export_adb_lanes(db_path: Path, out_dir: Path, server_url: str) -> Path:
 
                 _add_categories(prog_el, provider_label, genres_json)
 
-                # Add rich image icon using shared FruitDeepLinks resolver
-                image_url = get_event_image_url(conn, dict(row)) if row is not None else None
+                # Add image icon from hero_image_url (pre-selected during import)
+                image_url = get_event_image_url(dict(row))
                 if image_url:
                     icon_el = ET.SubElement(prog_el, "icon")
                     icon_el.set("src", image_url)

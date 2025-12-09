@@ -142,6 +142,34 @@ def add_lane_provider_columns(conn: sqlite3.Connection):
     print("✓ lane_events migration complete")
 
 
+
+def add_hero_image_column(conn: sqlite3.Connection):
+    """Ensure events has a hero_image_url column used for Apple hero images"""
+    cur = conn.cursor()
+
+    # Check that events table exists
+    cur.execute("""
+        SELECT name FROM sqlite_master
+        WHERE type='table' AND name='events'
+    """)
+    row = cur.fetchone()
+    if not row:
+        print("⚠ events table not found; skipping hero_image_url migration")
+        return
+
+    existing = _get_table_columns(conn, "events")
+    if "hero_image_url" in existing:
+        print("✓ events already has hero_image_url column")
+        return
+
+    print("Adding hero_image_url column to events:")
+    sql = "ALTER TABLE events ADD COLUMN hero_image_url TEXT"
+    print(f"  → {sql}")
+    cur.execute(sql)
+
+    conn.commit()
+    print("✓ hero_image_url migration complete")
+
 def migrate_existing_data(conn: sqlite3.Connection):
     """Migrate existing pvid data to playables table if needed"""
     cur = conn.cursor()
@@ -223,6 +251,7 @@ def main():
         create_user_preferences_table(conn)
         add_default_preferences(conn)
         add_lane_provider_columns(conn)
+        add_hero_image_column(conn)
         migrate_existing_data(conn)
 
         print()
