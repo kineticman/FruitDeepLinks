@@ -27,6 +27,10 @@ services:
       - CHANNELS_DVR_IP=192.168.86.72
       - CHANNELS_SOURCE_NAME=appletvdeeper
     volumes:
+      # Code and scripts (ADDED - needed for server to run)
+      - ./bin:/app/bin
+      # Templates for web UI (ADDED - needed for refactored server)
+      - ./templates:/app/templates
       # Persistent database and output files
       - ./data:/app/data
       - ./out:/app/out
@@ -43,11 +47,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    # Network mode - use host if you need access to other local services
-    # network_mode: host
-    # Or use bridge with port mapping if running a web server
-    # ports:
-    #   - "6655:6655"
 networks:
   default:
     name: fruitdeeplinks_network

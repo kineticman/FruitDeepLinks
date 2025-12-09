@@ -69,57 +69,37 @@ def concretize_apple_image(url_template: Optional[str],
 def select_best_apple_image(images: Dict[str, Any]) -> Optional[str]:
     """Pick a hero image for Apple Sports events.
 
-    Preference (expanded with more fallbacks):
+    Preference:
       1) Versus-style 'gen/...Sports.TVAPo...' (usually shelfItemImagePost)
       2) Live tile (shelfItemImageLive)
-      3) Regular shelf images (shelfItemImage)
-      4) Logo fallback (shelfImageLogo)
-      5) Any other image with reasonable dimensions
+      3) Logo fallback (shelfImageLogo)
     """
     if not images:
         return None
 
-    def extract_url(img_obj):
-        """Extract URL from image object (handles dict, str, or nested formats)"""
-        if isinstance(img_obj, str):
-            return img_obj
-        if isinstance(img_obj, dict):
-            return img_obj.get("url") or img_obj.get("href")
-        return None
+    # 1) Versus-style template
+    post = images.get("shelfItemImagePost")
+    if isinstance(post, dict):
+        url = post.get("url")
+        if isinstance(url, str) and "Sports.TVAPo" in url:
+            concrete = concretize_apple_image(url)
+            if concrete:
+                return concrete
 
-    # Priority list - try these in order
-    priority_keys = [
-        ("shelfItemImagePost", lambda u: "Sports.TVAP" in u),  # Versus-style (best) - accepts TVAPo, TVAPrM, etc
-        ("shelfItemImage", lambda u: "Sports.TVAP" in u),  # Regular shelf with sports format
-        ("shelfItemImageLive", None),  # Live tile
-        ("shelfItemImage", None),  # Regular shelf image (any format)
-        ("shelfImageLogo", None),  # Logo
-        ("shelfImage", None),  # Generic shelf
-        ("hero", None),  # Hero image
-        ("posterArt", None),  # Poster
-        ("scene169", None),  # 16:9 scene
-        ("landscape", None),  # Landscape format
-    ]
+    # 2) Live tile
+    live = images.get("shelfItemImageLive")
+    if isinstance(live, dict):
+        url = live.get("url")
+        if isinstance(url, str):
+            concrete = concretize_apple_image(url)
+            if concrete:
+                return concrete
 
-    for key, condition in priority_keys:
-        img_obj = images.get(key)
-        if img_obj:
-            url = extract_url(img_obj)
-            if url and isinstance(url, str):
-                # Apply condition if present
-                if condition and not condition(url):
-                    continue
-                concrete = concretize_apple_image(url)
-                if concrete:
-                    return concrete
-
-    # Last resort: try any image in the dict
-    for key, img_obj in images.items():
-        url = extract_url(img_obj)
-        if url and isinstance(url, str):
-            # Skip if it's clearly a logo or icon (usually small)
-            if any(skip in key.lower() for skip in ['logo', 'icon', 'badge', 'thumbnail']):
-                continue
+    # 3) Logo fallback
+    logo = images.get("shelfImageLogo")
+    if isinstance(logo, dict):
+        url = logo.get("url")
+        if isinstance(url, str):
             concrete = concretize_apple_image(url)
             if concrete:
                 return concrete
@@ -275,30 +255,10 @@ def map_apple_to_fruit(apple_event: Dict[str, Any], provider_prefix: str = "appl
     provider_normalized = normalize_provider(channel_name)
     images_struct = event.get("images") or {}
     hero_image_url = select_best_apple_image(images_struct)
-    
-    # Fallback: if no event image, try competitor team logos
-    if not hero_image_url:
-        competitors = event.get("competitors", [])
-        for comp in competitors:
-            if not isinstance(comp, dict):
-                continue
-            comp_images = comp.get("images") or {}
-            if comp_images:
-                # Try team logos first
-                for key in ["teamLogoDark", "teamLogoLight", "teamLogo"]:
-                    img_obj = comp_images.get(key)
-                    if img_obj:
-                        url = img_obj.get("url") if isinstance(img_obj, dict) else (img_obj if isinstance(img_obj, str) else None)
-                        if url:
-                            hero_image_url = concretize_apple_image(url)
-                            if hero_image_url:
-                                break
-            if hero_image_url:
-                break
-    
     # Genres/Classification
     sport = event.get("sport_name"); league = event.get("league_name")
-    genres = [g for g in [sport, league] if g]
+    # genres should only contain sports, not leagues (leagues go in classification)
+    genres = [sport] if sport else []
     classification = []
     if sport: classification.append({"type": "sport", "value": sport})
     if league: classification.append({"type": "league", "value": league})

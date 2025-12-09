@@ -1,0 +1,125 @@
+<html>
+<head>
+    <title>FruitDeepLinks API Helper</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #020617;
+            color: #e2e8f0;
+            padding: 20px;
+        }
+        a { color: #38bdf8; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 { color: #60a5fa; margin-bottom: 4px; }
+        .subtitle { color: #94a3b8; margin-bottom: 20px; }
+        .card {
+            background: #020617;
+            border: 1px solid #1f2937;
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin-bottom: 16px;
+        }
+        .card h2 { font-size: 18px; margin-bottom: 8px; color: #f97316; }
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+            font-size: 13px;
+            background: #020617;
+            padding: 2px 4px;
+            border-radius: 4px;
+        }
+        pre {
+            background: #020617;
+            padding: 8px 10px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 13px;
+            border: 1px solid #1f2937;
+        }
+        .tag {
+            display: inline-block;
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-right: 6px;
+            margin-bottom: 4px;
+            background: #111827;
+            border: 1px solid #1f2937;
+            color: #a5b4fc;
+        }
+        .small { font-size: 13px; color: #9ca3af; }
+        .back-link { margin-bottom: 16px; display: inline-block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">â¬… Back to Admin Dashboard</a>
+        <h1>ðŸŽ FruitDeepLinks API Helper</h1>
+        <p class="subtitle">Quick reference for common HTTP endpoints.</p>
+
+        <div class="card">
+            <h2>Health &amp; Status</h2>
+            <div class="small">
+                <span class="tag">GET</span><code>/health</code> &mdash; basic health probe<br>
+                <span class="tag">GET</span><code>/api/status</code> &mdash; detailed DB + output status
+            </div>
+            <pre>curl "$BASE/health"
+curl "$BASE/api/status"</pre>
+        </div>
+
+        <div class="card">
+            <h2>XMLTV &amp; M3U</h2>
+            <div class="small">
+                <span class="tag">GET</span><code>/xmltv/direct</code><br>
+                <span class="tag">GET</span><code>/m3u/direct</code><br>
+                <span class="tag">GET</span><code>/xmltv/lanes</code><br>
+                <span class="tag">GET</span><code>/m3u/lanes</code>
+            </div>
+            <pre>curl -o direct.xml "$BASE/xmltv/direct"
+curl -o direct.m3u "$BASE/m3u/direct"</pre>
+        </div>
+
+        <div class="card">
+            <h2>Lane What&apos;s On</h2>
+            <div class="small">
+                <span class="tag">GET</span><code>/whatson/&lt;lane&gt;</code> (JSON)<br>
+                <span class="tag">GET</span><code>/whatson/&lt;lane&gt;?include=deeplink</code><br>
+                <span class="tag">GET</span><code>/whatson/&lt;lane&gt;?format=txt&amp;param=deeplink_url</code>
+            </div>
+            <pre># JSON: lane 1, include deeplink fields
+curl "$BASE/whatson/1?include=deeplink"
+
+# Plain text: best deeplink for lane 1
+curl "$BASE/whatson/1?format=txt&amp;param=deeplink_url"</pre>
+        </div>
+
+        <div class="card">
+            <h2>Filters</h2>
+            <div class="small">
+                <span class="tag">GET</span><code>/api/filters</code> &mdash; available values + preferences<br>
+                <span class="tag">GET</span><code>/api/filters/preferences</code><br>
+                <span class="tag">POST</span><code>/api/filters/preferences</code>
+            </div>
+            <pre># Inspect current preferences
+curl "$BASE/api/filters/preferences"
+
+# Update enabled services (example)
+curl -X POST "$BASE/api/filters/preferences" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled_services":["sportscenter","peacock_web"]}'</pre>
+        </div>
+
+        <div class="card">
+            <h2>Logs</h2>
+            <div class="small">
+                <span class="tag">GET</span><code>/api/logs?count=100</code><br>
+                <span class="tag">GET</span><code>/api/logs/stream</code> (SSE)
+            </div>
+            <pre>curl "$BASE/api/logs?count=100"</pre>
+        </div>
+
+        <p class="small">Tip: set <code>BASE=http://HOST:6655</code> in your shell to copy/paste these examples.</p>
+    </div>
+</body>

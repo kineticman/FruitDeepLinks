@@ -26,8 +26,8 @@ PROVIDER_MAP = {
     'gametime': 'Prime Video',
     
     # Fox
-    'foxone': 'FOX Sports',
-    'fsapp': 'FOX Sports',
+    'foxone': 'FOX Sports (App)',
+    'fsapp': 'FOX Sports (Alt)',
     'watchtru': 'truTV',
     'watchtnt': 'TNT',
     
@@ -36,6 +36,7 @@ PROVIDER_MAP = {
     'open.dazn.com': 'DAZN',
     'vixapp': 'ViX',
     'f1tv': 'F1 TV',
+    'nflctv': 'NFL+',
     'nflmobile': 'NFL',
     'videos': 'Apple TV+',
     
@@ -59,6 +60,7 @@ DEFAULT_PROVIDER_PRIORITY = [
     'dazn',             # DAZN
     'vixapp',           # ViX
     'f1tv',             # F1 TV
+    'nflctv',           # NFL+
     'videos',           # Apple TV+
     'cbstve',           # CBS
     'gametime',         # Prime Video (TNF)

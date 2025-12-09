@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Filters & Settings - FruitDeepLinks</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+color: #e2e8f0;
+padding: 20px;
+min-height: 100vh;
+}
+.container { max-width: 1400px; margin: 0 auto; }
+h1 { font-size: 32px; margin-bottom: 10px; }
+.subtitle { color: #94a3b8; margin-bottom: 30px; }
+.nav-bar { margin-bottom: 20px; }
+
+.nav {
+margin-bottom: 30px;
+display: flex;
+gap: 15px;
+}
+.nav a {
+color: #60a5fa;
+text-decoration: none;
+padding: 8px 16px;
+border-radius: 6px;
+background: #1e293b;
+border: 1px solid #334155;
+}
+.nav a:hover { background: #334155; }
+.card {
+background: #1e293b;
+border-radius: 12px;
+padding: 24px;
+margin-bottom: 20px;
+border: 1px solid #334155;
+}
+h2 {
+font-size: 20px;
+margin-bottom: 16px;
+display: flex;
+align-items: center;
+gap: 8px;
+}
+.section-description {
+color: #94a3b8;
+margin-bottom: 20px;
+font-size: 14px;
+}
+.filter-grid {
+display: grid;
+grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+gap: 12px;
+}
+.filter-item {
+background: #0f172a;
+border: 2px solid #334155;
+border-radius: 8px;
+padding: 12px;
+cursor: pointer;
+transition: all 0.2s;
+display: flex;
+align-items: center;
+gap: 12px;
+}
+.filter-item:hover {
+border-color: #3b82f6;
+background: #1e293b;
+}
+.filter-item.enabled {
+border-color: #22c55e;
+background: #14532d;
+}
+.filter-item.disabled {
+border-color: #ef4444;
+background: #7f1d1d;
+}
+.checkbox {
+width: 20px;
+height: 20px;
+border: 2px solid #475569;
+border-radius: 4px;
+display: flex;
+align-items: center;
+justify-content: center;
+flex-shrink: 0;
+}
+.filter-item.enabled .checkbox {
+background: #22c55e;
+border-color: #22c55e;
+}
+.filter-item.disabled .checkbox {
+background: #ef4444;
+border-color: #ef4444;
+}
+.checkbox::after {
+content: 'color: white;
+font-weight: bold;
+display: none;
+}
+.filter-item.enabled .checkbox::after,
+.filter-item.disabled .checkbox::after {
+display: block;
+}
+.filter-item.disabled .checkbox::after {
+content: '';
+}
+.filter-info {
+flex: 1;
+}
+.filter-name {
+font-weight: 600;
+margin-bottom: 4px;
+}
+.filter-count {
+font-size: 12px;
+color: #94a3b8;
+}
+.btn {
+background: #3b82f6;
+color: white;
+border: none;
+padding: 12px 24px;
+border-radius: 6px;
+cursor: pointer;
+font-size: 16px;
+font-weight: 600;
+margin-right: 10px;
+}
+.btn:hover { background: #2563eb; }
+.btn:disabled { background: #475569; cursor: not-allowed; }
+.btn-success { background: #22c55e; }
+.btn-success:hover { background: #16a34a; }
+.actions {
+margin-top: 30px;
+padding-top: 20px;
+border-top: 1px solid #334155;
+display: flex;
+gap: 10px;
+align-items: center;
+}
+.status-message {
+margin-left: auto;
+padding: 8px 16px;
+border-radius: 6px;
+font-size: 14px;
+display: none;
+}
+.status-message.success {
+background: #14532d;
+color: #22c55e;
+border: 1px solid #22c55e;
+}
+.status-message.error {
+background: #7f1d1d;
+color: #ef4444;
+border: 1px solid #ef4444;
+}
+.loading {
+text-align: center;
+padding: 40px;
+color: #94a3b8;
+}
+.stats-summary {
+display: flex;
+gap: 20px;
+margin-bottom: 20px;
+flex-wrap: wrap;
+}
+.stat-box {
+background: #0f172a;
+padding: 12px 20px;
+border-radius: 8px;
+border: 1px solid #334155;
+}
+.stat-label {
+font-size: 12px;
+color: #94a3b8;
+margin-bottom: 4px;
+}
+.stat-value {
+font-size: 24px;
+font-weight: 600;
+color: #60a5fa;
+}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Filters & Settings</h1>
+<p class="subtitle">Configure which services and content types to include in your channels</p>
+
+<div class="nav">
+<a href="/">Back to Dashboard</a>
+</div>
+
+<div class="stats-summary" id="stats-summary">
+<div class="stat-box">
+<div class="stat-label">Streaming Services</div>
+<div class="stat-value" id="stat-providers">-</div>
+</div>
+<div class="stat-box">
+<div class="stat-label">Sports Available</div>
+<div class="stat-value" id="stat-sports">-</div>
+</div>
+<div class="stat-box">
+<div class="stat-label">Leagues Available</div>
+<div class="stat-value" id="stat-leagues">-</div>
+</div>
+</div>
+
+<div class="card">
+<h2>Streaming Services</h2>
+<p class="section-description">
+Select which streaming services you have subscriptions to. Only events available on your selected services will be included in generated playlists.
+<strong>Green = Enabled</strong> (will be included) | <strong>Red = Disabled</strong> (will be excluded)
+</p>
+<div id="providers-loading" class="loading">Loading services...</div>
+<div id="providers-grid" class="filter-grid" style="display: none;"></div>
+</div>
+
+<div class="card">
+<h2>ADB Lane Providers</h2>
+<p class="section-description">
+Configure which providers should expose ADB lanes and how many lanes each gets.
+This is used by ADBTuner integrations. Changes here do not affect your normal Channels DVR view.
+</p>
+<div id="provider-lanes-loading" class="loading">Loading provider lanes...</div>
+<div id="provider-lanes-empty" class="loading" style="display: none;">No providers found. Run a refresh first.</div>
+<div id="provider-lanes-table-wrapper" style="display: none; overflow-x: auto;">
+<table class="provider-lanes-table">
+<thead>
+<tr>
+<th style="min-width: 140px;">Provider Code</th>
+<th style="min-width: 180px;">Name</th>
+<th style="min-width: 80px; text-align: right;">Events</th>
+<th style="min-width: 120px; text-align: center;">ADB Enabled</th>
+<th style="min-width: 120px;">ADB Lanes</th>
+</tr>
+</thead>
+<tbody id="provider-lanes-tbody"></tbody>
+</table>
+</div>
+</div>
+
+<div class="card">
+<h2>Sports Filter</h2>
+<p class="section-description">
+Hide sports you're not interested in. Disabled sports will be excluded from your channels.
+</p>
+<div id="sports-loading" class="loading">Loading sports...</div>
+<div id="sports-grid" class="filter-grid" style="display: none;"></div>
+</div>
+
+<div class="card">
+<h2>Leagues Filter</h2>
+<p class="section-description">
+Hide specific leagues or competitions. Disabled leagues will be excluded from your channels.
+</p>
+<div id="leagues-loading" class="loading">Loading leagues...</div>
+<div id="leagues-grid" class="filter-grid" style="display: none;"></div>
+</div>
+
+<div class="actions">
+<button class="btn btn-success" onclick="savePreferences()">Save Settings</button>
+<button class="btn" style="background: #f59e0b;" onclick="applyFilters()"> Apply Filters Now</button>
+<button class="btn" onclick="resetToDefaults()">Reset to Defaults</button>
+<div class="status-message" id="status-message"></div>
+</div>
+</div>
+
+<script>
+let currentPreferences = {
+enabled_services: [],
+disabled_sports: [],
+disabled_leagues: []
+};
+
+let availableFilters = {
+providers: [],
+sports: [],
+leagues: []
+};
+
+let providerLanes = [];
+
+
+async function loadFilters() {
+try {
+const res = await fetch('/api/filters');
+const data = await res.json();
+
+availableFilters = data.filters;
+currentPreferences = data.preferences;
+
+// If no enabled services, default to ALL enabled
+if (currentPreferences.enabled_services.length === 0) {
+currentPreferences.enabled_services = availableFilters.providers.map(p => p.scheme);
+}
+
+renderProviders();
+renderSports();
+renderLeagues();
+updateStats();
+loadProviderLanes();
+
+} catch (err) {
+console.error('Failed to load filters:', err);
+showStatus('Failed to load filters', 'error');
+}
+}
+
+
+async function loadProviderLanes() {
+const loading = document.getElementById('provider-lanes-loading');
+const empty = document.getElementById('provider-lanes-empty');
+const wrapper = document.getElementById('provider-lanes-table-wrapper');
+const tbody = document.getElementById('provider-lanes-tbody');
+
+if (!loading || !wrapper || !tbody) {
+return;
+}
+
+loading.style.display = 'block';
+empty.style.display = 'none';
+wrapper.style.display = 'none';
+tbody.innerHTML = '';
+
+try {
+const res = await fetch('/api/provider_lanes');
+if (!res.ok) {
+loading.textContent = 'Failed to load provider lanes.';
+return;
+}
+const data = await res.json();
+providerLanes = Array.isArray(data.providers) ? data.providers : [];
+renderProviderLanes();
+} catch (err) {
+console.error('Error loading provider lanes', err);
+loading.textContent = 'Error loading provider lanes.';
+}
+}
+
+function getProviderMeta(code) {
+if (!availableFilters || !Array.isArray(availableFilters.providers)) {
+return { name: code, count: 0 };
+}
+const match = availableFilters.providers.find(p => p.scheme === code);
+if (!match) {
+return { name: code, count: 0 };
+}
+return { name: match.name || code, count: match.count || 0 };
+}
+
+function renderProviderLanes() {
+const loading = document.getElementById('provider-lanes-loading');
+const empty = document.getElementById('provider-lanes-empty');
+const wrapper = document.getElementById('provider-lanes-table-wrapper');
+const tbody = document.getElementById('provider-lanes-tbody');
+
+if (!loading || !wrapper || !tbody) {
+return;
+}
+
+if (!providerLanes || providerLanes.length === 0) {
+loading.style.display = 'none';
+empty.style.display = 'block';
+wrapper.style.display = 'none';
+return;
+}
+
+tbody.innerHTML = providerLanes.map(row => {
+const code = row.provider_code;
+const enabled = row.adb_enabled ? 1 : 0;
+const laneCount = row.adb_lane_count || 0;
+const meta = getProviderMeta(code);
+const safeCode = String(code).replace(/"/g, '&quot;');
+
+return `
+<tr>
+<td><code>${safeCode}</code></td>
+<td>${meta.name}</td>
+<td style="text-align: right;">${meta.count}</td>
+<td style="text-align: center;">
+<input type="checkbox"
+${enabled ? 'checked' : ''}
+onchange="toggleProviderLane('${safeCode}', this.checked)">
+</td>
+<td>
+<input type="number"
+min="0"
+value="${laneCount}"
+onchange="updateProviderLaneCount('${safeCode}', this.value)">
+</td>
+</tr>
+`;
+}).join('');
+
+loading.style.display = 'none';
+empty.style.display = 'none';
+wrapper.style.display = 'block';
+}
+
+function toggleProviderLane(code, isChecked) {
+providerLanes = providerLanes.map(row => {
+if (row.provider_code === code) {
+return Object.assign({}, row, {
+adb_enabled: isChecked ? 1 : 0
+});
+}
+return row;
+});
+}
+
+function updateProviderLaneCount(code, value) {
+const num = parseInt(value, 10);
+const laneCount = Number.isFinite(num) && num >= 0 ? num : 0;
+providerLanes = providerLanes.map(row => {
+if (row.provider_code === code) {
+return Object.assign({}, row, {
+adb_lane_count: laneCount
+});
+}
+return row;
+});
+}
+
+function renderProviders() {
+const grid = document.getElementById('providers-grid');
+const loading = document.getElementById('providers-loading');
+
+if (availableFilters.providers.length === 0) {
+loading.textContent = 'No streaming services found. Run a refresh first.';
+return;
+}
+
+grid.innerHTML = availableFilters.providers.map(provider => {
+const isEnabled = currentPreferences.enabled_services.includes(provider.scheme);
+return `
+<div class="filter-item ${isEnabled ? 'enabled' : 'disabled'}" 
+onclick="toggleProvider('${provider.scheme}')">
+<div class="checkbox"></div>
+<div class="filter-info">
+<div class="filter-name">${provider.name}</div>
+<div class="filter-count">${provider.count} events</div>
+</div>
+</div>
+`;
+}).join('');
+
+loading.style.display = 'none';
+grid.style.display = 'grid';
+}
+
+function renderSports() {
+const grid = document.getElementById('sports-grid');
+const loading = document.getElementById('sports-loading');
+
+if (availableFilters.sports.length === 0) {
+loading.textContent = 'No sports data found.';
+return;
+}
+
+grid.innerHTML = availableFilters.sports.map(sport => {
+const isDisabled = currentPreferences.disabled_sports.includes(sport.name);
+return `
+<div class="filter-item ${isDisabled ? 'disabled' : 'enabled'}" 
+onclick="toggleSport(\`${sport.name}\`)">
+<div class="checkbox"></div>
+<div class="filter-info">
+<div class="filter-name">${sport.name}</div>
+<div class="filter-count">${sport.count} events</div>
+</div>
+</div>
+`;
+}).join('');
+
+loading.style.display = 'none';
+grid.style.display = 'grid';
+}
+
+function renderLeagues() {
+const grid = document.getElementById('leagues-grid');
+const loading = document.getElementById('leagues-loading');
+
+if (availableFilters.leagues.length === 0) {
+loading.textContent = 'No leagues data found.';
+return;
+}
+
+grid.innerHTML = availableFilters.leagues.map(league => {
+const isDisabled = currentPreferences.disabled_leagues.includes(league.name);
+return `
+<div class="filter-item ${isDisabled ? 'disabled' : 'enabled'}" 
+onclick="toggleLeague(\`${league.name}\`)">
+<div class="checkbox"></div>
+<div class="filter-info">
+<div class="filter-name">${league.name}</div>
+<div class="filter-count">${league.count} events</div>
+</div>
+</div>
+`;
+}).join('');
+
+loading.style.display = 'none';
+grid.style.display = 'grid';
+}
+
+function toggleProvider(scheme) {
+const index = currentPreferences.enabled_services.indexOf(scheme);
+if (index > -1) {
+currentPreferences.enabled_services.splice(index, 1);
+} else {
+currentPreferences.enabled_services.push(scheme);
+}
+renderProviders();
+}
+
+function toggleSport(name) {
+const index = currentPreferences.disabled_sports.indexOf(name);
+if (index > -1) {
+currentPreferences.disabled_sports.splice(index, 1);
+} else {
+currentPreferences.disabled_sports.push(name);
+}
+renderSports();
+}
+
+function toggleLeague(name) {
+const index = currentPreferences.disabled_leagues.indexOf(name);
+if (index > -1) {
+currentPreferences.disabled_leagues.splice(index, 1);
+} else {
+currentPreferences.disabled_leagues.push(name);
+}
+renderLeagues();
+}
+
+async function savePreferences() {
+try {
+// Save core filter preferences
+const filtersRes = await fetch('/api/filters/preferences', {
+method: 'POST',
+headers: {'Content-Type': 'application/json'},
+body: JSON.stringify(currentPreferences)
+});
+
+// Save provider lanes configuration
+const lanesPayload = {
+providers: (providerLanes || []).map(row => ({
+provider_code: row.provider_code,
+adb_enabled: row.adb_enabled ? 1 : 0,
+adb_lane_count: row.adb_lane_count || 0
+}))
+};
+
+const lanesRes = await fetch('/api/provider_lanes', {
+method: 'POST',
+headers: {'Content-Type': 'application/json'},
+body: JSON.stringify(lanesPayload)
+});
+
+if (filtersRes.ok && lanesRes.ok) {
+showStatus('Settings saved! Click "Apply Filters Now" to regenerate channels.', 'success');
+} else if (!filtersRes.ok) {
+showStatus(' Failed to save core filter settings', 'error');
+} else {
+showStatus(' Failed to save ADB provider lane settings', 'error');
+}
+} catch (err) {
+console.error('Error saving settings', err);
+showStatus(' Error saving settings', 'error');
+}
+}
+
+async function applyFilters() {
+// Save first, then apply
+try {
+const saveRes = await fetch('/api/filters/preferences', {
+method: 'POST',
+headers: {'Content-Type': 'application/json'},
+body: JSON.stringify(currentPreferences)
+});
+
+if (!saveRes.ok) {
+showStatus(' Failed to save settings', 'error');
+return;
+}
+
+// Now apply filters
+const applyRes = await fetch('/api/apply-filters', {
+method: 'POST',
+headers: {'Content-Type': 'application/json'}
+});
+
+if (applyRes.ok) {
+showStatus(' Applying filters... This takes ~10 seconds. Check dashboard for progress.', 'success');
+
+// Redirect to dashboard after 2 seconds
+setTimeout(() => {
+window.location.href = '/';
+}, 2000);
+} else {
+const data = await applyRes.json();
+showStatus(' ' + (data.error || 'Failed to apply filters'), 'error');
+}
+} catch (err) {
+showStatus(' Error applying filters', 'error');
+}
+}
+
+function resetToDefaults() {
+if (confirm('Reset all filters to defaults? This will enable all services and sports.')) {
+currentPreferences = {
+enabled_services: availableFilters.providers.map(p => p.scheme),
+disabled_sports: [],
+disabled_leagues: []
+};
+renderProviders();
+renderSports();
+renderLeagues();
+showStatus('Reset to defaults. Click Save to apply.', 'success');
+}
+}
+
+function showStatus(message, type) {
+const statusEl = document.getElementById('status-message');
+statusEl.textContent = message;
+statusEl.className = `status-message ${type}`;
+statusEl.style.display = 'block';
+setTimeout(() => {
+statusEl.style.display = 'none';
+}, 5000);
+}
+
+function updateStats() {
+document.getElementById('stat-providers').textContent = availableFilters.providers.length;
+document.getElementById('stat-sports').textContent = availableFilters.sports.length;
+document.getElementById('stat-leagues').textContent = availableFilters.leagues.length;
+}
+
+// Initialize
+loadFilters();
+</script>
+</body>
+</html>
+"""

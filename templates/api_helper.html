@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>FruitDeepLinks API Reference</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body {
+font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+background: #020617;
+color: #e2e8f0;
+padding: 20px;
+line-height: 1.6;
+}
+a { color: #38bdf8; text-decoration: none; }
+a:hover { text-decoration: underline; }
+.container { max-width: 1100px; margin: 0 auto; }
+h1 { color: #60a5fa; margin-bottom: 4px; font-size: 28px; }
+.subtitle { color: #94a3b8; margin-bottom: 24px; font-size: 15px; }
+.section-header {
+color: #fbbf24;
+font-size: 20px;
+margin: 32px 0 16px 0;
+padding-bottom: 8px;
+border-bottom: 2px solid #1f2937;
+}
+.card {
+background: #0f172a;
+border: 1px solid #1e293b;
+border-radius: 8px;
+padding: 18px 22px;
+margin-bottom: 16px;
+}
+.card h2 { 
+font-size: 17px; 
+margin-bottom: 10px; 
+color: #f97316;
+font-weight: 600;
+}
+.description {
+color: #cbd5e1;
+margin-bottom: 12px;
+font-size: 14px;
+line-height: 1.5;
+}
+code {
+font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+font-size: 13px;
+background: #020617;
+padding: 2px 5px;
+border-radius: 4px;
+border: 1px solid #1e293b;
+}
+pre {
+background: #020617;
+padding: 12px 14px;
+border-radius: 6px;
+overflow-x: auto;
+font-size: 13px;
+border: 1px solid #1e293b;
+margin: 10px 0;
+}
+.tag {
+display: inline-block;
+font-size: 11px;
+padding: 3px 7px;
+border-radius: 4px;
+margin-right: 6px;
+margin-bottom: 6px;
+font-weight: 600;
+border: 1px solid;
+}
+.tag-get {
+background: #14532d;
+border-color: #22c55e;
+color: #86efac;
+}
+.tag-post {
+background: #1e3a8a;
+border-color: #3b82f6;
+color: #93c5fd;
+}
+.endpoint-line {
+margin: 6px 0;
+padding-left: 8px;
+}
+.params {
+background: #0a0e1a;
+padding: 10px 12px;
+border-radius: 6px;
+margin: 8px 0;
+font-size: 13px;
+border-left: 3px solid #334155;
+}
+.param-name {
+color: #fbbf24;
+font-weight: 600;
+}
+.note {
+background: #1e1b4b;
+border-left: 3px solid #6366f1;
+padding: 10px 14px;
+margin: 12px 0;
+border-radius: 4px;
+font-size: 13px;
+}
+.note-title {
+color: #a5b4fc;
+font-weight: 600;
+margin-bottom: 4px;
+}
+.back-link { 
+margin-bottom: 20px; 
+display: inline-block;
+padding: 8px 14px;
+background: #1e293b;
+border-radius: 6px;
+border: 1px solid #334155;
+}
+.toc {
+background: #0f172a;
+border: 1px solid #1e293b;
+border-radius: 8px;
+padding: 16px 20px;
+margin-bottom: 24px;
+}
+.toc h3 {
+color: #60a5fa;
+font-size: 16px;
+margin-bottom: 12px;
+}
+.toc a {
+display: block;
+padding: 4px 0;
+color: #94a3b8;
+}
+.toc a:hover {
+color: #38bdf8;
+}
+</style>
+</head>
+<body>
+<div class="container">
+<a href="/" class="back-link"> Back to Admin Dashboard</a>
+
+<h1>FruitDeepLinks API Reference</h1>
+<p class="subtitle">Complete HTTP API documentation for sports event aggregation and streaming.</p>
+
+<div class="toc">
+<h3>Quick Navigation</h3>
+<a href="#core">Core Endpoints (Health, Status, Files)</a>
+<a href="#adb">ADB Lanes API (ADBTuner Integration)</a>
+<a href="#lanes">Virtual Lanes (Multi-Source Channels)</a>
+<a href="#filters">Content Filtering</a>
+<a href="#refresh">Refresh & Admin</a>
+</div>
+
+<!-- CORE ENDPOINTS -->
+<h2 class="section-header" id="core">Core Endpoints</h2>
+
+<div class="card">
+<h2>Health Check</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/health</code>
+</div>
+<p class="description">Basic health probe. Returns <code>{"status": "healthy"}</code> if database exists.</p>
+<pre>curl "$BASE/health"</pre>
+</div>
+
+<div class="card">
+<h2>System Status</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/api/status</code>
+</div>
+<p class="description">Comprehensive system status including database stats, output files, refresh state, and auto-refresh schedule.</p>
+<pre>curl "$BASE/api/status" | jq</pre>
+<div class="params">
+<strong>Returns:</strong> Database stats (event counts, lane counts), file list with sizes/timestamps, refresh status, auto-refresh configuration.
+</div>
+</div>
+
+<div class="card">
+<h2>XMLTV & M3U Downloads</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/xmltv/direct</code> Direct channels XMLTV guide
+</div>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/m3u/direct</code> Direct channels M3U playlist
+</div>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/xmltv/lanes</code> Virtual lanes XMLTV guide
+</div>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/m3u/lanes</code> Virtual lanes M3U playlist
+</div>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/out/&lt;filename&gt;</code> Generic file download (any .xml, .m3u in /out)
+</div>
+<pre># Download direct channels
+curl -o direct.xml "$BASE/xmltv/direct"
+curl -o direct.m3u "$BASE/m3u/direct"
+
+# Download virtual lanes
+curl -o lanes.xml "$BASE/xmltv/lanes"
+curl -o lanes.m3u "$BASE/m3u/lanes"
+
+# Download ADB lanes (global)
+curl -o adb_lanes.xml "$BASE/out/adb_lanes.xml"
+curl -o adb_lanes.m3u "$BASE/out/adb_lanes.m3u"
+
+# Download provider-specific ADB lanes
+curl -o sportscenter.m3u "$BASE/out/adb_lanes_sportscenter.m3u"
+curl -o pplus.m3u "$BASE/out/adb_lanes_pplus.m3u"</pre>
+</div>
+
+<!-- ADB LANES API -->
+<h2 class="section-header" id="adb">ADB Lanes API (ADBTuner Integration)</h2>
+
+<div class="note">
+<div class="note-title"> What are ADB Lanes?</div>
+Each provider (sportscenter, pplus, aiv, max, etc.) gets its own set of "ADB lanes" virtual channels that group events by streaming service. During refresh, the system generates one M3U per provider (<code>adb_lanes_sportscenter.m3u</code>, <code>adb_lanes_pplus.m3u</code>, etc.), and each lane becomes a channel with ID format <code>provider_code + lane_number</code> (e.g., <code>sportscenter01</code>, <code>pplus03</code>).
+</div>
+
+<div class="card">
+<h2>Get Current Deeplink (Primary Tuning Endpoint)</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/api/adb/lanes/&lt;provider_code&gt;/&lt;lane_number&gt;/deeplink</code>
+</div>
+<p class="description">
+Returns the current deeplink for a specific provider lane. This is the primary endpoint for ADBTuner/Channels DVR to get the stream URL for "what's on now" on a given lane.
+</p>
+<div class="params">
+<div><span class="param-name">provider_code</span>: Provider scheme (sportscenter, pplus, aiv, peacock, max, etc.)</div>
+<div><span class="param-name">lane_number</span>: Lane number (1, 2, 3, ...)</div>
+<div><span class="param-name">format</span> (query): <code>json</code> (default) or <code>text</code></div>
+</div>
+<pre># Plain text deeplink (for ADBTuner)
+curl "$BASE/api/adb/lanes/sportscenter/1/deeplink?format=text"
+# Returns: sportscenter://play?contentId=...
+
+# JSON format (for debugging)
+curl "$BASE/api/adb/lanes/sportscenter/1/deeplink?format=json"
+# Returns: {"ok": true, "provider_code": "sportscenter", ...}</pre>
+<div class="note">
+<div class="note-title"> ADBTuner Integration</div>
+Configure each provider as a separate Custom Channels source in Channels DVR:
+<ul style="margin: 8px 0 0 20px; padding: 0;">
+<li>M3U URL: <code>http://SERVER:6655/out/adb_lanes_sportscenter.m3u</code></li>
+<li>Each channel in the M3U points to: <code>/api/adb/lanes/sportscenter/&lt;N&gt;/deeplink?format=text</code></li>
+<li>When you tune to a channel, Channels calls this endpoint and gets the current deeplink</li>
+<li>Repeat for each provider: pplus, aiv, peacock, max, etc.</li>
+</ul>
+</div>
+</div>
+
+<div class="card">
+<h2>Provider Lanes Configuration</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/api/provider_lanes</code>
+</div>
+<div class="endpoint-line">
+<span class="tag tag-post">POST</span>
+<code>/api/provider_lanes</code>
+</div>
+<p class="description">
+View or update per-provider ADB lane configuration. Control which providers are enabled for ADB lanes and how many lanes each gets.
+</p>
+<div class="params">
+<strong>GET returns:</strong> Array of providers with <code>provider_code</code>, <code>adb_enabled</code> (0/1), <code>adb_lane_count</code><br>
+<strong>POST expects:</strong> JSON array or <code>{"providers": [...]}</code> with updated settings
+</div>
+<pre># View current configuration
+curl "$BASE/api/provider_lanes" | jq
+
+# Enable sportscenter with 5 lanes
+curl -X POST "$BASE/api/provider_lanes" \
+-H "Content-Type: application/json" \
+-d '{
+"providers": [
+{"provider_code": "sportscenter", "adb_enabled": 1, "adb_lane_count": 5},
+{"provider_code": "pplus", "adb_enabled": 1, "adb_lane_count": 3}
+]
+}'</pre>
+<div class="note">
+<div class="note-title"> Configuration Tip</div>
+Set <code>adb_lane_count</code> based on how many concurrent events you typically have per provider. More lanes = better handling of overlapping events, but more channels in your EPG.
+</div>
+</div>
+
+<!-- VIRTUAL LANES -->
+<h2 class="section-header" id="lanes">Virtual Lanes (Multi-Source Channels)</h2>
+
+<div class="note">
+<div class="note-title"> What are Virtual Lanes?</div>
+Virtual lanes are multi-source channels that automatically schedule events across fixed channels (like a TV network). Events are assigned to lanes to minimize conflicts, with placeholder blocks filling gaps. Unlike ADB lanes (grouped by provider), virtual lanes mix all providers.
+</div>
+
+<div class="card">
+<h2>List All Lanes</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/api/lanes</code>
+</div>
+<p class="description">List all virtual lanes with event counts and current programming.</p>
+<pre>curl "$BASE/api/lanes" | jq</pre>
+</div>
+
+<div class="card">
+<h2>Lane Schedule</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/api/lanes/&lt;lane_id&gt;/schedule</code>
+</div>
+<p class="description">Get current and upcoming 10 events for a specific lane.</p>
+<pre>curl "$BASE/api/lanes/1/schedule" | jq</pre>
+</div>
+
+<div class="card">
+<h2>What's On (Single Lane)</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/whatson/&lt;lane_id&gt;</code>
+</div>
+<p class="description">Get what's currently playing on a specific virtual lane.</p>
+<div class="params">
+<div><span class="param-name">include</span>: Add <code>?include=deeplink</code> to include deeplink fields</div>
+<div><span class="param-name">format</span>: <code>json</code> (default) or <code>txt</code></div>
+<div><span class="param-name">param</span>: For txt format, choose <code>event_uid</code>, <code>deeplink_url</code>, or <code>deeplink_url_full</code></div>
+</div>
+<pre># JSON with deeplink
+curl "$BASE/whatson/1?include=deeplink" | jq
+
+# Plain text deeplink
+curl "$BASE/whatson/1?format=txt&param=deeplink_url"</pre>
+</div>
+
+<div class="card">
+<h2>What's On (All Lanes)</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/whatson/all</code>
+</div>
+<p class="description">Get current status across all virtual lanes at once.</p>
+<pre># All lanes with deeplinks
+curl "$BASE/whatson/all?include=deeplink" | jq
+
+# Specific timestamp
+curl "$BASE/whatson/all?at=2025-12-09T20:00:00" | jq</pre>
+</div>
+
+<!-- FILTERS -->
+<h2 class="section-header" id="filters">Content Filtering</h2>
+
+<div class="card">
+<h2>Available Filters</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/api/filters</code>
+</div>
+<p class="description">Get all available streaming services, sports, and leagues with event counts, plus current user preferences.</p>
+<pre>curl "$BASE/api/filters" | jq</pre>
+</div>
+
+<div class="card">
+<h2>User Filter Preferences</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/api/filters/preferences</code>
+</div>
+<div class="endpoint-line">
+<span class="tag tag-post">POST</span>
+<code>/api/filters/preferences</code>
+</div>
+<p class="description">View or update content filtering preferences. Control which services, sports, and leagues appear in generated playlists.</p>
+<div class="params">
+<div><span class="param-name">enabled_services</span>: Array of service codes to include (empty = all enabled)</div>
+<div><span class="param-name">disabled_sports</span>: Array of sports to exclude</div>
+<div><span class="param-name">disabled_leagues</span>: Array of leagues to exclude</div>
+</div>
+<pre># View current preferences
+curl "$BASE/api/filters/preferences" | jq
+
+# Update - enable only ESPN+ and Peacock
+curl -X POST "$BASE/api/filters/preferences" \
+-H "Content-Type: application/json" \
+-d '{
+"enabled_services": ["sportsonespn", "peacock", "peacock_web"],
+"disabled_sports": ["Cricket"],
+"disabled_leagues": ["WNBA"]
+}'</pre>
+</div>
+
+<div class="card">
+<h2>Apply Filters</h2>
+<div class="endpoint-line">
+<span class="tag tag-post">POST</span>
+<code>/api/apply-filters</code>
+</div>
+<p class="description">Regenerate exports with current filter settings (skips scraping, just rebuilds lanes and exports).</p>
+<pre>curl -X POST "$BASE/api/apply-filters"</pre>
+<div class="note">
+<div class="note-title"> Quick Apply</div>
+Use this after changing filter preferences to immediately regenerate playlists without waiting for a full refresh (~10 seconds vs. ~5 minutes).
+</div>
+</div>
+
+<!-- REFRESH & ADMIN -->
+<h2 class="section-header" id="refresh">Refresh & Admin</h2>
+
+<div class="card">
+<h2>Trigger Manual Refresh</h2>
+<div class="endpoint-line">
+<span class="tag tag-post">POST</span>
+<code>/api/refresh</code>
+</div>
+<p class="description">Start a manual refresh of the entire pipeline (scrape import build export).</p>
+<div class="params">
+<div><span class="param-name">skip_scrape</span>: Boolean, set to <code>true</code> to skip scraping and reuse existing data</div>
+</div>
+<pre># Full refresh
+curl -X POST "$BASE/api/refresh" \
+-H "Content-Type: application/json"
+
+# Skip scraping (faster, reuses data)
+curl -X POST "$BASE/api/refresh" \
+-H "Content-Type: application/json" \
+-d '{"skip_scrape": true}'</pre>
+</div>
+
+<div class="card">
+<h2>Auto-Refresh Settings</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/api/auto-refresh</code>
+</div>
+<div class="endpoint-line">
+<span class="tag tag-post">POST</span>
+<code>/api/auto-refresh</code>
+</div>
+<p class="description">View or update daily auto-refresh schedule.</p>
+<div class="params">
+<div><span class="param-name">enabled</span>: Boolean, enable/disable auto-refresh</div>
+<div><span class="param-name">time</span>: String in <code>HH:MM</code> format (24-hour, local time)</div>
+</div>
+<pre># View current schedule
+curl "$BASE/api/auto-refresh" | jq
+
+# Enable daily refresh at 2:30 AM
+curl -X POST "$BASE/api/auto-refresh" \
+-H "Content-Type: application/json" \
+-d '{"enabled": true, "time": "02:30"}'</pre>
+</div>
+
+<div class="card">
+<h2>Logs</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/api/logs</code>
+</div>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/api/logs/stream</code>
+</div>
+<p class="description">View recent logs or stream real-time logs via Server-Sent Events.</p>
+<div class="params">
+<div><span class="param-name">count</span>: Number of recent log lines to return (default: 100, max: 1000)</div>
+</div>
+<pre># Get last 100 logs
+curl "$BASE/api/logs?count=100"
+
+# Stream live logs (SSE)
+curl -N "$BASE/api/logs/stream"</pre>
+</div>
+
+<div style="margin-top: 40px; padding: 20px; background: #0f172a; border-radius: 8px; border: 1px solid #1e293b;">
+<p style="color: #94a3b8; font-size: 13px; margin: 0;">
+<strong style="color: #60a5fa;"> Quick Start Tip:</strong> 
+Set <code>BASE=http://YOUR_SERVER:6655</code> as an environment variable to use these curl examples directly.
+For ADBTuner integration, use the per-provider M3U files (<code>/out/adb_lanes_&lt;provider&gt;.m3u</code>) 
+and the deeplink endpoint will handle "what's on now" automatically.
+</p>
+</div>
+</div>
+</body>
+</html>
