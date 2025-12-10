@@ -224,38 +224,43 @@ def get_logical_service_priority(service_code: str) -> int:
     Used for selecting best playable when multiple options available.
     """
     PRIORITY_MAP = {
-        # Premium sports services
+        # Premium sports services (highest priority)
         'sportsonespn': 0,
+        'sportscenter': 0,  # ESPN app - same as sportsonespn
         'peacock': 1,
         'peacock_web': 2,  # Web version slightly lower priority
         
-        # General streaming
+        # General streaming (prefer direct services)
         'pplus': 3,
-        'aiv': 4,
-        'max': 5,
+        'max': 4,
         
         # Sports-specific
-        'cbssportsapp': 6,
-        'cbstve': 7,
-        'nbcsportstve': 8,
-        'foxone': 9,
-        'fsapp': 10,
+        'cbssportsapp': 5,
+        'cbstve': 6,
+        'nbcsportstve': 7,
+        'foxone': 8,
+        'fsapp': 9,
         
         # Apple services
-        'apple_mls': 11,
-        'apple_mlb': 12,
-        'apple_nba': 13,
-        'apple_nhl': 14,
-        'apple_other': 15,
+        'apple_mls': 10,
+        'apple_mlb': 11,
+        'apple_nba': 12,
+        'apple_nhl': 13,
+        'apple_other': 14,
         
         # Niche/specialty
-        'dazn': 16,
-        'open.dazn.com': 17,
-        'f1tv': 18,
-        'vixapp': 19,
-        'nflctv': 20,
-        'watchtru': 21,
-        'watchtnt': 22,
+        'dazn': 15,
+        'open.dazn.com': 16,
+        'f1tv': 17,
+        'vixapp': 18,
+        'nflctv': 19,
+        'watchtru': 20,
+        'watchtnt': 21,
+        
+        # Amazon aggregator services (deprioritized - often redirect to other services)
+        # These should only be used when no direct service deeplink is available
+        'aiv': 25,        # Amazon Prime Video (was 4, now 25)
+        'gametime': 26,   # Prime Video TNF (new, low priority)
         
         # Generic web (lowest priority)
         'https': 30,

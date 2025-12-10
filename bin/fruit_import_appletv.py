@@ -402,6 +402,16 @@ def extract_playables(apple_event: Dict, event_id: str) -> List[Tuple]:
     from datetime import datetime, timezone
     now_utc = datetime.now(timezone.utc).isoformat()
     
+    # Try to import logical service mapper for priority calculation
+    try:
+        from logical_service_mapper import (
+            get_logical_service_for_playable,
+            get_logical_service_priority
+        )
+        LOGICAL_SERVICES_AVAILABLE = True
+    except ImportError:
+        LOGICAL_SERVICES_AVAILABLE = False
+    
     # Handle dict format (most common after normalization)
     if isinstance(playables_data, dict):
         playables_list = list(playables_data.values())
@@ -433,6 +443,26 @@ def extract_playables(apple_event: Dict, event_id: str) -> List[Tuple]:
         title = playable.get("displayName") or playable.get("title") or playable.get("name")
         content_id = playable.get("content_id") or playable.get("contentId")
         
+        # Calculate priority using logical service mapper if available
+        priority = 0  # Default fallback
+        if LOGICAL_SERVICES_AVAILABLE:
+            try:
+                # Note: We can't pass conn here since we don't have it in this function
+                # For Apple TV league detection, that will happen during backfill or
+                # can be enhanced later. For now, we get the provider-based priority.
+                logical_service = get_logical_service_for_playable(
+                    provider=provider,
+                    deeplink_play=deeplink_play,
+                    deeplink_open=deeplink_open,
+                    playable_url=playable_url,
+                    event_id=event_id,
+                    conn=None  # Will use basic URL-based detection
+                )
+                priority = get_logical_service_priority(logical_service)
+            except Exception as e:
+                # Fallback to 0 if priority calculation fails
+                priority = 0
+        
         result.append((
             event_id,
             playable_id,
@@ -442,7 +472,7 @@ def extract_playables(apple_event: Dict, event_id: str) -> List[Tuple]:
             playable_url,
             title,
             content_id,
-            0,  # priority - will be set by provider_utils
+            priority,  # Now using calculated priority
             now_utc
         ))
     

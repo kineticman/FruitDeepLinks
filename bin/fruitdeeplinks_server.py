@@ -54,12 +54,87 @@ try:
     from logical_service_mapper import (
         get_all_logical_services_with_counts,
         get_service_display_name as get_logical_service_display_name,
+        get_logical_service_for_playable,
     )
 
     LOGICAL_SERVICES_AVAILABLE = True
 except ImportError:
     LOGICAL_SERVICES_AVAILABLE = False
     print("Warning: logical_service_mapper not available, using basic provider grouping")
+
+
+def get_service_counts_with_net_new(conn):
+    """
+    Get service counts with special "net new" logic for aggregators.
+    
+    Aggregator services (aiv, gametime) show only exclusive events.
+    Direct services show total events available.
+    
+    Returns:
+        Dict mapping service_code -> {'count': int, 'is_aggregator': bool}
+    """
+    from collections import defaultdict
+    
+    # Services that are aggregators
+    AGGREGATOR_SERVICES = {'aiv', 'gametime'}
+    
+    cur = conn.cursor()
+    
+    # Get all playables for future events
+    cur.execute("""
+        SELECT DISTINCT 
+            p.event_id, 
+            p.provider,
+            p.deeplink_play,
+            p.deeplink_open,
+            p.playable_url
+        FROM playables p
+        JOIN events e ON p.event_id = e.id
+        WHERE e.end_utc > datetime('now')
+    """)
+    
+    # Build a map of event_id -> set of logical services
+    event_services = defaultdict(set)
+    for row in cur.fetchall():
+        event_id = row[0]
+        provider = row[1]
+        deeplink_play = row[2]
+        deeplink_open = row[3]
+        playable_url = row[4]
+        
+        if LOGICAL_SERVICES_AVAILABLE:
+            # Map to logical service
+            logical_service = get_logical_service_for_playable(
+                provider=provider,
+                deeplink_play=deeplink_play,
+                deeplink_open=deeplink_open,
+                playable_url=playable_url,
+                event_id=event_id,
+                conn=conn
+            )
+        else:
+            # Fallback to raw provider
+            logical_service = provider
+        
+        event_services[event_id].add(logical_service)
+    
+    # Count events per logical service
+    service_data = defaultdict(lambda: {'count': 0, 'is_aggregator': False})
+    
+    for event_id, services in event_services.items():
+        for service in services:
+            is_aggregator = service in AGGREGATOR_SERVICES
+            
+            # For aggregators: only count if it's the ONLY service
+            if is_aggregator:
+                if len(services) == 1:
+                    service_data[service]['count'] += 1
+                service_data[service]['is_aggregator'] = True
+            else:
+                # For direct services: count all events
+                service_data[service]['count'] += 1
+    
+    return dict(service_data)
 
 # Configuration
 DB_PATH = Path(os.getenv("FRUIT_DB_PATH") or os.getenv("PEACOCK_DB_PATH") or "/app/data/fruit_events.db")
@@ -304,22 +379,30 @@ def get_available_filters():
     try:
         cur = conn.cursor()
 
-        # Get providers using logical service mapping
+        # Get providers using logical service mapping with net new counts
         providers = []
         try:
             if LOGICAL_SERVICES_AVAILABLE:
-                # Use logical service mapper to get web services broken down
-                service_counts = get_all_logical_services_with_counts(conn)
+                # Use net new counting logic for aggregators
+                service_data = get_service_counts_with_net_new(conn)
 
-                for service_code, count in sorted(
-                    service_counts.items(), key=lambda x: -x[1]
+                for service_code, data in sorted(
+                    service_data.items(), key=lambda x: -x[1]['count']
                 ):
+                    count = data['count']
+                    is_aggregator = data['is_aggregator']
                     display_name = get_logical_service_display_name(service_code)
+                    
+                    # Add "(exclusive)" suffix for aggregators
+                    if is_aggregator:
+                        display_name = f"{display_name} (exclusive)"
+                    
                     providers.append(
                         {
                             "scheme": service_code,
                             "name": display_name,
                             "count": count,
+                            "is_aggregator": is_aggregator,
                         }
                     )
             else:
@@ -341,6 +424,7 @@ def get_available_filters():
                             "scheme": provider,
                             "name": display_name,
                             "count": count,
+                            "is_aggregator": False,
                         }
                     )
         except Exception as e:

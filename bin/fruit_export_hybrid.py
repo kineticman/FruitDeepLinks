@@ -343,30 +343,65 @@ def build_direct_xmltv(
                     json.dumps(payload, separators=(",", ":"), ensure_ascii=False), safe=""
                 )
 
-        # Extract actual provider from the deeplink URL
-        provider = "Sports"  # Default fallback
-        if deeplink_url:
+        # Determine human-readable provider for XML
+        # Start from channel-based guess, but prefer logical_service_mapper when available.
+        provider = get_provider_from_channel(channel_name) or "Sports"
+        
+        # Try to determine provider from best available playable, even if filtered out
+        if FILTERING_AVAILABLE:
             try:
-                if FILTERING_AVAILABLE:
-                    from logical_service_mapper import (
-                        get_logical_service_for_playable,
-                        get_service_display_name,
+                from logical_service_mapper import (
+                    get_logical_service_for_playable,
+                    get_service_display_name,
+                )
+                from provider_utils import extract_provider_from_url
+                
+                # If we have a deeplink, use it
+                if deeplink_url:
+                    raw_provider = extract_provider_from_url(deeplink_url) or ""
+                    playable_url = deeplink_url if deeplink_url.startswith("http") else None
+                    
+                    logical_service = get_logical_service_for_playable(
+                        provider=raw_provider,
+                        deeplink_play=deeplink_url,
+                        deeplink_open=None,
+                        playable_url=playable_url,
+                        event_id=event_id,
+                        conn=conn,
                     )
-                    from provider_utils import extract_provider_from_url
-
-                    scheme = extract_provider_from_url(deeplink_url)
-                    if scheme:
+                    if logical_service:
+                        provider = get_service_display_name(logical_service)
+                else:
+                    # No deeplink, but check playables for provider metadata
+                    cur = conn.cursor()
+                    cur.execute("""
+                        SELECT provider, deeplink_play, deeplink_open, playable_url, priority
+                        FROM playables
+                        WHERE event_id = ?
+                        ORDER BY priority DESC
+                        LIMIT 1
+                    """, (event_id,))
+                    playable = cur.fetchone()
+                    
+                    if playable:
+                        raw_provider = (playable["provider"] or "").strip()
+                        deeplink_play = (playable["deeplink_play"] or "").strip()
+                        deeplink_open = (playable["deeplink_open"] or "").strip()
+                        playable_url_str = (playable["playable_url"] or "").strip()
+                        
                         logical_service = get_logical_service_for_playable(
-                            provider=scheme if scheme not in ("http", "https") else scheme,
-                            deeplink_play=deeplink_url,
-                            deeplink_open=None,
-                            playable_url=None,
+                            provider=raw_provider,
+                            deeplink_play=deeplink_play or None,
+                            deeplink_open=deeplink_open or None,
+                            playable_url=playable_url_str or None,
                             event_id=event_id,
                             conn=conn,
                         )
-                        provider = get_service_display_name(logical_service)
-            except Exception:
-                provider = get_provider_from_channel(channel_name)
+                        if logical_service:
+                            provider = get_service_display_name(logical_service)
+            except Exception as e:
+                # Fall back to channel-based provider if mapping fails
+                provider = provider or "Sports"
 
         # Channel element
         chan = ET.SubElement(tv, "channel", id=chan_id)
@@ -433,7 +468,7 @@ def build_direct_xmltv(
         if genres_json:
             try:
                 for g in json.loads(genres_json) or []:
-                    if g and g != provider:
+                    if g and g not in (provider, "Sports"):
                         ET.SubElement(prog, "category").text = str(g)
             except Exception:
                 pass
@@ -516,7 +551,7 @@ def build_direct_m3u(
 
             try:
                 cur.execute(
-                    """SELECT provider, playable_url, deeplink_play, deeplink_open
+                    """SELECT provider, playable_url, deeplink_play, deeplink_open, priority
                            FROM playables
                            WHERE event_id = ?""",
                     (event_id,),
@@ -527,6 +562,56 @@ def build_direct_m3u(
 
             if FILTERING_AVAILABLE and p_rows:
                 deeplink_url = get_best_deeplink_for_event(conn, event_id, enabled_services)
+
+            # Second pass: use logical_service_mapper directly on playables
+            if (
+                not deeplink_url
+                and p_rows
+                and FILTERING_AVAILABLE
+                and enabled_services
+            ):
+                try:
+                    from logical_service_mapper import get_logical_service_for_playable
+
+                    best = None
+                    for prow in p_rows:
+                        raw_provider = (prow["provider"] or "").strip()
+                        playable_url = (prow["playable_url"] or "").strip()
+                        deeplink_play = (prow["deeplink_play"] or "").strip()
+                        deeplink_open = (prow["deeplink_open"] or "").strip()
+
+                        url = deeplink_play or deeplink_open or playable_url
+                        if not url:
+                            continue
+
+                        logical_service = get_logical_service_for_playable(
+                            provider=raw_provider,
+                            deeplink_play=deeplink_play or None,
+                            deeplink_open=deeplink_open or None,
+                            playable_url=playable_url or None,
+                            event_id=event_id,
+                            conn=conn,
+                        )
+                        if not logical_service or logical_service not in enabled_services:
+                            continue
+
+                        prio = 0
+                        try:
+                            if "priority" in prow.keys() and prow["priority"] is not None:
+                                prio = int(prow["priority"])
+                        except Exception:
+                            pass
+
+                        if best is None or prio > best["priority"]:
+                            best = {"url": url, "priority": prio}
+
+                    if best is not None:
+                        deeplink_url = best["url"]
+                        reason = None
+                except Exception:
+                    # Don't break the whole export if mapping fails
+                    pass
+
 
             if not deeplink_url:
                 has_playables = bool(p_rows)
