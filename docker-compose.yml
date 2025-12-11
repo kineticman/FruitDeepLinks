@@ -45,6 +45,9 @@ services:
       - ./data:/app/data
       - ./out:/app/out
       - ./logs:/app/logs
+      - ./templates:/app/templates
+      # Uncomment if you have a static/ directory:
+      # - ./static:/app/static
 
     restart: unless-stopped
 
