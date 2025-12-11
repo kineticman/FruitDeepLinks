@@ -2,10 +2,10 @@
 
 **Universal Sports Aggregator for Channels DVR**
 
-FruitDeepLinks leverages Apple TV's Sports aggregation API to create a unified sports EPG with deeplinks to 18+ streaming services. One guide to rule them all.
+FruitDeepLinks leverages Apple TV's Sports aggregation APIs to build a unified sports EPG with deeplinks to 18+ streaming services. One guide to rule them all.
 
 [![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
-[![Python](https://img.shields.io/badge/python-3.11+-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
 ---
@@ -13,10 +13,11 @@ FruitDeepLinks leverages Apple TV's Sports aggregation API to create a unified s
 ## 🎯 The Problem
 
 Sports streaming is fragmented:
+
 - NFL on Prime Video (Thursday), ESPN+ (Monday), Peacock (Sunday)
 - MLS exclusively on Apple TV
-- College sports scattered across ESPN+, Paramount+, Peacock
-- You have 5 subscriptions but check 5 different apps to find games
+- College sports scattered across ESPN+, Paramount+, Peacock, etc.
+- You have multiple subscriptions but need to check multiple apps just to find games
 
 ## ✨ The Solution
 
@@ -26,37 +27,134 @@ FruitDeepLinks creates virtual TV channels in Channels DVR with deeplinks that l
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Portainer – Recommended)
 
-```bash
-# Clone repository
+These steps assume you already have **Docker** and **Portainer** running on your server.
+
+### 1. Add a Git-backed stack in Portainer
+
+1. Open Portainer in your browser.
+2. Go to **Stacks → Add stack**.
+3. Choose the **Repository** method.
+4. Fill in:
+   - **Name:** `fruitdeeplinks`
+   - **Repository URL:** `https://github.com/kineticman/FruitDeepLinks.git`
+   - **Repository reference:** `main` (or whatever branch you want)
+   - **Compose path:** `docker-compose.yml`
+
+Portainer will clone the repo and use `docker-compose.yml` plus the included `Dockerfile` to build the container image locally.
+
+### 2. Set environment variables in Portainer
+
+Scroll down to the **Environment variables** section for the stack and add these keys.
+
+You can copy/paste this block as a starting point (matches `.env.example`):
+
+```env
+# === REQUIRED: Update these for your setup ===
+SERVER_URL=http://192.168.86.80:6655
+FRUIT_HOST_PORT=6655
+CHANNELS_DVR_IP=192.168.86.80
+CHANNELS_SOURCE_NAME=fruitdeeplinks
+TZ=America/New_York
+
+# === OPTIONAL: Lanes (BETA) & scheduling ===
+FRUIT_LANES=50
+FRUIT_LANE_START_CH=9000
+FRUIT_DAYS_AHEAD=7
+FRUIT_PADDING_MINUTES=45
+FRUIT_PLACEHOLDER_BLOCK_MINUTES=60
+FRUIT_PLACEHOLDER_EXTRA_DAYS=5
+
+AUTO_REFRESH_ENABLED=true
+AUTO_REFRESH_TIME=02:30
+
+# === Scraper & paths (usually fine as-is) ===
+HEADLESS=true
+NO_NETWORK=false
+
+FRUIT_DB_PATH=/app/data/fruit_events.db
+OUT_DIR=/app/out
+LOG_DIR=/app/logs
+LOG_LEVEL=INFO
+```
+
+Notes:
+
+- `SERVER_URL` should be how **you** reach FruitDeepLinks from your LAN (same IP/port you’ll use in your browser).
+- `FRUIT_HOST_PORT` is the host port for the web UI (container always listens on 6655 internally).
+- `CHANNELS_DVR_IP` and `CHANNELS_SOURCE_NAME` are only used for **automatic guide refresh**. If you don’t want auto-refresh, you can leave `CHANNELS_DVR_IP` blank and the script will skip that step.
+- Lanes (`FRUIT_LANES`, `FRUIT_LANE_START_CH`, etc.) are only used if you experiment with the **BETA** lane features.
+
+### 3. Deploy the stack
+
+1. Click **Deploy the stack**.
+2. Wait for Portainer to pull the repo, build the image, and start the container.
+3. Open the dashboard in your browser:
+
+```text
+http://<LAN-IP>:<FRUIT_HOST_PORT>
+# example: http://192.168.86.80:6655
+```
+
+You should see the FruitDeepLinks web UI.
+
+---
+
+## ➕ Alternative: Docker Compose (without Portainer)
+
+If you prefer bare Docker Compose on the host:
+
+```powershell
 git clone https://github.com/kineticman/FruitDeepLinks.git
 cd FruitDeepLinks
 
-# Configure environment
-cp .env.example .env
-# Edit .env with your settings (timezone, server IP, etc.)
+Copy-Item .env.example .env
+# Edit .env to match your LAN IP, timezone, Channels DVR IP, etc.
 
-# Start with Docker Compose
 docker-compose up -d
 
-# Access web dashboard
-open http://localhost:6655
+# Web UI: http://localhost:6655
 ```
 
-### Add to Channels DVR
+Portainer and Docker Compose both use the same `docker-compose.yml`. The only difference is where you manage the environment variables.
 
-1. Go to **Channels DVR → Settings → Sources → Custom Channels**
-2. Add a new source:
-   - **M3U URL (lanes, BETA):** `http://your-server-ip:6655/multisource_lanes.m3u`
-   - **XMLTV URL (lanes, BETA):** `http://your-server-ip:6655/multisource_lanes.xml`
-3. For **direct.m3u** (event-per-channel mode), create a Custom Channels source pointing to:
+---
+
+## 📡 Add to Channels DVR
+
+### Direct Channels (recommended & stable)
+
+Direct channels expose **one channel per event** (great for browsing specific games). This is the most tested and stable path today.
+
+1. In Channels DVR, go to **Settings → Sources → Add Source → Custom Channels**.
+2. Create a new source named e.g. `fruitdeeplinks-direct`:
    - **M3U URL:** `http://your-server-ip:6655/direct.m3u`
    - **XMLTV URL:** `http://your-server-ip:6655/direct.xml`
-4. In that **direct** source, set **Stream Format** to `STRMLINK` (required so deeplinks are passed through correctly).
-5. Refresh guide data in Channels.
+3. In that **direct** source’s settings, set **Stream Format** to **`STRMLINK`**.  
+   This is required so Channels passes the deeplink URL through to your device.
+4. Refresh guide data.
 
-Make sure the **source name in Channels DVR** for your FruitDeepLinks XMLTV source matches `CHANNELS_SOURCE_NAME` in your `.env` (default: `fruitdeeplinks`) so the daily refresh script can auto-refresh the source.
+If you want the daily refresh script to auto-refresh this source, make sure the **XMLTV source name in Channels DVR** matches `CHANNELS_SOURCE_NAME` (default `fruitdeeplinks`).
+
+### Lanes & ADB Provider Lanes (BETA)
+
+> Lanes and ADB provider lanes are **BETA / upcoming features**. API and behavior may still change.
+
+**Lane Channels (multisource_lanes – BETA)**
+
+1. (Optional) Create another Custom Channels source named e.g. `fruitdeeplinks-lanes`.
+2. Use:
+   - **M3U URL (lanes, BETA):** `http://your-server-ip:6655/multisource_lanes.m3u`
+   - **XMLTV URL (lanes, BETA):** `http://your-server-ip:6655/multisource_lanes.xml`
+
+**ADB Provider Lanes (BETA / advanced)**
+
+- Exported lanes per provider for ADBTuner / ChromeCapture workflows.
+- Typically not added directly to Channels; designed for automated capture pipelines.
+- Outputs live under `/app/out` inside the container and are exposed via the web UI.
+
+If you’re unsure, **start with direct channels only** and ignore lanes/ADB until you’re comfortable.
 
 ---
 
@@ -64,35 +162,34 @@ Make sure the **source name in Channels DVR** for your FruitDeepLinks XMLTV sour
 
 ### Premium Sports (18+ Services)
 
-| Service     | Deeplink Type                 | Count* | Priority |
-|------------|-------------------------------|--------|----------|
-| ESPN+      | Native (`sportsonespn://`)    | 623    | ⭐⭐⭐⭐⭐   |
-| Prime Video| Native (`aiv://`)             | 756    | ⭐⭐⭐⭐    |
-| Peacock    | Native + Web                  | 20     | ⭐⭐⭐⭐⭐   |
-| Paramount+ | Native (`pplus://`)           | 282    | ⭐⭐⭐⭐    |
-| CBS Sports | Native (`cbssportsapp://`)    | 291    | ⭐⭐⭐     |
-| NBC Sports | Native (`nbcsportstve://`)    | 4      | ⭐⭐⭐     |
-| FOX Sports | Native (`foxone://`)          | 12     | ⭐⭐⭐     |
-| Max        | Web                           | 19     | ⭐⭐⭐     |
-| Apple MLS  | Web                           | 76**   | ⭐⭐⭐     |
-| Apple MLB  | Web                           | 56**   | ⭐⭐⭐     |
-| DAZN       | Native (`dazn://`)            | 49     | ⭐⭐      |
-| F1 TV      | Web                           | 14     | ⭐⭐      |
-| ViX        | Native (`vixapp://`)          | 74     | ⭐⭐      |
-| NFL+       | Native (`nflctv://`)          | 38     | ⭐⭐      |
-| TNT/truTV  | Native                        | 21     | ⭐⭐      |
+| Service       | Deeplink Type                 | Notes / Status                                      |
+|--------------|-------------------------------|-----------------------------------------------------|
+| ESPN+        | Native (`sportsonespn://`)    | Primary ESPN+ deep links                            |
+| Prime Video  | Native (`aiv://`)             | Amazon sports deep links still being explored       |
+| Peacock      | Native + Web                  | NBC Sports & Peacock events                         |
+| Paramount+   | Native (`pplus://`)           | CBS Sports / Paramount+ competitions                |
+| CBS Sports   | Native (`cbssportsapp://`)    | CBS Sports app deeplinks                            |
+| NBC Sports   | Native (`nbcsportstve://`)    | Regional & national coverage                        |
+| FOX Sports   | Native (`foxone://`)          | FS1/FS2 and Fox Sports content                      |
+| Max          | Web                           | Sports via Max (formerly HBO Max)                   |
+| Apple MLS    | Web                           | Apple TV MLS Season Pass                            |
+| Apple MLB    | Web                           | Apple TV MLB Friday Night Baseball                  |
+| DAZN         | Native (`dazn://`)            | DAZN sports                                         |
+| F1 TV        | Web                           | F1 TV Pro content                                   |
+| ViX          | Native (`vixapp://`)          | Spanish-language sports                             |
+| NFL+         | Native (`nflctv://`)          | NFL+ games & replays                                |
+| TNT/truTV    | Native                        | Turner Sports coverage                              |
 
-\* Event counts from recent snapshot (varies by season)  
-\** Off-season counts lower; peaks during active season
+Actual event counts vary by season and scrape window.
 
 ### Platform Compatibility
 
-| Platform | Deeplink Support | Notes                    |
-|----------|------------------|--------------------------|
-| Fire TV  | ✅ Excellent     | Most deeplinks (Amazon links in progress)|
-| Apple TV | ✅ Excellent     | Native platform support  |
-| Android TV | ✅ Good        | Most deeplinks supported |
-| Roku     | ⚠️ Limited      | Web fallback only        |
+| Platform   | Deeplink Support | Notes                                                                 |
+|-----------|------------------|-----------------------------------------------------------------------|
+| Fire TV   | ✅ Excellent     | Most native deeplinks work. Amazon sports deeplinks still in flux.   |
+| Apple TV  | ✅ Excellent     | Native platform for many providers                                   |
+| Android TV| ✅ Good          | Most deeplinks supported                                             |
+| Roku      | ⚠️ Limited      | Web fallback only for some providers                                 |
 
 ---
 
@@ -102,10 +199,10 @@ Make sure the **source name in Channels DVR** for your FruitDeepLinks XMLTV sour
 
 Configure what you see in the web dashboard:
 
-- **Service Filtering** – Enable only your subscriptions
-- **Sport Filtering** – Hide sports you don't watch
-- **League Filtering** – Hide specific leagues/competitions
-- **Automatic Deeplink Selection** – Uses *your* enabled services
+- **Service Filtering** – Enable only your subscriptions.
+- **Sport Filtering** – Hide sports you don't watch.
+- **League Filtering** – Hide specific leagues/competitions.
+- **Automatic Deeplink Selection** – Uses *your* enabled services and provider priorities.
 
 **Example:** Enable ESPN+ and Peacock → system shows only events available on those services and automatically selects the best deeplink.
 
@@ -114,114 +211,84 @@ Configure what you see in the web dashboard:
 > **Note:** Lanes and ADB provider lanes are **BETA** / upcoming features. Direct channels are the most stable path right now.
 
 **1. Direct Channels** (`direct.m3u`)
-- One channel per event
-- ~100–200 channels
-- Best for browsing specific games
-- Works great with **Stream Format = STRMLINK** in Channels DVR
+
+- One channel per event.
+- ~100–200 channels.
+- Best for browsing specific games.
+- Works great with **Stream Format = STRMLINK** in Channels DVR.
 
 **2. Scheduled Lanes (BETA)** (`multisource_lanes.m3u`)
-- 10–50 rotating channels
-- Events scheduled like traditional TV
-- Best for channel surfing
-- Still under active development; names and behavior may change
+
+- 10–50 rotating channels.
+- Events scheduled like traditional TV.
+- Best for channel surfing.
+- Still under active development; names and behavior may change.
 
 **3. ADB Provider Lanes (BETA / advanced)**
-- Per-provider lane sets exported as XMLTV + M3U
-- Designed for ADBTuner / ChromeCapture workflows
-- Uses `adb_lanes` and `provider_lanes` tables under the hood
-- Consider this experimental for now
+
+- Per-provider lane sets exported as XMLTV + M3U.
+- Designed for ADBTuner / ChromeCapture workflows.
+- Uses `adb_lanes` and `provider_lanes` tables under the hood.
+- Consider this experimental for now.
 
 ### Web Dashboard
 
 Access at `http://your-server-ip:6655`:
 
-- Configure filters with visual toggles
-- Trigger manual refreshes
-- Apply filter changes instantly (~10 seconds)
-- View system stats and logs
-- Download M3U/XMLTV files
+- Configure filters with visual toggles.
+- Trigger manual refreshes.
+- Apply filter changes instantly (~10 seconds).
+- View system stats and logs.
+- Download M3U/XMLTV files.
 
 ---
 
 ## 📋 Requirements
 
 ### Hardware
-- Docker-capable system (Raspberry Pi 4+, NAS, PC, server)
-- 2GB RAM minimum (4GB recommended)
-- 1GB disk space
+
+- Docker-capable system (Raspberry Pi 4+, NAS, PC, server).
+- 2GB RAM minimum (4GB recommended).
+- 1GB disk space.
 
 ### Software
-- Docker + Docker Compose
-- Channels DVR (for playback)
-- Streaming subscriptions (your choice)
+
+- Docker.
+- Portainer or Docker Compose.
+- Channels DVR (for playback).
+- Streaming subscriptions (your choice).
 
 ### Streaming Device
-- Fire TV, Apple TV, or Android TV recommended
-- Roku supported (limited to web streams)
+
+- Fire TV, Apple TV, or Android TV recommended.
+- Roku supported (limited to web streams).
 
 ---
 
-## ⚙️ Configuration
+## ⚙️ Configuration (Summary)
 
-### Core Environment Variables (`.env`)
+These key env vars cover 90% of setups (whether in Portainer or `.env`):
 
-Copy `.env.example` to `.env` and edit:
+```env
+# Network & URLs
+SERVER_URL=http://192.168.86.80:6655
+FRUIT_HOST_PORT=6655
+TZ=America/New_York
 
-```bash
-# --- Basic network & server ---
-SERVER_URL=http://192.168.86.80:6655   # How YOU reach FruitDeepLinks
-FRUIT_HOST_PORT=6655                   # Host port exposed by Docker
-TZ=America/New_York                    # Your timezone
+# Channels DVR integration (optional, but recommended)
+CHANNELS_DVR_IP=192.168.86.80
+CHANNELS_SOURCE_NAME=fruitdeeplinks
 
-# --- Channels DVR integration (optional) ---
-CHANNELS_DVR_IP=192.168.86.80          # Channels DVR LAN IP
-CHANNELS_SOURCE_NAME=fruitdeeplinks    # Name of your Custom Channels source
+# Virtual lanes (BETA)
+FRUIT_LANES=50
+FRUIT_LANE_START_CH=9000
 
-# --- Virtual channels / lanes (BETA) ---
-FRUIT_LANES=50                         # Number of lane channels (10–50)
-FRUIT_LANE_START_CH=9000               # Starting channel number
-FRUIT_DAYS_AHEAD=7
-FRUIT_PADDING_MINUTES=45
-FRUIT_PLACEHOLDER_BLOCK_MINUTES=60
-FRUIT_PLACEHOLDER_EXTRA_DAYS=5
-
-# --- Scraper settings ---
-HEADLESS=true                          # Run Apple TV scraper headless
-NO_NETWORK=false                       # For debugging only
-
-# --- Paths & logging (inside container) ---
-FRUIT_DB_PATH=/app/data/fruit_events.db
-OUT_DIR=/app/out
-LOG_DIR=/app/logs
-LOG_LEVEL=INFO
-
-# --- Auto-refresh schedule ---
+# Auto-refresh
 AUTO_REFRESH_ENABLED=true
-AUTO_REFRESH_TIME=02:30                # Local time daily scrape
+AUTO_REFRESH_TIME=02:30
 ```
 
-See `.env.example` for all options and advanced tuning.
-
-### Portainer: What to Set in the ENV Tab
-
-If you deploy via **Portainer → Stacks → Add Stack** using `docker-compose.yml`, you’ll see an **Environment** section. The most important variables to set there:
-
-- `SERVER_URL` – Use `http://<LAN-IP>:<FRUIT_HOST_PORT>`  
-  - Example: `http://192.168.86.80:6655`
-- `FRUIT_HOST_PORT` – The host port you want (must match any port mapping change)
-- `TZ` – Your timezone (`America/New_York`, `America/Los_Angeles`, etc.)
-- `CHANNELS_DVR_IP` – The LAN IP of your Channels DVR box
-- `CHANNELS_SOURCE_NAME` – The exact source name you created in Channels (default `fruitdeeplinks`)
-- `FRUIT_LANES` – How many “surfable” lanes you want (e.g., 30 or 50, **BETA**)
-- `FRUIT_LANE_START_CH` – The starting channel number (e.g., 9000, **BETA**)
-
-After editing env vars in Portainer:
-
-1. Click **Deploy the stack** / **Update the stack**.
-2. Let the container restart.
-3. Hit `http://<LAN-IP>:<FRUIT_HOST_PORT>` to confirm the dashboard comes up.
-
-You can still keep a `.env` file in the repo for local development; Portainer env overrides take priority inside the container.
+All other values have sensible defaults and can be adjusted later via Portainer or `.env` if needed. Lane-related settings only matter if you turn on the **BETA lanes** feature.
 
 ---
 
@@ -315,30 +382,30 @@ FruitDeepLinks/
 ### Architecture
 
 1. **Scraper** (Selenium + Chrome)
-   - Navigates Apple TV Sports tab
-   - Extracts event metadata and deeplinks
-   - Handles multiple playable sources per event
+   - Navigates Apple TV Sports tab.
+   - Extracts event metadata and deeplinks.
+   - Handles multiple playable sources per event.
 
 2. **Database** (SQLite)
-   - Stores events, playables, and user preferences
-   - Tracks multiple deeplinks per event
-   - Maintains logical service mappings
+   - Stores events, playables, and user preferences.
+   - Tracks multiple deeplinks per event.
+   - Maintains logical service mappings.
 
 3. **Filter Engine**
-   - Applies user preferences (services, sports, leagues)
-   - Selects best deeplink based on priority
-   - Handles web URL mapping (Apple MLS, Max, etc.)
+   - Applies user preferences (services, sports, leagues).
+   - Selects best deeplink based on priority.
+   - Handles web URL mapping (Apple MLS, Max, etc.).
 
 4. **Export Engine**
-   - Generates XMLTV EPG files
-   - Creates M3U playlists with deeplinks
-   - Builds scheduled lane channels (BETA)
-   - Builds provider-specific ADB lanes (BETA)
+   - Generates XMLTV EPG files.
+   - Creates M3U playlists with deeplinks.
+   - Builds scheduled lane channels (BETA).
+   - Builds provider-specific ADB lanes (BETA).
 
 5. **Web Dashboard** (Flask)
-   - Real-time configuration interface
-   - Manual refresh controls
-   - System monitoring
+   - Real-time configuration interface.
+   - Manual refresh controls.
+   - System monitoring.
 
 ### Data Flow
 
@@ -367,31 +434,35 @@ Your Streaming Apps (via Deeplinks)
 ### Example 1: Budget Sports Fan
 
 **Enabled Services:**
-- Prime Video (already have)
-- Peacock Premium ($5.99)
 
-**Result:** ~200 events filtered down to ~40 events
+- Prime Video (already have)
+- Peacock Premium
+
+**Result:** ~200 events filtered down to ~40 events.
 
 ### Example 2: Soccer Enthusiast
 
 **Enabled Services:**
+
 - Paramount+ (Champions League)
 - ViX (Liga MX)
 - Peacock (Premier League)
 
 **Disabled Sports:**
+
 - Basketball, Baseball, Hockey
 
-**Result:** Only soccer events from your services
+**Result:** Only soccer events from your services.
 
 ### Example 3: Premium Everything
 
-**Enabled Services:** All 18
+**Enabled Services:** All 18.
 
 **Disabled Leagues:**
+
 - WNBA, Women's Soccer
 
-**Result:** Full coverage minus specific leagues
+**Result:** Full coverage minus specific leagues.
 
 ---
 
@@ -405,7 +476,7 @@ docker logs fruitdeeplinks
 
 # Common issues:
 # - Port 6655 already in use
-# - Invalid .env file
+# - Invalid env vars in stack
 # - Insufficient memory
 ```
 
@@ -424,10 +495,10 @@ docker exec fruitdeeplinks sqlite3 /app/data/fruit_events.db "SELECT COUNT(*) FR
 
 ### Deeplinks Not Working
 
-- Verify the streaming app is installed on your device
-- Check the app is authenticated (logged in)
-- Test deeplink manually (Fire TV: `adb shell am start -a android.intent.action.VIEW -d "scheme://..."`)
-- Some services require cable/TV provider authentication
+- Verify the streaming app is installed on your device.
+- Check the app is authenticated (logged in).
+- Test deeplink manually (Fire TV: `adb shell am start -a android.intent.action.VIEW -d "scheme://..."`).
+- Some services require cable/TV provider authentication.
 
 ### Web Dashboard Not Loading
 
@@ -443,7 +514,7 @@ docker port fruitdeeplinks
 
 ## 📊 Performance
 
-From real deployment:
+From real deployment (example):
 
 ```text
 Database: 1,483 total events
@@ -461,24 +532,26 @@ Database size: ~15MB
 ## 🗓️ Roadmap
 
 ### Coming Soon
-- [ ] Chrome Capture / AH4C integration
-- [ ] Team-based filtering
-- [ ] Time-of-day filters
-- [ ] Multi-user profiles
+
+- [ ] Chrome Capture / AH4C integration.
+- [ ] Team-based filtering.
+- [ ] Time-of-day filters.
+- [ ] Multi-user profiles.
 
 ### Future
-- [ ] Additional content sources (ESPN+ API, Peacock direct)
-- [ ] Mobile companion app
-- [ ] Plex/Emby support
-- [ ] "Red Zone" style auto-switching
 
-See `ROADMAP.md` for details.
+- [ ] Additional content sources (ESPN+ API, Peacock direct).
+- [ ] Mobile companion app.
+- [ ] Plex/Emby support.
+- [ ] "Red Zone" style auto-switching.
+
+See `ROADMAP.md` for more details as it evolves.
 
 ---
 
 ## 🤝 Contributing
 
-This is currently a private repository. Contributions welcome from invited collaborators.
+This is currently a private repository. Contributions are welcome from invited collaborators.
 
 ### Development Setup
 
@@ -506,9 +579,9 @@ MIT License – see `LICENSE` file for details.
 
 ## 🙏 Acknowledgments
 
-- Apple TV Sports API (reverse-engineered)
-- Channels DVR community
-- All the streaming services for having deeplink support
+- Apple TV Sports APIs (reverse-engineered).
+- Channels DVR community.
+- All the streaming services for having deeplink support.
 
 ---
 
