@@ -542,7 +542,7 @@ See `ROADMAP.md` for more details as it evolves.
 
 ## 🤝 Contributing
 
-This is currently a private repository. Contributions are welcome from invited collaborators.
+This is an early **public beta**. Expect sharp edges and breaking changes.. Contributions are welcome from invited collaborators.
 
 ### Development Setup
 
