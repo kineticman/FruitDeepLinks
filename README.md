@@ -46,44 +46,35 @@ Portainer will clone the repo and use `docker-compose.yml` plus the included `Do
 
 ### 2. Set environment variables in Portainer
 
-Scroll down to the **Environment variables** section for the stack and add these keys.
+Scroll down to the **Environment variables** section for the stack.
 
-You can copy/paste this block as a starting point (matches `.env.example`):
+Most people only need to set these three values:
 
 ```env
-# === REQUIRED: Update these for your setup ===
+# REQUIRED (almost everyone should set these)
 SERVER_URL=http://192.168.86.80:6655
 FRUIT_HOST_PORT=6655
+TZ=America/New_York
+```
+
+If you want extra automation / features, you can add these as well:
+
+```env
+# OPTIONAL (only if you want extra automation/features)
+# Auto Channels DVR guide refresh
 CHANNELS_DVR_IP=192.168.86.80
 CHANNELS_SOURCE_NAME=fruitdeeplinks
-TZ=America/New_York
 
-# === OPTIONAL: Lanes (BETA) & scheduling ===
+# Lanes (BETA) – only needed if you experiment with lane channels
 FRUIT_LANES=50
 FRUIT_LANE_START_CH=9000
-FRUIT_DAYS_AHEAD=7
-FRUIT_PADDING_MINUTES=45
-FRUIT_PLACEHOLDER_BLOCK_MINUTES=60
-FRUIT_PLACEHOLDER_EXTRA_DAYS=5
-
-AUTO_REFRESH_ENABLED=true
-AUTO_REFRESH_TIME=02:30
-
-# === Scraper & paths (usually fine as-is) ===
-HEADLESS=true
-NO_NETWORK=false
-
-FRUIT_DB_PATH=/app/data/fruit_events.db
-OUT_DIR=/app/out
-LOG_DIR=/app/logs
-LOG_LEVEL=INFO
 ```
 
 Notes:
 
-- `SERVER_URL` should be how **you** reach FruitDeepLinks from your LAN (same IP/port you’ll use in your browser).
-- `FRUIT_HOST_PORT` is the host port for the web UI (container always listens on 6655 internally).
-- `CHANNELS_DVR_IP` and `CHANNELS_SOURCE_NAME` are only used for **automatic guide refresh**. If you don’t want auto-refresh, you can leave `CHANNELS_DVR_IP` blank and the script will skip that step.
+- If you **omit** an env var, Docker uses the default from `docker-compose.yml` (the part after `:-`).
+- Most users only need to set the three **REQUIRED** values.
+- `CHANNELS_DVR_IP` / `CHANNELS_SOURCE_NAME` are only needed if you want the daily refresh script to auto-refresh your Channels XMLTV source.
 - Lanes (`FRUIT_LANES`, `FRUIT_LANE_START_CH`, etc.) are only used if you experiment with the **BETA** lane features.
 
 ### 3. Deploy the stack
