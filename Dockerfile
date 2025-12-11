@@ -1,5 +1,5 @@
 # Dockerfile for FruitDeepLinks
-# Multi-source sports event aggregator (Apple TV + Peacock)
+# Multi-source sports event aggregator (Apple TV + partners)
 
 FROM python:3.11-slim
 
@@ -36,7 +36,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Application code
 COPY bin ./bin
-COPY config ./config
 COPY templates ./templates
 # If you have a static/ directory, uncomment this:
 # COPY static ./static
