@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 daily_refresh.py - Daily refresh script for FruitDeepLinks
-Orchestrates the full pipeline: scrape → import → plan → export
+Orchestrates the full pipeline: scrape -> import -> plan -> export
 (FIXED: Removed broken parse_events and obsolete peacock_ingest_atom)
 """
 
@@ -9,6 +9,7 @@ import os
 import sys
 import subprocess
 import sqlite3
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -26,9 +27,9 @@ DATA_DIR.mkdir(exist_ok=True)
 
 def run_step(step_num, total_steps, description, command):
     """Run a pipeline step and handle errors"""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"[{step_num}/{total_steps}] {description}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     try:
         subprocess.run(
@@ -40,16 +41,16 @@ def run_step(step_num, total_steps, description, command):
         print(f"✔ Step {step_num} complete")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"✗ Step {step_num} FAILED with exit code {e.returncode}")
+        print(f"✖ Step {step_num} FAILED with exit code {e.returncode}")
         return False
 
 
 def main():
     start_time = datetime.now()
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("FruitDeepLinks Daily Refresh")
     print(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print("="*60)
+    print("=" * 60)
 
     # Total steps in this pipeline
     total_steps = 10
@@ -59,9 +60,9 @@ def main():
 
     # Step 1: Scrape Apple TV Sports
     if skip_scrape:
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print(f"[1/{total_steps}] Scraping Apple TV Sports. SKIPPED")
-        print("="*60)
+        print("=" * 60)
         multi_scraped = OUT_DIR / "multi_scraped.json"
         if not multi_scraped.exists():
             print(f"ERROR: --skip-scrape set but {multi_scraped} not found")
@@ -76,19 +77,18 @@ def main():
 
     # Fresh-install safety: ensure DB file exists before migrations
     if not DB_PATH.exists():
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("Database file not found; creating new empty database.")
-        print("="*60)
+        print("=" * 60)
         try:
             DB_PATH.parent.mkdir(parents=True, exist_ok=True)
             sqlite3.connect(DB_PATH).close()
             print(f"✔ Created new DB at {DB_PATH}")
         except Exception as e:
-            print(f"✗ Failed to create DB at {DB_PATH}: {e}")
+            print(f"✖ Failed to create DB at {DB_PATH}: {e}")
             return 1
 
     # Step 2: Ensure database schema (playables table)
-    # FIX: pass --db and --yes to migrate_add_playables.py
     if not run_step(2, total_steps, "Ensuring database schema (playables table)", [
         "python3", "migrate_add_playables.py",
         "--db", str(DB_PATH),
@@ -97,14 +97,12 @@ def main():
         return 1
 
     # Step 3: Ensure database schema (provider_lanes table)
-    # Uses default DB path inside the script
     if not run_step(3, total_steps, "Ensuring database schema (provider_lanes table)", [
         "python3", "migrate_add_provider_lanes.py",
     ]):
         return 1
 
     # Step 4: Ensure database schema (adb_lanes table)
-    # Uses default DB path inside the script
     if not run_step(4, total_steps, "Ensuring database schema (adb_lanes table)", [
         "python3", "migrate_add_adb_lanes.py",
     ]):
@@ -144,7 +142,6 @@ def main():
         return 1
 
     # Step 9: Build ADB lanes per provider (adb_lanes table)
-    # Explicitly pass DB path so this matches manual testing
     if not run_step(9, total_steps, "Building ADB lanes per provider", [
         "python3", "fruit_build_adb_lanes.py",
         "--db", str(DB_PATH),
@@ -152,7 +149,6 @@ def main():
         return 1
 
     # Step 10: Export ADB XMLTV + M3U playlists
-    # Explicitly pass DB, OUT_DIR and SERVER_URL (mirrors manual CLI usage)
     server_url = os.getenv("SERVER_URL", "http://192.168.86.80:6655")
     if not run_step(10, total_steps, "Exporting ADB lanes XMLTV and M3U", [
         "python3", "fruit_export_adb_lanes.py",
@@ -164,16 +160,19 @@ def main():
 
     # Force Channels DVR refresh (if configured)
     channels_ip = os.getenv("CHANNELS_DVR_IP")
-    if channels_ip:
-        print("\n" + "="*60)
+    channels_source_name = os.getenv("CHANNELS_SOURCE_NAME")
+
+    if channels_ip and channels_source_name:
+        print("\n" + "=" * 60)
         print("Forcing Channels DVR refresh.")
-        print("="*60)
+        print("=" * 60)
+
         try:
-            import time
             # M3U refresh
             subprocess.run([
                 "curl", "-s", "-X", "POST",
-                f"http://{channels_ip}:8089/providers/m3u/sources/appletvdeeper/refresh",
+                f"http://{channels_ip}:8089/providers/m3u/sources/{channels_source_name}/refresh",
+                "-o", "/dev/null",
             ], check=False)
             print("  ✔ M3U playlist refreshed")
 
@@ -182,20 +181,29 @@ def main():
             # XMLTV refresh
             subprocess.run([
                 "curl", "-s", "-X", "PUT",
-                f"http://{channels_ip}:8089/dvr/lineups/XMLTV-appletvdeeper",
+                f"http://{channels_ip}:8089/dvr/lineups/XMLTV-{channels_source_name}",
+                "-o", "/dev/null",
             ], check=False)
             print("  ✔ XMLTV guide refreshed")
         except Exception as e:
             print(f"  ⚠ Channels DVR refresh failed: {e}")
+    elif channels_ip and not channels_source_name:
+        print("\n" + "=" * 60)
+        print("Skipping Channels DVR refresh: CHANNELS_SOURCE_NAME not set.")
+        print("=" * 60)
+    else:
+        print("\n" + "=" * 60)
+        print("Skipping Channels DVR refresh: CHANNELS_DVR_IP not set.")
+        print("=" * 60)
 
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("SUCCESS: Refresh complete!")
     print(f"Finished: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Duration: {duration:.1f} seconds")
-    print("="*60)
+    print("=" * 60)
 
     return 0
 
