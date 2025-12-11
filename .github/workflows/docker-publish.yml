@@ -25,7 +25,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
+          # Use the repo owner (kineticman) as the username, not github.actor
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GHCR_PAT }}
 
       - name: Extract Docker metadata
