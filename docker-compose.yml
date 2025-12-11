@@ -1,17 +1,19 @@
 version: '3.8'
+
 services:
   fruitdeeplinks:
     build: .
     container_name: fruitdeeplinks
     hostname: fruitdeeplinks
     shm_size: '2gb'
+
     environment:
       # Timezone
       - TZ=${TZ:-America/New_York}
-      
+
       # Database
-      - FRUIT_DB_PATH=/app/data/fruit_events.db
-      
+      - FRUIT_DB_PATH=${FRUIT_DB_PATH:-/app/data/fruit_events.db}
+
       # Lane configuration
       - FRUIT_LANES=${FRUIT_LANES:-50}
       - FRUIT_LANE_START_CH=${FRUIT_LANE_START_CH:-9000}
@@ -19,33 +21,45 @@ services:
       - FRUIT_PADDING_MINUTES=${FRUIT_PADDING_MINUTES:-45}
       - FRUIT_PLACEHOLDER_BLOCK_MINUTES=${FRUIT_PLACEHOLDER_BLOCK_MINUTES:-60}
       - FRUIT_PLACEHOLDER_EXTRA_DAYS=${FRUIT_PLACEHOLDER_EXTRA_DAYS:-5}
-      
+
       # Scraper
       - HEADLESS=${HEADLESS:-true}
       - NO_NETWORK=${NO_NETWORK:-false}
-      
-      # Server (UPDATE THESE FOR YOUR NETWORK)
+
+      # Server config
+      # SERVER_URL: where YOU hit the service from your LAN
       - SERVER_URL=${SERVER_URL:-http://localhost:6655}
+      # PORT: internal container port (Flask listens here; keep 6655)
       - PORT=${PORT:-6655}
       - HOST=${HOST:-0.0.0.0}
-      
+
       # Channels DVR (optional)
       - CHANNELS_DVR_IP=${CHANNELS_DVR_IP:-}
       - CHANNELS_SOURCE_NAME=${CHANNELS_SOURCE_NAME:-fruitdeeplinks}
-      
+
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_DIR=${LOG_DIR:-/app/logs}
+      - OUT_DIR=${OUT_DIR:-/app/out}
+
     volumes:
       - ./bin:/app/bin
       - ./templates:/app/templates
       - ./data:/app/data
       - ./out:/app/out
       - ./logs:/app/logs
+
     restart: unless-stopped
+
     ports:
-      - "${PORT:-6655}:6655"
+      # host:container
+      # FRUIT_HOST_PORT controls the HOST port; default 6655.
+      # Inside the container we always listen on 6655.
+      - "${FRUIT_HOST_PORT:-6655}:6655"
+
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+

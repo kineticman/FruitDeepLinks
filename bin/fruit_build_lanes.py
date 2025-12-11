@@ -220,6 +220,41 @@ def build_lanes_with_placeholders(
         except Exception:
             enabled_services = []
 
+    # Precompute best playables per event (when filter integration is available)
+    playable_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+    if FILTERING_AVAILABLE:
+        for ev in events:
+            best = None
+            if ev.event_id:
+                try:
+                    best = get_best_playable_for_event(
+                        conn, ev.event_id, enabled_services
+                    )
+                except Exception:
+                    best = None
+            playable_cache[ev.event_id] = best
+
+        # Apply provider filtering: if user has explicitly enabled services and
+        # this event has no playable in that set, drop it from lane planning.
+        filtered_events: List[Event] = []
+        filtered_out = 0
+        for ev in events:
+            best = playable_cache.get(ev.event_id)
+            if enabled_services and best is None:
+                filtered_out += 1
+                continue
+            filtered_events.append(ev)
+        events = filtered_events
+
+        if filtered_out:
+            print(
+                f"Provider filters: skipped {filtered_out} events with no allowed playables"
+            )
+
+    if not events:
+        print("No future events after applying provider filters")
+        return
+
     now = datetime.now(timezone.utc)
     earliest_start = min(e.start for e in events)
     latest_end = max(e.end_padded for e in events)
@@ -295,23 +330,19 @@ def build_lanes_with_placeholders(
             chosen_logical_service: Optional[str] = None
             chosen_deeplink: Optional[str] = None
 
+            best = None
             if FILTERING_AVAILABLE and ev.event_id:
-                try:
-                    best = get_best_playable_for_event(
-                        conn, ev.event_id, enabled_services
-                    )
-                except Exception:
-                    best = None
+                best = playable_cache.get(ev.event_id)
 
-                if best:
-                    chosen_playable_id = best.get("playable_id")
-                    chosen_provider = best.get("provider")
-                    chosen_logical_service = best.get("logical_service")
-                    chosen_deeplink = (
-                        best.get("deeplink_play")
-                        or best.get("deeplink_open")
-                        or best.get("playable_url")
-                    )
+            if best:
+                chosen_playable_id = best.get("playable_id")
+                chosen_provider = best.get("provider")
+                chosen_logical_service = best.get("logical_service")
+                chosen_deeplink = (
+                    best.get("deeplink_play")
+                    or best.get("deeplink_open")
+                    or best.get("playable_url")
+                )
 
             cur.execute(
                 """
