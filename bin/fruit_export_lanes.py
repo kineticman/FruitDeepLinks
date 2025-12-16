@@ -177,12 +177,25 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
             is_placeholder = event.get("is_placeholder")
             # Only add categories for real events (is_placeholder == 0 or False or None)
             if is_placeholder != 1 and is_placeholder != True:
-                if channel_name:
+                # Add provider/service (ESPN+, Peacock, etc)
+                chosen_provider = event.get("chosen_provider")
+                chosen_logical_service = event.get("chosen_logical_service")
+                
+                if chosen_logical_service:
+                    ET.SubElement(prog, "category").text = chosen_logical_service
+                elif chosen_provider:
+                    ET.SubElement(prog, "category").text = chosen_provider
+                elif channel_name:
+                    # Fallback to channel name parsing
                     provider = get_provider_from_channel(channel_name)
                     ET.SubElement(prog, "category").text = provider
-                ET.SubElement(prog, "category").text = "Sports"
                 
-                # Genres
+                # Add standard categories
+                ET.SubElement(prog, "category").text = "Sports"
+                ET.SubElement(prog, "category").text = "Sports Event"
+                ET.SubElement(prog, "category").text = "Live"
+                
+                # Genres (Hockey, Soccer, etc)
                 genres_json = event.get("genres_json")
                 if genres_json:
                     try:
