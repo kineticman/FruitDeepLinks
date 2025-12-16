@@ -274,6 +274,12 @@ CHANNELS_SOURCE_NAME=fruitdeeplinks
 FRUIT_LANES=50
 FRUIT_LANE_START_CH=9000
 
+# CDVR Detector (BETA) - Auto-launch streaming apps
+# Leave blank to disable. Set to your DVR's base path to enable:
+CDVR_DVR_PATH=/mnt/storage/DVR
+CDVR_SERVER_PORT=8089
+CDVR_API_PORT=57000
+
 # Auto-refresh
 AUTO_REFRESH_ENABLED=true
 AUTO_REFRESH_TIME=02:30
@@ -306,6 +312,48 @@ docker exec fruitdeeplinks python3 /app/bin/fruit_export_lanes.py
 # ADB provider lanes (optional, for ADBTuner/ChromeCapture) - BETA
 docker exec fruitdeeplinks python3 /app/bin/fruit_export_adb_lanes.py
 ```
+
+### CDVR Detector (BETA) - Automatic Deeplink Launching
+
+The CDVR Detector automatically launches streaming apps when you tune to a "Fruit Lane" channel!
+
+**How it works:**
+1. You tune to "Fruit Lane 5" in Channels DVR
+2. FruitDeepLinks detects which device is watching
+3. Looks up the current event's deeplink (ESPN+, Peacock, etc.)
+4. Launches the streaming app on your device automatically
+
+**Setup:**
+
+1. **Enable the detector** - Add to your `.env`:
+   ```env
+   CDVR_DVR_PATH=/path/to/your/dvr
+   ```
+   Examples:
+   - Linux: `/mnt/storage/DVR`
+   - macOS: `/Volumes/Storage/DVR`  
+   - Synology: `/volume1/DVR`
+
+2. **Restart container**:
+   ```bash
+   docker compose restart
+   ```
+
+3. **Add to Channels DVR**:
+   - M3U: `http://your-ip:6655/out/multisource_lanes.m3u`
+   - EPG: `http://your-ip:6655/out/multisource_lanes.xml`
+
+4. **Tune to a Fruit Lane** - The streaming app launches automatically! 🎉
+
+**Supported devices:**
+- Apple TV (tvOS)
+- Fire TV
+- Android TV
+
+**Notes:**
+- Only works with devices that expose the Channels DVR Client API (port 57000)
+- iOS/iPadOS devices do not support this feature
+- The detector is disabled by default - you must set `CDVR_DVR_PATH` to enable it
 
 ### Database Access
 

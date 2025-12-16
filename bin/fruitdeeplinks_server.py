@@ -73,12 +73,15 @@ LOG_DIR = Path(os.getenv("LOG_DIR", "/app/logs"))
 CDVR_SERVER_IP = os.getenv("CHANNELS_DVR_IP", "192.168.86.72")
 CDVR_SERVER_PORT = int(os.getenv("CDVR_SERVER_PORT", "8089"))
 CDVR_API_PORT = int(os.getenv("CDVR_API_PORT", "57000"))
-CDVR_DVR_PATH = os.getenv("CDVR_DVR_PATH", "/media/brad/DVR")
+# CDVR_DVR_PATH should be set by user - empty means detector disabled
+CDVR_DVR_PATH = os.getenv("CDVR_DVR_PATH", "")
 NUM_LANES = int(os.getenv("FRUIT_LANES", "50"))
 
 # Detector globals
 DUMMY_SEGMENT_PATH = None
-STREAMLINK_DIR = Path(CDVR_DVR_PATH) / "Imports" / "Videos" / "FruitDeepLinks"
+# Use /mnt/dvr mount point (mapped from user's CDVR_DVR_PATH via docker-compose)
+DETECTOR_ENABLED = bool(CDVR_DVR_PATH and CDVR_DVR_PATH.strip())
+STREAMLINK_DIR = Path("/mnt/dvr") / "Imports" / "Videos" / "FruitDeepLinks" if DETECTOR_ENABLED else None
 
 
 # Detector debounce (avoid spawning multiple detector threads per lane)
@@ -927,6 +930,10 @@ def create_dummy_segment():
 
 def bootstrap_streamlink_files():
     """Bootstrap streamlink files for CDVR detector on startup"""
+    if not DETECTOR_ENABLED:
+        log("CDVR Detector: Disabled (CDVR_DVR_PATH not set)", "INFO")
+        return False
+    
     log("CDVR Detector: Bootstrapping streamlink files...", "INFO")
     
     cdvr_url = f"http://{CDVR_SERVER_IP}:{CDVR_SERVER_PORT}"
@@ -2091,6 +2098,9 @@ def load_template(template_name):
 @app.route('/lane/<int:lane_number>/stream.m3u8', methods=['GET', 'HEAD'])
 def serve_lane_hls(lane_number):
     """Serve a minimal *live-ish* HLS playlist and trigger auto-detection in background."""
+    if not DETECTOR_ENABLED:
+        return "CDVR Detector not enabled. Set CDVR_DVR_PATH in .env", 503
+    
     remote = request.remote_addr
     ua = request.headers.get("User-Agent", "-")
     self_base_url = request.host_url.rstrip("/")  # e.g. http://192.168.86.80:6655
@@ -2181,14 +2191,17 @@ if __name__ == "__main__":
     log(f"Server running on http://{host}:{port}", "INFO")
     log(f"Admin dashboard: http://{host}:{port}/", "INFO")
     
-    # Bootstrap CDVR detector
-    log("Initializing CDVR Detector...", "INFO")
-    log(f"CDVR Server: {CDVR_SERVER_IP}:{CDVR_SERVER_PORT}", "INFO")
-    log(f"Streamlink Directory: {STREAMLINK_DIR}", "INFO")
-    log(f"Number of Lanes: {NUM_LANES}", "INFO")
-    
-    create_dummy_segment()
-    bootstrap_streamlink_files()
+    # Bootstrap CDVR detector (if enabled)
+    if DETECTOR_ENABLED:
+        log("Initializing CDVR Detector...", "INFO")
+        log(f"CDVR Server: {CDVR_SERVER_IP}:{CDVR_SERVER_PORT}", "INFO")
+        log(f"Streamlink Directory: {STREAMLINK_DIR}", "INFO")
+        log(f"Number of Lanes: {NUM_LANES}", "INFO")
+        
+        create_dummy_segment()
+        bootstrap_streamlink_files()
+    else:
+        log("CDVR Detector: Disabled (set CDVR_DVR_PATH in .env to enable)", "INFO")
 
     # Start APScheduler-based auto-refresh if available
     start_scheduler_if_available()
