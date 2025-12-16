@@ -196,7 +196,7 @@ def create_lanes(conn: sqlite3.Connection, lane_count: int):
         logical_number = LANE_START_CH_DEFAULT + (lane_id - 1)
         cur.execute(
             "INSERT INTO lanes VALUES (?, ?, ?)",
-            (lane_id, f"Multi-Source Sports {lane_id}", logical_number),
+            (lane_id, f"Fruit Lane {lane_id}", logical_number),  # Renamed from "Multi-Source Sports"
         )
     conn.commit()
 

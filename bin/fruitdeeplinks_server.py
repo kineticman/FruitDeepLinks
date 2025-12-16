@@ -12,6 +12,8 @@ import sqlite3
 import subprocess
 import threading
 import time
+import tempfile
+import requests
 from pathlib import Path
 from datetime import datetime
 from collections import deque
@@ -67,6 +69,22 @@ OUT_DIR = Path(os.getenv("OUT_DIR", "/app/out"))
 BIN_DIR = Path(os.getenv("BIN_DIR", "/app/bin"))
 LOG_DIR = Path(os.getenv("LOG_DIR", "/app/logs"))
 
+# CDVR Detector Configuration
+CDVR_SERVER_IP = os.getenv("CHANNELS_DVR_IP", "192.168.86.72")
+CDVR_SERVER_PORT = int(os.getenv("CDVR_SERVER_PORT", "8089"))
+CDVR_API_PORT = int(os.getenv("CDVR_API_PORT", "57000"))
+CDVR_DVR_PATH = os.getenv("CDVR_DVR_PATH", "/media/brad/DVR")
+NUM_LANES = int(os.getenv("FRUIT_LANES", "50"))
+
+# Detector globals
+DUMMY_SEGMENT_PATH = None
+STREAMLINK_DIR = Path(CDVR_DVR_PATH) / "Imports" / "Videos" / "FruitDeepLinks"
+
+
+# Detector debounce (avoid spawning multiple detector threads per lane)
+DETECT_DEBOUNCE_SECONDS = float(os.getenv('DETECT_DEBOUNCE_SECONDS', '3'))
+DETECT_LAST_SPAWN = {}  # lane_number -> last_spawn_epoch
+DETECT_LAST_SPAWN_LOCK = threading.Lock()
 # Create Flask app
 app = Flask(__name__)
 CORS(app)
@@ -872,6 +890,289 @@ def run_refresh(skip_scrape=False, source="manual"):
         else:
             refresh_status["last_run_manual"] = now_iso
             refresh_status["last_status_manual"] = outcome
+
+
+# ==================== CDVR Detector Functions ====================
+def create_dummy_segment():
+    """Create a simple black video segment using ffmpeg"""
+    global DUMMY_SEGMENT_PATH
+    
+    try:
+        temp_file = tempfile.NamedTemporaryFile(suffix='.ts', delete=False)
+        DUMMY_SEGMENT_PATH = temp_file.name
+        temp_file.close()
+        
+        log("Creating dummy video segment for HLS streams...", "INFO")
+        
+        result = subprocess.run([
+            'ffmpeg', '-y',
+            '-f', 'lavfi', '-i', 'color=black:s=1280x720:r=30',
+            '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo',
+            '-t', '60',
+            '-c:v', 'libx264', '-preset', 'ultrafast',
+            '-c:a', 'aac', '-b:a', '128k',
+            '-pix_fmt', 'yuv420p',
+            '-f', 'mpegts',
+            DUMMY_SEGMENT_PATH
+        ], check=True, capture_output=True, timeout=60)
+        
+        file_size = os.path.getsize(DUMMY_SEGMENT_PATH)
+        log(f"Created dummy segment: {DUMMY_SEGMENT_PATH} ({file_size} bytes)", "INFO")
+        return True
+        
+    except Exception as e:
+        log(f"Could not create dummy segment: {e}", "WARN")
+        log("Install ffmpeg: apt-get install ffmpeg", "WARN")
+        return False
+
+def bootstrap_streamlink_files():
+    """Bootstrap streamlink files for CDVR detector on startup"""
+    log("CDVR Detector: Bootstrapping streamlink files...", "INFO")
+    
+    cdvr_url = f"http://{CDVR_SERVER_IP}:{CDVR_SERVER_PORT}"
+    
+    try:
+        STREAMLINK_DIR.mkdir(parents=True, exist_ok=True)
+        log(f"Streamlink directory ready: {STREAMLINK_DIR}", "INFO")
+        
+        placeholder_deeplink = "about:blank"
+        files_created = 0
+        
+        for lane_num in range(1, NUM_LANES + 1):
+            filepath = STREAMLINK_DIR / f"lane{lane_num}.strmlnk"
+            
+            if not filepath.exists():
+                filepath.write_text(placeholder_deeplink)
+                files_created += 1
+        
+        if files_created > 0:
+            log(f"Created {files_created} new streamlink files", "INFO")
+            log("Triggering CDVR scan to index files...", "INFO")
+            
+            scan_resp = requests.put(f"{cdvr_url}/dvr/scanner/scan", timeout=30)
+            
+            if scan_resp.status_code == 200:
+                log("CDVR scan triggered, waiting for indexing...", "INFO")
+                time.sleep(10)  # Wait for initial indexing
+            else:
+                log(f"CDVR scan failed: {scan_resp.status_code}", "WARN")
+        else:
+            log(f"All {NUM_LANES} streamlink files already exist", "INFO")
+        
+        # Hide FruitDeepLinks group from GUI
+        try:
+            groups_resp = requests.get(f"{cdvr_url}/dvr/groups?all=true", timeout=5)
+            groups = groups_resp.json()
+            
+            group_id = None
+            for group in groups:
+                if group.get('Name') == 'FruitDeepLinks':
+                    group_id = group.get('ID')
+                    break
+            
+            if group_id:
+                hide_resp = requests.put(f"{cdvr_url}/dvr/groups/{group_id}/visibility/hidden", timeout=5)
+                if hide_resp.status_code == 200:
+                    log("Hidden FruitDeepLinks group from CDVR GUI", "INFO")
+        except Exception:
+            pass
+        
+        log("CDVR Detector bootstrap complete", "INFO")
+        return True
+        
+    except Exception as e:
+        log(f"Bootstrap error: {e}", "ERROR")
+        return False
+
+def get_deeplink_for_lane(lane_number: int, self_base_url: str) -> dict:
+    """Get deeplink for the current event on this lane from local whatson API.
+
+    self_base_url should be like: http://127.0.0.1:6655 (no trailing slash)
+    """
+    try:
+        base = (self_base_url or "").rstrip("/")
+        if not base:
+            base = f"http://127.0.0.1:{int(os.getenv('PORT', 6655))}"
+
+        api_url = f"{base}/whatson/{lane_number}?include=deeplink"
+        resp = requests.get(api_url, timeout=3)
+
+        if resp.status_code != 200:
+            return None
+
+        data = resp.json() if resp.content else None
+        if not data or not data.get("ok") or not data.get("event_uid"):
+            return None
+
+        deeplink = data.get("deeplink_url") or data.get("deeplink_url_full")
+        if not deeplink:
+            return None
+
+        title = data.get("title") or f"Lane {lane_number} Event"
+        event_uid = data.get("event_uid")
+
+        return {
+            "deeplink": deeplink,
+            "title": title,
+            "event_uid": event_uid,
+            "event_data": data,
+        }
+
+    except Exception:
+        return None
+
+def trigger_playback_on_client(client_ip: str, deeplink: str, lane_number: int) -> dict:
+    """Orchestrate playback: update strmlnk, reprocess, trigger client"""
+    result = {
+        "lane_number": lane_number,
+        "strm_updated": False,
+        "file_id": None,
+        "cdvr_reprocessed": False,
+        "recording_id": None,
+        "playback_triggered": False
+    }
+    
+    try:
+        log(f"Triggering playback for lane {lane_number} on {client_ip}", "INFO")
+        
+        # Update streamlink file
+        strmlnk_path = STREAMLINK_DIR / f"lane{lane_number}.strmlnk"
+        strmlnk_path.write_text(deeplink)
+        result["strm_updated"] = True
+        
+        # Get file ID from CDVR
+        cdvr_url = f"http://{CDVR_SERVER_IP}:{CDVR_SERVER_PORT}"
+        files_resp = requests.get(f"{cdvr_url}/dvr/files", timeout=10)
+        files = files_resp.json()
+        
+        lane_filename = f"FruitDeepLinks/lane{lane_number}.strmlnk"
+        file_id = None
+        
+        for file_obj in files:
+            if file_obj.get('Path') == lane_filename:
+                file_id = file_obj.get('ID')
+                result["file_id"] = file_id
+                result["recording_id"] = file_id
+                break
+        
+        if not file_id:
+            result["error"] = f"File {lane_filename} not found in CDVR"
+            return result
+        
+        # Reprocess file (fast method from SLM)
+        reprocess_resp = requests.put(f"{cdvr_url}/dvr/files/{file_id}/reprocess", timeout=10)
+        
+        if reprocess_resp.status_code == 200:
+            result["cdvr_reprocessed"] = True
+            time.sleep(2)
+        else:
+            result["error"] = f"Reprocess returned {reprocess_resp.status_code}"
+            return result
+        
+        # Trigger playback on client
+        play_url = f"http://{client_ip}:{CDVR_API_PORT}/api/play/recording/{file_id}"
+        play_resp = requests.post(play_url, timeout=5)
+        
+        if play_resp.status_code == 200:
+            result["playback_triggered"] = True
+            log(f"Successfully triggered deeplink on {client_ip}", "INFO")
+        
+        return result
+        
+    except Exception as e:
+        log(f"Playback trigger error: {e}", "ERROR")
+        result["error"] = str(e)
+        return result
+
+def auto_detect_and_trigger(lane_number: int, hint_client_ip: str, self_base_url: str):
+    """Auto-detection that polls CDVR clients and triggers deeplink playback.
+
+    Notes:
+      - The HLS request usually comes from the CDVR server, not the end device.
+      - Some installs report connected=false even while recently seen, so we use recency.
+    """
+    try:
+        cdvr_clients_url = f"http://{CDVR_SERVER_IP}:{CDVR_SERVER_PORT}/dvr/clients/info"
+        resp = requests.get(cdvr_clients_url, timeout=5)
+        if resp.status_code != 200:
+            log(f"Detector: /dvr/clients/info returned {resp.status_code}", "WARN")
+            return
+
+        clients = resp.json() or []
+        log(f"Detector: clients returned={len(clients)} hint_ip={hint_client_ip}", "INFO")
+
+        def has_api_support(platform_str: str) -> bool:
+            if not platform_str:
+                return False
+            p = platform_str.lower()
+            return any(x in p for x in ["tvos", "firetv", "androidtv", "android"])
+
+        now_ms = int(time.time() * 1000)
+        recent = []
+        for c in clients:
+            if not has_api_support(c.get("platform", "")):
+                continue
+            seen_at = c.get("seen_at")
+            try:
+                age_ms = now_ms - int(seen_at)
+            except Exception:
+                age_ms = 999999999
+            if age_ms <= 90_000:
+                recent.append((age_ms, c))
+
+        candidates = [c for (_age, c) in sorted(recent, key=lambda t: t[0])] if recent else [
+            c for c in clients if has_api_support(c.get("platform", ""))
+        ]
+
+        log(f"Detector: candidates={len(candidates)} (recent={len(recent)})", "INFO")
+
+        for client in candidates:
+            client_ip = client.get("local_ip")
+            if not client_ip:
+                continue
+
+            try:
+                status_url = f"http://{client_ip}:{CDVR_API_PORT}/api/status"
+                status_resp = requests.get(status_url, timeout=3)
+                if status_resp.status_code != 200:
+                    continue
+                status = status_resp.json() or {}
+
+                if status.get("status") != "playing":
+                    continue
+
+                channel = status.get("channel") or {}
+                ch_name = channel.get("name") or ""
+
+                import re
+                lane_match = re.search(r"(\d+)\s*$", ch_name)
+                if not lane_match:
+                    continue
+
+                detected_lane = int(lane_match.group(1))
+                if detected_lane != int(lane_number):
+                    continue
+
+                log(f"Detector: matched lane={lane_number} client={client_ip} ch='{ch_name}'", "INFO")
+
+                deeplink_info = get_deeplink_for_lane(int(lane_number), self_base_url)
+                if not deeplink_info:
+                    log(f"Detector: no deeplink found for lane={lane_number}", "WARN")
+                    return
+
+                deeplink = deeplink_info.get("deeplink")
+                trigger_playback_on_client(client_ip, deeplink, int(lane_number))
+                return
+
+            except Exception as e:
+                log(f"Detector: error checking client {client_ip}: {e}", "WARN")
+                continue
+
+        log(f"Detector: no matching playing client found for lane={lane_number}", "INFO")
+
+    except Exception as e:
+        log(f"Detector: fatal error: {e}", "ERROR")
+
 
 
 # ==================== File Serving / API ====================
@@ -1786,6 +2087,88 @@ def load_template(template_name):
     """
 
 
+# ==================== CDVR Detector Routes ====================
+@app.route('/lane/<int:lane_number>/stream.m3u8', methods=['GET', 'HEAD'])
+def serve_lane_hls(lane_number):
+    """Serve a minimal *live-ish* HLS playlist and trigger auto-detection in background."""
+    remote = request.remote_addr
+    ua = request.headers.get("User-Agent", "-")
+    self_base_url = request.host_url.rstrip("/")  # e.g. http://192.168.86.80:6655
+
+    log(f"LANE_HIT lane={lane_number} remote={remote} ua={ua}", "INFO")
+
+    # Debounce detector spawns per-lane (CDVR often re-requests the playlist quickly)
+    spawn = True
+    now = time.time()
+    try:
+        with DETECT_LAST_SPAWN_LOCK:
+            last = DETECT_LAST_SPAWN.get(int(lane_number), 0)
+            if (now - float(last)) < float(DETECT_DEBOUNCE_SECONDS):
+                spawn = False
+            else:
+                DETECT_LAST_SPAWN[int(lane_number)] = now
+    except Exception:
+        spawn = True
+
+    def delayed_detect(lane: int, hint_ip: str, base_url: str):
+        time.sleep(2)
+        log(f"DETECTOR_START lane={lane}", "INFO")
+        try:
+            auto_detect_and_trigger(lane, hint_ip, base_url)
+        except Exception as e:
+            log(f"DETECTOR_CRASH lane={lane}: {e}", "ERROR")
+
+    if spawn:
+        threading.Thread(
+            target=delayed_detect,
+            args=(int(lane_number), remote, self_base_url),
+            daemon=True,
+        ).start()
+
+    # Build a "live-ish" playlist:
+    #  - NO #EXT-X-ENDLIST
+    #  - moving MEDIA-SEQUENCE
+    #  - multiple segments (same underlying TS is fine for a dummy stream)
+    epoch = int(now)
+    seq = epoch  # monotonic enough per request for dummy streaming
+
+    playlist = (
+        "#EXTM3U\n"
+        "#EXT-X-VERSION:3\n"
+        "#EXT-X-TARGETDURATION:60\n"
+        f"#EXT-X-MEDIA-SEQUENCE:{seq}\n"
+        "#EXTINF:60.0,\n"
+        f"/lane/{lane_number}/segment.ts?seq={seq}\n"
+        "#EXTINF:60.0,\n"
+        f"/lane/{lane_number}/segment.ts?seq={seq+1}\n"
+        "#EXTINF:60.0,\n"
+        f"/lane/{lane_number}/segment.ts?seq={seq+2}\n"
+    )
+
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+
+    if request.method == "HEAD":
+        return Response("", mimetype="application/vnd.apple.mpegurl", headers=headers)
+
+    return Response(playlist, mimetype="application/vnd.apple.mpegurl", headers=headers)
+
+@app.route('/lane/<int:lane_number>/segment.ts')
+def serve_segment(lane_number):
+    """Serve the dummy video segment."""
+    if DUMMY_SEGMENT_PATH and os.path.exists(DUMMY_SEGMENT_PATH):
+        resp = send_file(DUMMY_SEGMENT_PATH, mimetype='video/mp2t')
+        # Encourage clients to refetch even if they hit the same URL repeatedly.
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+    return "Segment not available", 404
 
 
 # ==================== Main ====================
@@ -1797,6 +2180,15 @@ if __name__ == "__main__":
 
     log(f"Server running on http://{host}:{port}", "INFO")
     log(f"Admin dashboard: http://{host}:{port}/", "INFO")
+    
+    # Bootstrap CDVR detector
+    log("Initializing CDVR Detector...", "INFO")
+    log(f"CDVR Server: {CDVR_SERVER_IP}:{CDVR_SERVER_PORT}", "INFO")
+    log(f"Streamlink Directory: {STREAMLINK_DIR}", "INFO")
+    log(f"Number of Lanes: {NUM_LANES}", "INFO")
+    
+    create_dummy_segment()
+    bootstrap_streamlink_files()
 
     # Start APScheduler-based auto-refresh if available
     start_scheduler_if_available()
