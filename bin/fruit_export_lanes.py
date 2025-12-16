@@ -52,36 +52,42 @@ def get_provider_from_channel(channel_name: str) -> str:
         return channel_name
 
 def get_provider_display_name(provider_id: str) -> str:
-    """Map provider IDs to friendly display names"""
+    """Map provider IDs to friendly display names using logical_service_mapper"""
     if not provider_id:
         return None
     
+    # Try to import and use the logical service mapper
+    try:
+        from logical_service_mapper import get_service_display_name
+        return get_service_display_name(provider_id)
+    except ImportError:
+        pass
+    
+    # Fallback to local mapping if import fails
     provider_lower = provider_id.lower()
     
-    # Map common provider IDs to display names
     provider_map = {
         'sportscenter': 'ESPN+',
-        'espn': 'ESPN+',
-        'espnplus': 'ESPN+',
+        'sportsonespn': 'ESPN+',
         'peacock': 'Peacock',
-        'nbcsports': 'NBC Sports',
-        'nbc': 'NBC Sports',
-        'primevideo': 'Prime Video',
-        'amazon': 'Prime Video',
-        'paramountplus': 'Paramount+',
-        'paramount': 'Paramount+',
-        'cbs': 'CBS Sports',
-        'foxsports': 'FOX Sports',
-        'fox': 'FOX Sports',
+        'peacocktv': 'Peacock',
+        'peacock_web': 'Peacock (Web)',
+        'pplus': 'Paramount+',
+        'aiv': 'Prime Video',
+        'gametime': 'Prime Video TNF',
+        'cbssportsapp': 'CBS Sports',
+        'foxone': 'FOX Sports',
         'dazn': 'DAZN',
-        'appletv': 'Apple TV+',
-        'apple': 'Apple TV+',
+        'open.dazn.com': 'DAZN',
         'max': 'Max',
-        'hbo': 'Max',
-        'hulu': 'Hulu',
-        'fubo': 'Fubo',
-        'sling': 'Sling TV',
-        'youtube': 'YouTube TV',
+        'f1tv': 'F1 TV',
+        'apple_mls': 'Apple MLS',
+        'apple_mlb': 'Apple MLB',
+        'apple_nba': 'Apple NBA',
+        'apple_nhl': 'Apple NHL',
+        'apple_other': 'Apple TV+',
+        'https': 'Web - Other',
+        'http': 'Web - Other',
     }
     
     return provider_map.get(provider_lower, provider_id.title())
