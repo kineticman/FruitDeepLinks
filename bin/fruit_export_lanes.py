@@ -51,6 +51,41 @@ def get_provider_from_channel(channel_name: str) -> str:
     else:
         return channel_name
 
+def get_provider_display_name(provider_id: str) -> str:
+    """Map provider IDs to friendly display names"""
+    if not provider_id:
+        return None
+    
+    provider_lower = provider_id.lower()
+    
+    # Map common provider IDs to display names
+    provider_map = {
+        'sportscenter': 'ESPN+',
+        'espn': 'ESPN+',
+        'espnplus': 'ESPN+',
+        'peacock': 'Peacock',
+        'nbcsports': 'NBC Sports',
+        'nbc': 'NBC Sports',
+        'primevideo': 'Prime Video',
+        'amazon': 'Prime Video',
+        'paramountplus': 'Paramount+',
+        'paramount': 'Paramount+',
+        'cbs': 'CBS Sports',
+        'foxsports': 'FOX Sports',
+        'fox': 'FOX Sports',
+        'dazn': 'DAZN',
+        'appletv': 'Apple TV+',
+        'apple': 'Apple TV+',
+        'max': 'Max',
+        'hbo': 'Max',
+        'hulu': 'Hulu',
+        'fubo': 'Fubo',
+        'sling': 'Sling TV',
+        'youtube': 'YouTube TV',
+    }
+    
+    return provider_map.get(provider_lower, provider_id.title())
+
 # -------------------- Image helper (matches fruit_export_hybrid) --------------------
 def get_event_image_url(conn: sqlite3.Connection, event: Dict) -> Optional[str]:
     """
@@ -181,14 +216,18 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
                 chosen_provider = event.get("chosen_provider")
                 chosen_logical_service = event.get("chosen_logical_service")
                 
+                # Use logical service first (already mapped), then provider
+                provider_name = None
                 if chosen_logical_service:
-                    ET.SubElement(prog, "category").text = chosen_logical_service
+                    provider_name = get_provider_display_name(chosen_logical_service)
                 elif chosen_provider:
-                    ET.SubElement(prog, "category").text = chosen_provider
+                    provider_name = get_provider_display_name(chosen_provider)
                 elif channel_name:
                     # Fallback to channel name parsing
-                    provider = get_provider_from_channel(channel_name)
-                    ET.SubElement(prog, "category").text = provider
+                    provider_name = get_provider_from_channel(channel_name)
+                
+                if provider_name:
+                    ET.SubElement(prog, "category").text = provider_name
                 
                 # Add standard categories
                 ET.SubElement(prog, "category").text = "Sports"
