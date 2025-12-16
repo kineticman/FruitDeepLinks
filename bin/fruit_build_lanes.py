@@ -144,8 +144,8 @@ def load_future_events(conn: sqlite3.Connection, days_ahead: int) -> List[Event]
                     seconds=runtime_secs if runtime_secs else 7200
                 )
 
-        # Filter by time window
-        if start_dt < now or start_dt > cutoff:
+        # Filter by time window - include events that are currently playing
+        if end_dt < now or start_dt > cutoff:
             continue
 
         end_padded = end_dt + timedelta(minutes=PADDING_MINUTES)
