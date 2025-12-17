@@ -27,6 +27,8 @@ services:
       - FRUIT_PLACEHOLDER_BLOCK_MINUTES=${FRUIT_PLACEHOLDER_BLOCK_MINUTES:-60}
       - FRUIT_PLACEHOLDER_EXTRA_DAYS=${FRUIT_PLACEHOLDER_EXTRA_DAYS:-5}
       # CDVR Detector (BETA) - Auto-launch streaming apps
+      # Set CDVR_DVR_PATH to your HOST DVR path to enable
+      # Uses CHANNELS_DVR_IP for server communication
       - CDVR_DVR_PATH=${CDVR_DVR_PATH:-}
       - CDVR_SERVER_PORT=${CDVR_SERVER_PORT:-8089}
       - CDVR_API_PORT=${CDVR_API_PORT:-57000}
@@ -41,7 +43,8 @@ services:
       - ./out:/app/out
       - ./logs:/app/logs
       # Mount DVR path for CDVR detector (optional - only if using detector feature)
-      # Set CDVR_DVR_PATH in .env to enable
+      # The HOST path from CDVR_DVR_PATH is mounted to /mnt/dvr inside container
+      # Container writes streamlink files to /mnt/dvr/Imports/fruitdeeplinks/
       - ${CDVR_DVR_PATH:-/tmp/fruitdeeplinks-novol}:/mnt/dvr
     restart: unless-stopped
     ports:

@@ -88,6 +88,11 @@ STREAMLINK_DIR = Path("/mnt/dvr") / "Imports" / "Videos" / "FruitDeepLinks" if D
 DETECT_DEBOUNCE_SECONDS = float(os.getenv('DETECT_DEBOUNCE_SECONDS', '3'))
 DETECT_LAST_SPAWN = {}  # lane_number -> last_spawn_epoch
 DETECT_LAST_SPAWN_LOCK = threading.Lock()
+
+# Detector cooldown (avoid re-triggering same lane after successful launch)
+LANE_TRIGGER_COOLDOWN = {}  # lane_number -> last_trigger_epoch
+COOLDOWN_MINUTES = int(os.getenv('LANE_COOLDOWN_MINUTES', '5'))  # Don't re-trigger for N minutes
+
 # Create Flask app
 app = Flask(__name__)
 CORS(app)
@@ -991,17 +996,20 @@ def bootstrap_streamlink_files():
         log(f"Bootstrap error: {e}", "ERROR")
         return False
 
-def get_deeplink_for_lane(lane_number: int, self_base_url: str) -> dict:
+def get_deeplink_for_lane(lane_number: int, self_base_url: str, deeplink_format: str = "scheme") -> dict:
     """Get deeplink for the current event on this lane from local whatson API.
 
-    self_base_url should be like: http://127.0.0.1:6655 (no trailing slash)
+    Args:
+        lane_number: Lane ID to query
+        self_base_url: Base URL like http://127.0.0.1:6655 (no trailing slash)
+        deeplink_format: 'scheme' for Apple TV (default), 'http' for Android/Fire TV
     """
     try:
         base = (self_base_url or "").rstrip("/")
         if not base:
             base = f"http://127.0.0.1:{int(os.getenv('PORT', 6655))}"
 
-        api_url = f"{base}/whatson/{lane_number}?include=deeplink"
+        api_url = f"{base}/whatson/{lane_number}?include=deeplink&deeplink_format={deeplink_format}"
         resp = requests.get(api_url, timeout=3)
 
         if resp.status_code != 200:
@@ -1098,6 +1106,14 @@ def auto_detect_and_trigger(lane_number: int, hint_client_ip: str, self_base_url
       - The HLS request usually comes from the CDVR server, not the end device.
       - Some installs report connected=false even while recently seen, so we use recency.
     """
+    # Check cooldown - don't re-trigger same lane too quickly
+    now = time.time()
+    last_trigger = LANE_TRIGGER_COOLDOWN.get(lane_number, 0)
+    if now - last_trigger < (COOLDOWN_MINUTES * 60):
+        seconds_ago = int(now - last_trigger)
+        log(f"Detector: lane {lane_number} on cooldown (triggered {seconds_ago}s ago, {COOLDOWN_MINUTES} min cooldown)", "INFO")
+        return
+    
     try:
         cdvr_clients_url = f"http://{CDVR_SERVER_IP}:{CDVR_SERVER_PORT}/dvr/clients/info"
         resp = requests.get(cdvr_clients_url, timeout=5)
@@ -1161,14 +1177,27 @@ def auto_detect_and_trigger(lane_number: int, hint_client_ip: str, self_base_url
                     continue
 
                 log(f"Detector: matched lane={lane_number} client={client_ip} ch='{ch_name}'", "INFO")
+                
+                # Detect platform and choose deeplink format
+                platform = c.get("platform", "").lower()
+                is_android = any(x in platform for x in ["android", "firetv"])
+                deeplink_format = "http" if is_android else "scheme"
+                
+                log(f"Detector: client platform={platform}, using deeplink_format={deeplink_format}", "INFO")
 
-                deeplink_info = get_deeplink_for_lane(int(lane_number), self_base_url)
+                deeplink_info = get_deeplink_for_lane(int(lane_number), self_base_url, deeplink_format)
                 if not deeplink_info:
                     log(f"Detector: no deeplink found for lane={lane_number}", "WARN")
                     return
 
                 deeplink = deeplink_info.get("deeplink")
-                trigger_playback_on_client(client_ip, deeplink, int(lane_number))
+                result = trigger_playback_on_client(client_ip, deeplink, int(lane_number))
+                
+                # Set cooldown after successful trigger
+                if result and result.get('playback_triggered'):
+                    LANE_TRIGGER_COOLDOWN[lane_number] = time.time()
+                    log(f"Detector: lane {lane_number} cooldown set for {COOLDOWN_MINUTES} min", "INFO")
+                
                 return
 
             except Exception as e:
@@ -1846,9 +1875,12 @@ def whatson_lane(lane_id):
       GET /whatson/1?include=deeplink
       GET /whatson/1?deeplink=1
       GET /whatson/1?dynamic=1
+      GET /whatson/1?deeplink_format=http  (for Android/Fire TV)
+      GET /whatson/1?deeplink_format=scheme (for Apple TV, default)
 
     Plain text deeplink:
       GET /whatson/1?format=txt&param=deeplink_url
+      GET /whatson/1?format=txt&param=deeplink_url&deeplink_format=http
     """
     if not DB_PATH.exists():
         if request.args.get("format") == "txt":
@@ -1869,6 +1901,9 @@ def whatson_lane(lane_id):
         want_deeplink = True
     if request.args.get("dynamic") in ("1", "true", "yes"):
         want_deeplink = True
+    
+    # Deeplink format: 'http' for Android/Fire TV, 'scheme' for Apple TV (default)
+    deeplink_format = request.args.get("deeplink_format", "scheme").lower()
 
     fmt = (request.args.get("format") or "json").lower()
     param = request.args.get("param") or "event_uid"
@@ -1913,6 +1948,26 @@ def whatson_lane(lane_id):
             event_uid = link_info.get("event_uid")
             deeplink_url = link_info.get("deeplink_url")
             deeplink_url_full = link_info.get("deeplink_url_full")
+            
+            # Convert to HTTP format if requested (for Android/Fire TV)
+            if deeplink_format == "http":
+                try:
+                    from deeplink_converter import generate_http_deeplink
+                    
+                    # Try to convert primary deeplink
+                    if deeplink_url:
+                        http_version = generate_http_deeplink(deeplink_url)
+                        if http_version:
+                            deeplink_url = http_version
+                    
+                    # Try to convert full deeplink
+                    if deeplink_url_full:
+                        http_version = generate_http_deeplink(deeplink_url_full)
+                        if http_version:
+                            deeplink_url_full = http_version
+                            
+                except ImportError:
+                    log("deeplink_converter not available, using original scheme URLs", "WARN")
 
         conn.close()
 
