@@ -89,11 +89,6 @@ DETECT_DEBOUNCE_SECONDS = float(os.getenv('DETECT_DEBOUNCE_SECONDS', '3'))
 DETECT_LAST_SPAWN = {}  # lane_number -> last_spawn_epoch
 DETECT_LAST_SPAWN_LOCK = threading.Lock()
 
-# Detector cooldown (avoid re-triggering same lane after successful launch)
-LANE_TRIGGER_COOLDOWN = {}  # lane_number -> last_trigger_epoch
-COOLDOWN_MINUTES = int(os.getenv('LANE_COOLDOWN_MINUTES', '0'))  # Don't re-trigger for N minutes
-COOLDOWN_SECONDS = int(os.getenv('LANE_COOLDOWN_SECONDS', '45'))  # Cooldown in seconds (default 45s)
-
 # Create Flask app
 app = Flask(__name__)
 CORS(app)
@@ -1117,15 +1112,6 @@ def auto_detect_and_trigger(lane_number: int, hint_client_ip: str, self_base_url
       - The HLS request usually comes from the CDVR server, not the end device.
       - Some installs report connected=false even while recently seen, so we use recency.
     """
-    # Check cooldown - don't re-trigger same lane too quickly
-    now = time.time()
-    last_trigger = LANE_TRIGGER_COOLDOWN.get(lane_number, 0)
-    cooldown_time = (COOLDOWN_MINUTES * 60) + COOLDOWN_SECONDS
-    if now - last_trigger < cooldown_time:
-        seconds_ago = int(now - last_trigger)
-        log(f"Detector: lane {lane_number} on cooldown (triggered {seconds_ago}s ago, {cooldown_time}s cooldown)", "INFO")
-        return
-    
     try:
         cdvr_clients_url = f"http://{CDVR_SERVER_IP}:{CDVR_SERVER_PORT}/dvr/clients/info"
         resp = requests.get(cdvr_clients_url, timeout=5)
@@ -1204,11 +1190,6 @@ def auto_detect_and_trigger(lane_number: int, hint_client_ip: str, self_base_url
 
                 deeplink = deeplink_info.get("deeplink")
                 result = trigger_playback_on_client(client_ip, deeplink, int(lane_number))
-                
-                # Set cooldown after successful trigger
-                if result and result.get('playback_triggered'):
-                    LANE_TRIGGER_COOLDOWN[lane_number] = time.time()
-                    log(f"Detector: lane {lane_number} cooldown set for {cooldown_time}s", "INFO")
                 
                 return
 
