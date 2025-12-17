@@ -53,7 +53,7 @@ def main():
     print("=" * 60)
 
     # Total steps in this pipeline
-    total_steps = 10
+    total_steps = 12
 
     # Check for --skip-scrape flag
     skip_scrape = "--skip-scrape" in sys.argv
@@ -75,6 +75,15 @@ def main():
         ]):
             return 1
 
+    # Step 2: Scrape Kayo Sports
+    kayo_days = os.getenv("KAYO_DAYS", "7")
+    if not run_step(2, total_steps, f"Scraping Kayo Sports ({kayo_days} days)", [
+        "python3", "kayo_scrape.py",
+        "--out", str(OUT_DIR / "kayo_raw.json"),
+        "--days", kayo_days,
+    ]):
+        return 1
+
     # Fresh-install safety: ensure DB file exists before migrations
     if not DB_PATH.exists():
         print("\n" + "=" * 60)
@@ -88,69 +97,81 @@ def main():
             print(f"✖ Failed to create DB at {DB_PATH}: {e}")
             return 1
 
-    # Step 2: Ensure database schema (playables table)
-    if not run_step(2, total_steps, "Ensuring database schema (playables table)", [
+    # Step 3: Ensure database schema (playables table)
+    if not run_step(3, total_steps, "Ensuring database schema (playables table)", [
         "python3", "migrate_add_playables.py",
         "--db", str(DB_PATH),
         "--yes",
     ]):
         return 1
 
-    # Step 3: Ensure database schema (provider_lanes table)
-    if not run_step(3, total_steps, "Ensuring database schema (provider_lanes table)", [
+    # Step 4: Ensure database schema (provider_lanes table)
+    if not run_step(4, total_steps, "Ensuring database schema (provider_lanes table)", [
         "python3", "migrate_add_provider_lanes.py",
     ]):
         return 1
 
-    # Step 4: Ensure database schema (adb_lanes table)
-    if not run_step(4, total_steps, "Ensuring database schema (adb_lanes table)", [
+    # Step 5: Ensure database schema (adb_lanes table)
+    if not run_step(5, total_steps, "Ensuring database schema (adb_lanes table)", [
         "python3", "migrate_add_adb_lanes.py",
     ]):
         return 1
 
-    # Step 5: Import Apple TV events (reads multi_scraped.json directly)
-    if not run_step(5, total_steps, "Importing Apple TV events to database", [
+    # Step 6: Import Apple TV events (reads multi_scraped.json directly)
+    if not run_step(6, total_steps, "Importing Apple TV events to database", [
         "python3", "fruit_import_appletv.py",
         "--apple-json", str(OUT_DIR / "multi_scraped.json"),
         "--fruit-db", str(DB_PATH),
     ]):
         return 1
 
-    # Step 6: Build virtual lanes (Channels-style direct lanes)
+    # Step 7: Import Kayo events
+    kayo_json = OUT_DIR / "kayo_raw.json"
+    if kayo_json.exists():
+        if not run_step(7, total_steps, "Importing Kayo events to database", [
+            "python3", "ingest_kayo.py",
+            "--db", str(DB_PATH),
+            "--kayo-json", str(kayo_json),
+        ]):
+            return 1
+    else:
+        print(f"\n[7/{total_steps}] Kayo data not found at {kayo_json}, skipping ingest")
+
+    # Step 8: Build virtual lanes (Channels-style direct lanes)
     lanes = os.getenv("FRUIT_LANES", os.getenv("PEACOCK_LANES", "40"))
-    if not run_step(6, total_steps, f"Building {lanes} virtual lanes", [
+    if not run_step(8, total_steps, f"Building {lanes} virtual lanes", [
         "python3", "fruit_build_lanes.py",
         "--db", str(DB_PATH),
         "--lanes", lanes,
     ]):
         return 1
 
-    # Step 7: Export direct channels (primary XML/M3U)
-    if not run_step(7, total_steps, "Exporting Direct channels", [
+    # Step 9: Export direct channels (primary XML/M3U)
+    if not run_step(9, total_steps, "Exporting Direct channels", [
         "python3", "fruit_export_hybrid.py",
         "--db", str(DB_PATH),
     ]):
         return 1
 
-    # Step 8: Export virtual lanes (existing hybrid lane view)
+    # Step 10: Export virtual lanes (existing hybrid lane view)
     server_url = os.getenv("SERVER_URL", "http://192.168.86.80:6655")
-    if not run_step(8, total_steps, "Exporting Virtual Lanes", [
+    if not run_step(10, total_steps, "Exporting Virtual Lanes", [
         "python3", "fruit_export_lanes.py",
         "--db", str(DB_PATH),
         "--server-url", server_url,
     ]):
         return 1
 
-    # Step 9: Build ADB lanes per provider (adb_lanes table)
-    if not run_step(9, total_steps, "Building ADB lanes per provider", [
+    # Step 11: Build ADB lanes per provider (adb_lanes table)
+    if not run_step(11, total_steps, "Building ADB lanes per provider", [
         "python3", "fruit_build_adb_lanes.py",
         "--db", str(DB_PATH),
     ]):
         return 1
 
-    # Step 10: Export ADB XMLTV + M3U playlists
+    # Step 12: Export ADB XMLTV + M3U playlists
     server_url = os.getenv("SERVER_URL", "http://192.168.86.80:6655")
-    if not run_step(10, total_steps, "Exporting ADB lanes XMLTV and M3U", [
+    if not run_step(12, total_steps, "Exporting ADB lanes XMLTV and M3U", [
         "python3", "fruit_export_adb_lanes.py",
         "--db", str(DB_PATH),
         "--out-dir", str(OUT_DIR),

@@ -21,6 +21,8 @@ LOGICAL_SERVICE_MAP = {
     'www.max.com': 'max',
     'f1tv.formula1.com': 'f1tv',
     'tv.apple.com': 'apple_tv',  # Special - needs league lookup
+    'kayosports.com.au': 'kayo_web',
+    'www.kayosports.com.au': 'kayo_web',
 }
 
 # Display names for logical services
@@ -50,6 +52,7 @@ SERVICE_DISPLAY_NAMES = {
     'peacock_web': 'Peacock (Web)',
     'max': 'Max',
     'f1tv': 'F1 TV',
+    'kayo_web': 'Kayo Sports',
     'apple_mls': 'Apple MLS',
     'apple_mlb': 'Apple MLB',
     'apple_nba': 'Apple NBA',
@@ -125,8 +128,12 @@ def get_logical_service_for_playable(
         conn: Database connection (needed for Apple TV league lookup)
     
     Returns:
-        Logical service code (e.g., 'apple_mls', 'peacock_web', 'pplus', etc.)
+        Logical service code (e.g., 'apple_mls', 'peacock_web', 'pplus', 'kayo_web', etc.)
     """
+    # Kayo provider: map to kayo_web
+    if provider == 'kayo':
+        return 'kayo_web'
+    
     # Non-web providers: use provider as-is
     if provider not in ('http', 'https', None, ''):
         return provider
@@ -252,10 +259,11 @@ def get_logical_service_priority(service_code: str) -> int:
         'dazn': 15,
         'open.dazn.com': 16,
         'f1tv': 17,
-        'vixapp': 18,
-        'nflctv': 19,
-        'watchtru': 20,
-        'watchtnt': 21,
+        'kayo_web': 18,  # Kayo Sports (Australia)
+        'vixapp': 19,
+        'nflctv': 20,
+        'watchtru': 21,
+        'watchtnt': 22,
         
         # Amazon aggregator services (deprioritized - often redirect to other services)
         # These should only be used when no direct service deeplink is available
