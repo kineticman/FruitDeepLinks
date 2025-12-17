@@ -100,7 +100,7 @@ def normalize_kayo_event(raw_event: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
     # Map to existing schema
     event_row: Dict[str, Any] = {
         "id": event_id,
-        "pvid": None,
+        "pvid": external_id,  # Use asset ID as provider ID
         "slug": None,
         "title": title,
         "title_brief": None,
