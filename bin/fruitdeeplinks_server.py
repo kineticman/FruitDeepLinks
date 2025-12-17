@@ -1179,7 +1179,7 @@ def auto_detect_and_trigger(lane_number: int, hint_client_ip: str, self_base_url
                 log(f"Detector: matched lane={lane_number} client={client_ip} ch='{ch_name}'", "INFO")
                 
                 # Detect platform and choose deeplink format
-                platform = c.get("platform", "").lower()
+                platform = client.get("platform", "").lower()
                 is_android = any(x in platform for x in ["android", "firetv"])
                 deeplink_format = "http" if is_android else "scheme"
                 
