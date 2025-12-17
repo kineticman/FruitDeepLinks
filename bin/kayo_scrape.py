@@ -149,6 +149,9 @@ def normalize_kayo_event(content: Dict[str, Any], sport_from_panel: str) -> Dict
     
     # Sport and league
     sport_name = clickthrough.get("sportName", sport_from_panel)
+    # Normalize capitalization: "football" -> "Football"
+    if sport_name:
+        sport_name = sport_name.title()
     league_name = clickthrough.get("seriesName") or clickthrough.get("roundName") or sport_name
     
     # Extract times - transmissionTime is the start time
