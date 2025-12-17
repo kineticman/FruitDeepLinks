@@ -91,7 +91,8 @@ DETECT_LAST_SPAWN_LOCK = threading.Lock()
 
 # Detector cooldown (avoid re-triggering same lane after successful launch)
 LANE_TRIGGER_COOLDOWN = {}  # lane_number -> last_trigger_epoch
-COOLDOWN_MINUTES = int(os.getenv('LANE_COOLDOWN_MINUTES', '5'))  # Don't re-trigger for N minutes
+COOLDOWN_MINUTES = int(os.getenv('LANE_COOLDOWN_MINUTES', '0'))  # Don't re-trigger for N minutes
+COOLDOWN_SECONDS = int(os.getenv('LANE_COOLDOWN_SECONDS', '45'))  # Cooldown in seconds (default 45s)
 
 # Create Flask app
 app = Flask(__name__)
@@ -1049,11 +1050,13 @@ def trigger_playback_on_client(client_ip: str, deeplink: str, lane_number: int) 
     
     try:
         log(f"Triggering playback for lane {lane_number} on {client_ip}", "INFO")
+        log(f"Deeplink to use: {deeplink}", "INFO")
         
         # Update streamlink file
         strmlnk_path = STREAMLINK_DIR / f"lane{lane_number}.strmlnk"
         strmlnk_path.write_text(deeplink)
         result["strm_updated"] = True
+        log(f"Updated streamlink file: {strmlnk_path}", "INFO")
         
         # Get file ID from CDVR
         cdvr_url = f"http://{CDVR_SERVER_IP}:{CDVR_SERVER_PORT}"
@@ -1072,25 +1075,33 @@ def trigger_playback_on_client(client_ip: str, deeplink: str, lane_number: int) 
         
         if not file_id:
             result["error"] = f"File {lane_filename} not found in CDVR"
+            log(f"ERROR: File not found in CDVR: {lane_filename}", "ERROR")
             return result
+        
+        log(f"Found CDVR file ID: {file_id}", "INFO")
         
         # Reprocess file (fast method from SLM)
         reprocess_resp = requests.put(f"{cdvr_url}/dvr/files/{file_id}/reprocess", timeout=10)
         
         if reprocess_resp.status_code == 200:
             result["cdvr_reprocessed"] = True
+            log(f"Reprocessed file successfully", "INFO")
             time.sleep(2)
         else:
             result["error"] = f"Reprocess returned {reprocess_resp.status_code}"
+            log(f"ERROR: Reprocess failed with status {reprocess_resp.status_code}", "ERROR")
             return result
         
         # Trigger playback on client
         play_url = f"http://{client_ip}:{CDVR_API_PORT}/api/play/recording/{file_id}"
+        log(f"Triggering play at: {play_url}", "INFO")
         play_resp = requests.post(play_url, timeout=5)
         
         if play_resp.status_code == 200:
             result["playback_triggered"] = True
             log(f"Successfully triggered deeplink on {client_ip}", "INFO")
+        else:
+            log(f"Play request returned status {play_resp.status_code}", "WARN")
         
         return result
         
@@ -1109,9 +1120,10 @@ def auto_detect_and_trigger(lane_number: int, hint_client_ip: str, self_base_url
     # Check cooldown - don't re-trigger same lane too quickly
     now = time.time()
     last_trigger = LANE_TRIGGER_COOLDOWN.get(lane_number, 0)
-    if now - last_trigger < (COOLDOWN_MINUTES * 60):
+    cooldown_time = (COOLDOWN_MINUTES * 60) + COOLDOWN_SECONDS
+    if now - last_trigger < cooldown_time:
         seconds_ago = int(now - last_trigger)
-        log(f"Detector: lane {lane_number} on cooldown (triggered {seconds_ago}s ago, {COOLDOWN_MINUTES} min cooldown)", "INFO")
+        log(f"Detector: lane {lane_number} on cooldown (triggered {seconds_ago}s ago, {cooldown_time}s cooldown)", "INFO")
         return
     
     try:
@@ -1196,7 +1208,7 @@ def auto_detect_and_trigger(lane_number: int, hint_client_ip: str, self_base_url
                 # Set cooldown after successful trigger
                 if result and result.get('playback_triggered'):
                     LANE_TRIGGER_COOLDOWN[lane_number] = time.time()
-                    log(f"Detector: lane {lane_number} cooldown set for {COOLDOWN_MINUTES} min", "INFO")
+                    log(f"Detector: lane {lane_number} cooldown set for {cooldown_time}s", "INFO")
                 
                 return
 
