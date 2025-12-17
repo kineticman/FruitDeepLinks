@@ -242,16 +242,31 @@ Returns the current deeplink for a specific provider lane. This is the primary e
 <div><span class="param-name">provider_code</span>: Provider scheme (sportscenter, pplus, aiv, peacock, max, etc.)</div>
 <div><span class="param-name">lane_number</span>: Lane number (1, 2, 3, ...)</div>
 <div><span class="param-name">format</span> (query): <code>json</code> (default) or <code>text</code></div>
+<div><span class="param-name">deeplink_format</span> (query): <code>scheme</code> (default, for Apple TV) or <code>http</code> (for Android/Fire TV)</div>
 </div>
-<pre># Plain text deeplink (for ADBTuner)
+<pre># Plain text deeplink (for ADBTuner on Apple TV)
 curl "$BASE/api/adb/lanes/sportscenter/1/deeplink?format=text"
-# Returns: sportscenter://play?contentId=...
+# Returns: sportscenter://x-callback-url/showWatchStream?playID=...
+
+# HTTP format for Android/Fire TV
+curl "$BASE/api/adb/lanes/aiv/2/deeplink?format=text&amp;deeplink_format=http"
+# Returns: https://app.primevideo.com/detail?gti=amzn1.dv.gti.XXX
 
 # JSON format (for debugging)
-curl "$BASE/api/adb/lanes/sportscenter/1/deeplink?format=json"
-# Returns: {"ok": true, "provider_code": "sportscenter", ...}</pre>
+curl "$BASE/api/adb/lanes/sportscenter/1/deeplink?format=json&amp;deeplink_format=http"
+# Returns: {"status": "success", "deeplink": "https://...", "deeplink_format": "http", ...}</pre>
 <div class="note">
-<div class="note-title"> ADBTuner Integration</div>
+<div class="note-title">🔥 Android/Fire TV Support</div>
+Use <code>deeplink_format=http</code> to get HTTP deeplinks instead of app schemes. This converts:
+<ul style="margin: 8px 0 0 20px; padding: 0;">
+<li><code>aiv://...</code> → <code>https://app.primevideo.com/...</code></li>
+<li><code>sportscenter://...</code> → <code>https://www.espn.com/watch/player/...</code></li>
+<li><code>peacock://...</code> → <code>https://www.peacocktv.com/watch/playback/...</code></li>
+</ul>
+Scheme format (default) works for Apple TV. HTTP format required for Android/Fire TV devices.
+</div>
+<div class="note">
+<div class="note-title">📺 ADBTuner Integration</div>
 Configure each provider as a separate Custom Channels source in Channels DVR:
 <ul style="margin: 8px 0 0 20px; padding: 0;">
 <li>M3U URL: <code>http://SERVER:6655/out/adb_lanes_sportscenter.m3u</code></li>

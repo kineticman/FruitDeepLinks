@@ -1632,11 +1632,13 @@ def api_adb_lane_deeplink(provider_code, lane_number):
     
     Query Parameters:
     - format: 'text' (default) or 'json'
+    - deeplink_format: 'scheme' (default) or 'http' (for Android/Fire TV)
     - at: ISO timestamp (default: now)
     
     Examples:
     - /api/adb/lanes/sportscenter/1/deeplink?format=text
     - /api/adb/lanes/pplus/3/deeplink?format=json
+    - /api/adb/lanes/aiv/2/deeplink?format=json&deeplink_format=http
     
     Returns:
     - Text format: Just the deeplink URL (e.g., "sportscenter://...")
@@ -1657,6 +1659,9 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         at_ts = request.args.get("at")
         if not at_ts:
             at_ts = _dt.utcnow().isoformat(timespec="seconds")
+        
+        # Get deeplink format preference
+        deeplink_format = request.args.get("deeplink_format", "scheme").lower()
         
         cur = conn.cursor()
         
@@ -1757,6 +1762,16 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         link_info = get_event_link_info(conn, db_event_id, uid_col, primary_col, full_col)
         deeplink_url = link_info.get("deeplink_url") or link_info.get("deeplink_url_full") or event_id_str
         
+        # Convert to HTTP format if requested (for Android/Fire TV)
+        if deeplink_format == "http" and deeplink_url:
+            try:
+                from deeplink_converter import generate_http_deeplink
+                http_version = generate_http_deeplink(deeplink_url, provider_code)
+                if http_version:
+                    deeplink_url = http_version
+            except ImportError:
+                log("deeplink_converter not available for HTTP conversion", "WARN")
+        
         # Return response
         fmt = (request.args.get("format") or "text").lower()
         if fmt == "text":
@@ -1773,7 +1788,8 @@ def api_adb_lane_deeplink(provider_code, lane_number):
                 "start_utc": start_utc,
                 "stop_utc": stop_utc,
                 "event_start_utc": event_row["start_utc"],
-                "event_end_utc": event_row["end_utc"]
+                "event_end_utc": event_row["end_utc"],
+                "deeplink_format": deeplink_format
             })
     
     except Exception as e:
