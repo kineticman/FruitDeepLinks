@@ -250,19 +250,39 @@ loading.style.display = 'block';
 empty.style.display = 'none';
 wrapper.style.display = 'none';
 
-const res = await fetch('/api/provider_lanes');
-if (!res.ok) throw new Error('Failed to load provider lanes');
-const data = await res.json();
+// Fetch both provider lanes config AND filter data (for event counts)
+const [lanesRes, filtersRes] = await Promise.all([
+fetch('/api/provider_lanes'),
+fetch('/api/filters')
+]);
+
+if (!lanesRes.ok) throw new Error('Failed to load provider lanes');
+if (!filtersRes.ok) throw new Error('Failed to load filters data');
+
+const lanesData = await lanesRes.json();
+const filtersData = await filtersRes.json();
 
 loading.style.display = 'none';
 
-if (!data.providers || data.providers.length === 0) {
+if (!lanesData.providers || lanesData.providers.length === 0) {
 empty.style.display = 'block';
 wrapper.style.display = 'none';
 return;
 }
 
-providerLanes = data.providers;
+// Create a map of provider schemes to event counts
+const eventCounts = {};
+if (filtersData.filters && filtersData.filters.providers) {
+filtersData.filters.providers.forEach(p => {
+eventCounts[p.scheme] = p.count || 0;
+});
+}
+
+providerLanes = lanesData.providers.map(p => ({
+...p,
+event_count: eventCounts[p.provider_code] || 0
+}));
+
 wrapper.style.display = 'block';
 
 tbody.innerHTML = providerLanes.map(p => `
