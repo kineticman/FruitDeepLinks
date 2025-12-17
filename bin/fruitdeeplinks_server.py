@@ -1224,6 +1224,16 @@ def api_helper():
     """Simple HTML API helper page"""
     return load_template("api_helper.html")
 
+@app.route("/filters")
+def filters_page():
+    """Filters and settings page"""
+    return load_template("filters.html")
+
+@app.route("/adb")
+def adb_config_page():
+    """ADB configuration page"""
+    return load_template("adb_config.html")
+
 @app.route("/api/status")
 def api_status():
     """Get system status"""
