@@ -192,19 +192,19 @@ Each enabled provider gets dedicated virtual channels that can be tuned via ADB 
 <div class="card">
 <h2>📋 Integration Files</h2>
 <div class="section-description">
-After configuring and saving your ADB lanes, use these files with ADBTuner or ChromeCapture:
+After configuring and saving your ADB lanes, each enabled provider generates its own set of files for ADBTuner or ChromeCapture integration:
 </div>
-<ul style="list-style: none; padding: 0;">
-<li style="padding: 10px; background: #0f172a; border-radius: 6px; margin-bottom: 8px;">
-<strong>M3U Playlist:</strong> <a href="/out/adb_lanes.m3u" style="color: #60a5fa; text-decoration: none;">/out/adb_lanes.m3u</a>
-</li>
-<li style="padding: 10px; background: #0f172a; border-radius: 6px; margin-bottom: 8px;">
-<strong>EPG Guide:</strong> <a href="/out/adb_lanes.xml" style="color: #60a5fa; text-decoration: none;">/out/adb_lanes.xml</a>
-</li>
-<li style="padding: 10px; background: #0f172a; border-radius: 6px;">
-<strong>Chrome M3U:</strong> <a href="/out/adb_lanes_chrome.m3u" style="color: #60a5fa; text-decoration: none;">/out/adb_lanes_chrome.m3u</a>
-</li>
-</ul>
+
+<div id="integration-files-loading" class="loading">Loading available files...</div>
+<div id="integration-files-list" style="display: none;">
+<!-- Will be populated dynamically -->
+</div>
+
+<div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #334155;">
+<p style="color: #94a3b8; font-size: 13px;">
+<strong>Note:</strong> Files are generated when you run "Apply Filters" or trigger a refresh after saving your ADB configuration.
+</p>
+</div>
 </div>
 
 <div class="card">
@@ -332,14 +332,112 @@ throw new Error(data.error || 'Failed to save');
 
 showStatus('✅ ADB configuration saved successfully! Run "Apply Filters" or trigger a refresh to regenerate files.', 'success');
 loadProviderLanes();
+loadIntegrationFiles();
 
 } catch (err) {
 showStatus('❌ Error saving ADB configuration: ' + err.message, 'error');
 }
 }
 
+async function loadIntegrationFiles() {
+try {
+const loading = document.getElementById('integration-files-loading');
+const listEl = document.getElementById('integration-files-list');
+
+loading.style.display = 'block';
+listEl.style.display = 'none';
+
+const res = await fetch('/api/status');
+if (!res.ok) throw new Error('Failed to load files');
+const data = await res.json();
+
+loading.style.display = 'none';
+
+if (!data.files || Object.keys(data.files).length === 0) {
+listEl.innerHTML = '<p style="color: #94a3b8; font-style: italic;">No files generated yet. Save your ADB configuration and run "Apply Filters".</p>';
+listEl.style.display = 'block';
+return;
+}
+
+// Filter for ADB-related files
+const adbFiles = Object.entries(data.files).filter(([name]) => 
+name.includes('adb_lanes') || name.includes('_lanes.m3u') || name.includes('_lanes.xml')
+);
+
+if (adbFiles.length === 0) {
+listEl.innerHTML = '<p style="color: #94a3b8; font-style: italic;">No ADB files found. Generate them by running "Apply Filters" after saving your configuration.</p>';
+listEl.style.display = 'block';
+return;
+}
+
+// Group files by provider
+const fileGroups = {};
+const globalFiles = [];
+
+adbFiles.forEach(([name, info]) => {
+if (name === 'adb_lanes.m3u' || name === 'adb_lanes.xml' || name === 'adb_lanes_chrome.m3u') {
+globalFiles.push([name, info]);
+} else {
+// Extract provider from filename (e.g., "espn_lanes.m3u" -> "espn")
+const match = name.match(/^(.+?)_lanes/);
+if (match) {
+const provider = match[1];
+if (!fileGroups[provider]) {
+fileGroups[provider] = [];
+}
+fileGroups[provider].push([name, info]);
+}
+}
+});
+
+let html = '';
+
+// Global/combined files first
+if (globalFiles.length > 0) {
+html += '<div style="margin-bottom: 20px;"><h3 style="font-size: 16px; margin-bottom: 12px; color: #fbbf24;">📦 Combined (All Providers)</h3><ul style="list-style: none; padding: 0;">';
+globalFiles.forEach(([name, info]) => {
+const sizeMB = (info.size / 1024 / 1024).toFixed(2);
+html += `
+<li style="padding: 10px; background: #0f172a; border-radius: 6px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+<a href="/out/${name}" style="color: #60a5fa; text-decoration: none; font-family: monospace; font-size: 13px;">${name}</a>
+<span style="color: #94a3b8; font-size: 12px;">${sizeMB} MB</span>
+</li>
+`;
+});
+html += '</ul></div>';
+}
+
+// Provider-specific files
+const providers = Object.keys(fileGroups).sort();
+if (providers.length > 0) {
+providers.forEach(provider => {
+const files = fileGroups[provider];
+html += `<div style="margin-bottom: 16px;"><h3 style="font-size: 15px; margin-bottom: 8px; color: #60a5fa;">📺 ${provider.toUpperCase()}</h3><ul style="list-style: none; padding: 0;">`;
+files.forEach(([name, info]) => {
+const sizeMB = (info.size / 1024 / 1024).toFixed(2);
+html += `
+<li style="padding: 8px; background: #0f172a; border-radius: 6px; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center;">
+<a href="/out/${name}" style="color: #60a5fa; text-decoration: none; font-family: monospace; font-size: 12px;">${name}</a>
+<span style="color: #94a3b8; font-size: 11px;">${sizeMB} MB</span>
+</li>
+`;
+});
+html += '</ul></div>';
+});
+}
+
+listEl.innerHTML = html;
+listEl.style.display = 'block';
+
+} catch (err) {
+console.error('Failed to load integration files:', err);
+document.getElementById('integration-files-loading').textContent = 'Error loading files';
+}
+}
+
 // Initialize
 loadProviderLanes();
+loadIntegrationFiles();
 </script>
 </body>
 </html>
