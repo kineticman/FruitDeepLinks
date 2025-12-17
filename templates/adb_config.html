@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>ADB Configuration - FruitDeepLinks</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+color: #e2e8f0;
+padding: 20px;
+min-height: 100vh;
+}
+.container { max-width: 1400px; margin: 0 auto; }
+h1 { font-size: 32px; margin-bottom: 10px; }
+.subtitle { color: #94a3b8; margin-bottom: 30px; }
+
+.nav {
+margin-bottom: 30px;
+display: flex;
+gap: 15px;
+}
+.nav a {
+color: #60a5fa;
+text-decoration: none;
+padding: 8px 16px;
+border-radius: 6px;
+background: #1e293b;
+border: 1px solid #334155;
+}
+.nav a:hover { background: #334155; }
+
+.card {
+background: #1e293b;
+border-radius: 12px;
+padding: 24px;
+margin-bottom: 20px;
+border: 1px solid #334155;
+}
+h2 {
+font-size: 20px;
+margin-bottom: 16px;
+display: flex;
+align-items: center;
+gap: 8px;
+}
+.section-description {
+color: #94a3b8;
+margin-bottom: 20px;
+font-size: 14px;
+line-height: 1.6;
+}
+
+.provider-lanes-table {
+width: 100%;
+border-collapse: collapse;
+margin-top: 10px;
+font-size: 14px;
+}
+.provider-lanes-table th,
+.provider-lanes-table td {
+border-bottom: 1px solid #334155;
+padding: 12px 8px;
+text-align: left;
+}
+.provider-lanes-table th {
+font-weight: 600;
+color: #e2e8f0;
+background: #0f172a;
+}
+.provider-lanes-table tr:hover {
+background: #111827;
+}
+.provider-lanes-table input[type="number"] {
+width: 90px;
+padding: 6px 8px;
+border-radius: 4px;
+border: 1px solid #334155;
+background: #020617;
+color: #e2e8f0;
+font-size: 14px;
+}
+.provider-lanes-table input[type="checkbox"] {
+width: 18px;
+height: 18px;
+cursor: pointer;
+}
+
+.btn {
+background: #3b82f6;
+color: white;
+border: none;
+padding: 10px 20px;
+border-radius: 6px;
+cursor: pointer;
+font-size: 14px;
+margin-right: 10px;
+}
+.btn:hover { background: #2563eb; }
+.btn:disabled { background: #475569; cursor: not-allowed; }
+.btn-secondary { background: #64748b; }
+.btn-secondary:hover { background: #475569; }
+.btn-success { background: #22c55e; }
+.btn-success:hover { background: #16a34a; }
+
+.loading { color: #fbbf24; }
+.status-message {
+padding: 12px;
+border-radius: 6px;
+margin-bottom: 20px;
+display: none;
+}
+.status-success {
+background: #14532d;
+border: 1px solid #22c55e;
+color: #22c55e;
+}
+.status-error {
+background: #7f1d1d;
+border: 1px solid #ef4444;
+color: #ef4444;
+}
+
+code {
+background: #0f172a;
+padding: 2px 6px;
+border-radius: 4px;
+font-size: 13px;
+color: #60a5fa;
+}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>🔧 ADB Configuration</h1>
+<p class="subtitle">Configure provider lanes for ADBTuner and ChromeCapture integrations</p>
+
+<div class="nav">
+<a href="/">← Admin Dashboard</a>
+<a href="/filters">Filters & Settings</a>
+<a href="/api">API Helper</a>
+</div>
+
+<div id="status-message" class="status-message"></div>
+
+<div class="card">
+<h2>📺 Provider Lane Configuration</h2>
+<div class="section-description">
+<p style="margin-bottom: 12px;">
+<strong>What is this?</strong> ADB lanes allow integration with ADBTuner and ChromeCapture for Channels DVR. 
+Each enabled provider gets dedicated virtual channels that can be tuned via ADB commands.
+</p>
+<p style="margin-bottom: 12px;">
+<strong>How it works:</strong>
+</p>
+<ul style="margin-left: 20px; margin-bottom: 12px;">
+<li style="margin-bottom: 6px;">Enable providers you want to expose via ADB</li>
+<li style="margin-bottom: 6px;">Set how many lanes each provider should get (based on concurrent events)</li>
+<li style="margin-bottom: 6px;">Export generates M3U/XMLTV files for ADBTuner integration</li>
+<li style="margin-bottom: 6px;">Changes here do NOT affect your normal Channels DVR view</li>
+</ul>
+<p style="color: #fbbf24;">
+⚠️ <strong>Note:</strong> After saving changes, run "Apply Filters Now" from the Filters page or trigger a refresh to regenerate ADB lane files.
+</p>
+</div>
+
+<div id="provider-lanes-loading" class="loading">Loading provider lanes...</div>
+<div id="provider-lanes-empty" class="loading" style="display: none;">No providers found. Run a refresh first to populate data.</div>
+<div id="provider-lanes-table-wrapper" style="display: none; overflow-x: auto;">
+<table class="provider-lanes-table">
+<thead>
+<tr>
+<th style="min-width: 140px;">Provider Code</th>
+<th style="min-width: 200px;">Provider Name</th>
+<th style="min-width: 100px; text-align: right;">Event Count</th>
+<th style="min-width: 120px; text-align: center;">ADB Enabled</th>
+<th style="min-width: 140px;">Lane Count</th>
+</tr>
+</thead>
+<tbody id="provider-lanes-tbody"></tbody>
+</table>
+</div>
+
+<div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #334155;">
+<button class="btn btn-success" onclick="saveProviderLanes()" id="btn-save-lanes">💾 Save ADB Configuration</button>
+<button class="btn btn-secondary" onclick="loadProviderLanes()">🔄 Reload</button>
+</div>
+</div>
+
+<div class="card">
+<h2>📋 Integration Files</h2>
+<div class="section-description">
+After configuring and saving your ADB lanes, use these files with ADBTuner or ChromeCapture:
+</div>
+<ul style="list-style: none; padding: 0;">
+<li style="padding: 10px; background: #0f172a; border-radius: 6px; margin-bottom: 8px;">
+<strong>M3U Playlist:</strong> <a href="/out/adb_lanes.m3u" style="color: #60a5fa; text-decoration: none;">/out/adb_lanes.m3u</a>
+</li>
+<li style="padding: 10px; background: #0f172a; border-radius: 6px; margin-bottom: 8px;">
+<strong>EPG Guide:</strong> <a href="/out/adb_lanes.xml" style="color: #60a5fa; text-decoration: none;">/out/adb_lanes.xml</a>
+</li>
+<li style="padding: 10px; background: #0f172a; border-radius: 6px;">
+<strong>Chrome M3U:</strong> <a href="/out/adb_lanes_chrome.m3u" style="color: #60a5fa; text-decoration: none;">/out/adb_lanes_chrome.m3u</a>
+</li>
+</ul>
+</div>
+
+<div class="card">
+<h2>ℹ️ Quick Guide</h2>
+<div class="section-description">
+<p style="margin-bottom: 12px;"><strong>Example Configuration:</strong></p>
+<ul style="margin-left: 20px; line-height: 1.8;">
+<li><code>ESPN+</code>: Enable, 5 lanes → Creates channels for ESPN+ events 1-5</li>
+<li><code>Peacock</code>: Enable, 3 lanes → Creates channels for Peacock events 1-3</li>
+<li><code>Paramount+</code>: Disable → No ADB channels created</li>
+</ul>
+<p style="margin-top: 16px; margin-bottom: 12px;"><strong>Recommended Lane Counts:</strong></p>
+<ul style="margin-left: 20px; line-height: 1.8;">
+<li>Small providers (1-10 events): 1-2 lanes</li>
+<li>Medium providers (10-50 events): 3-5 lanes</li>
+<li>Large providers (50+ events): 5-10 lanes</li>
+</ul>
+</div>
+</div>
+</div>
+
+<script>
+let providerLanes = [];
+
+function showStatus(message, type = 'success') {
+const statusEl = document.getElementById('status-message');
+statusEl.textContent = message;
+statusEl.className = `status-message status-${type}`;
+statusEl.style.display = 'block';
+setTimeout(() => {
+statusEl.style.display = 'none';
+}, 5000);
+}
+
+async function loadProviderLanes() {
+try {
+const loading = document.getElementById('provider-lanes-loading');
+const empty = document.getElementById('provider-lanes-empty');
+const wrapper = document.getElementById('provider-lanes-table-wrapper');
+const tbody = document.getElementById('provider-lanes-tbody');
+
+loading.style.display = 'block';
+empty.style.display = 'none';
+wrapper.style.display = 'none';
+
+const res = await fetch('/api/provider_lanes');
+if (!res.ok) throw new Error('Failed to load provider lanes');
+const data = await res.json();
+
+loading.style.display = 'none';
+
+if (!data.providers || data.providers.length === 0) {
+empty.style.display = 'block';
+wrapper.style.display = 'none';
+return;
+}
+
+providerLanes = data.providers;
+wrapper.style.display = 'block';
+
+tbody.innerHTML = providerLanes.map(p => `
+<tr>
+<td><code>${p.provider_code}</code></td>
+<td>${p.name || p.provider_code}</td>
+<td style="text-align: right;">${p.event_count || 0}</td>
+<td style="text-align: center;">
+<input type="checkbox" 
+data-provider="${p.provider_code}" 
+class="adb-enabled-checkbox"
+${p.adb_enabled ? 'checked' : ''}>
+</td>
+<td>
+<input type="number" 
+min="0" max="50" 
+data-provider="${p.provider_code}"
+class="adb-lane-count-input"
+value="${p.adb_lane_count || 0}">
+</td>
+</tr>
+`).join('');
+
+} catch (err) {
+console.error('Failed to load provider lanes:', err);
+showStatus('Error loading provider lanes: ' + err.message, 'error');
+document.getElementById('provider-lanes-loading').textContent = 'Error loading provider lanes';
+}
+}
+
+async function saveProviderLanes() {
+try {
+const updates = [];
+const checkboxes = document.querySelectorAll('.adb-enabled-checkbox');
+const inputs = document.querySelectorAll('.adb-lane-count-input');
+
+checkboxes.forEach(cb => {
+const code = cb.dataset.provider;
+const enabled = cb.checked;
+const countInput = Array.from(inputs).find(i => i.dataset.provider === code);
+const count = countInput ? parseInt(countInput.value) || 0 : 0;
+
+updates.push({
+provider_code: code,
+adb_enabled: enabled,
+adb_lane_count: count
+});
+});
+
+const btnSave = document.getElementById('btn-save-lanes');
+btnSave.disabled = true;
+btnSave.textContent = '💾 Saving...';
+
+const res = await fetch('/api/provider_lanes', {
+method: 'POST',
+headers: {'Content-Type': 'application/json'},
+body: JSON.stringify({providers: updates})
+});
+
+btnSave.disabled = false;
+btnSave.textContent = '💾 Save ADB Configuration';
+
+if (!res.ok) {
+const data = await res.json().catch(() => ({}));
+throw new Error(data.error || 'Failed to save');
+}
+
+showStatus('✅ ADB configuration saved successfully! Run "Apply Filters" or trigger a refresh to regenerate files.', 'success');
+loadProviderLanes();
+
+} catch (err) {
+showStatus('❌ Error saving ADB configuration: ' + err.message, 'error');
+}
+}
+
+// Initialize
+loadProviderLanes();
+</script>
+</body>
+</html>

@@ -151,6 +151,7 @@ color: #38bdf8;
 <a href="#core">Core Endpoints (Health, Status, Files)</a>
 <a href="#adb">ADB Lanes API (ADBTuner Integration)</a>
 <a href="#lanes">Virtual Lanes (Multi-Source Channels)</a>
+<a href="#detector">CDVR Detector (Auto-Launch)</a>
 <a href="#filters">Content Filtering</a>
 <a href="#refresh">Refresh & Admin</a>
 </div>
@@ -333,14 +334,21 @@ Virtual lanes are multi-source channels that automatically schedule events acros
 <p class="description">Get what's currently playing on a specific virtual lane.</p>
 <div class="params">
 <div><span class="param-name">include</span>: Add <code>?include=deeplink</code> to include deeplink fields</div>
+<div><span class="param-name">deeplink_format</span>: <code>scheme</code> (default, for Apple TV) or <code>http</code> (for Android/Fire TV)</div>
 <div><span class="param-name">format</span>: <code>json</code> (default) or <code>txt</code></div>
 <div><span class="param-name">param</span>: For txt format, choose <code>event_uid</code>, <code>deeplink_url</code>, or <code>deeplink_url_full</code></div>
 </div>
-<pre># JSON with deeplink
+<pre># JSON with deeplink (default scheme format)
 curl "$BASE/whatson/1?include=deeplink" | jq
 
-# Plain text deeplink
-curl "$BASE/whatson/1?format=txt&param=deeplink_url"</pre>
+# JSON with HTTP deeplink (for Android/Fire TV)
+curl "$BASE/whatson/1?include=deeplink&amp;deeplink_format=http" | jq
+
+# Plain text deeplink (scheme format)
+curl "$BASE/whatson/1?format=txt&amp;param=deeplink_url"
+
+# Plain text HTTP deeplink (for Fire TV)
+curl "$BASE/whatson/1?format=txt&amp;param=deeplink_url&amp;deeplink_format=http"</pre>
 </div>
 
 <div class="card">
@@ -355,6 +363,42 @@ curl "$BASE/whatson/all?include=deeplink" | jq
 
 # Specific timestamp
 curl "$BASE/whatson/all?at=2025-12-09T20:00:00" | jq</pre>
+</div>
+
+<!-- CDVR DETECTOR -->
+<h2 class="section-header" id="detector">CDVR Detector (Auto-Launch)</h2>
+
+<div class="card">
+<h2>Lane HLS Stream</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/lane/&lt;lane_number&gt;/stream.m3u8</code>
+</div>
+<p class="description">Serves HLS video stream for CDVR virtual lanes. Automatically triggers deeplink detection in background when a client tunes in.</p>
+<div class="params">
+<div><span class="param-name">Platform Detection</span>: Auto-detects tvOS/Fire TV/Android TV and uses appropriate deeplink format</div>
+<div><span class="param-name">Cooldown</span>: 5-minute cooldown per lane (configurable via LANE_COOLDOWN_MINUTES)</div>
+<div><span class="param-name">Requires</span>: CDVR_DVR_PATH environment variable must be set to enable detector</div>
+</div>
+<pre># M3U entry points to this endpoint
+#EXTINF:-1 tvg-id="lane.1" channel-number="9000",Fruit Lane 1
+http://your-ip:6655/lane/1/stream.m3u8
+
+# Manually test HLS stream
+curl "$BASE/lane/1/stream.m3u8"</pre>
+</div>
+
+<div class="card">
+<h2>Detector Status</h2>
+<p class="description">Check detector logs in real-time:</p>
+<pre># Watch detector activity
+docker logs -f fruitdeeplinks | grep DETECTOR
+
+# Common log patterns:
+# [INFO] DETECTOR_START lane=5
+# [INFO] Detector: matched lane=5 client=192.168.1.100 ch='Fruit Lane 5'
+# [INFO] Detector: client platform=tvos, using deeplink_format=scheme
+# [INFO] Detector: lane 5 cooldown set for 5 min</pre>
 </div>
 
 <!-- FILTERS -->
