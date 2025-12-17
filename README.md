@@ -62,7 +62,7 @@ If you want extra automation / features, you can add these as well:
 ```env
 # OPTIONAL (only if you want extra automation/features)
 # Auto Channels DVR guide refresh
-CHANNELS_DVR_IP=192.168.86.80
+CHANNELS_DVR_IP=192.168.86.72
 CHANNELS_SOURCE_NAME=fruitdeeplinks
 
 # Lanes (BETA) – only needed if you experiment with lane channels
@@ -270,7 +270,7 @@ FRUIT_HOST_PORT=6655
 TZ=America/New_York
 
 # Channels DVR integration (optional, but recommended)
-CHANNELS_DVR_IP=192.168.86.80
+CHANNELS_DVR_IP=192.168.86.72
 CHANNELS_SOURCE_NAME=fruitdeeplinks
 
 # Virtual lanes (BETA)
@@ -280,7 +280,7 @@ FRUIT_LANE_START_CH=9000
 # Streaming service scraping (optional)
 KAYO_DAYS=7  # Days to scrape for Kayo Sports (default: 7)
 
-# CDVR Detector (BETA) - Auto-launch streaming apps
+# Event-Level Deeplinks (tvOS reliable; Android testing in progress)
 # Leave blank to disable. Set to your DVR's base path to enable:
 CDVR_DVR_PATH=/mnt/storage/DVR
 CDVR_SERVER_PORT=8089
@@ -319,47 +319,34 @@ docker exec fruitdeeplinks python3 /app/bin/fruit_export_lanes.py
 docker exec fruitdeeplinks python3 /app/bin/fruit_export_adb_lanes.py
 ```
 
-### CDVR Detector (BETA) - Automatic Deeplink Launching
+### Event-Level Deeplinks (tvOS reliable; Android testing in progress)
 
-The CDVR Detector automatically launches streaming apps when you tune to a "Fruit Lane" channel!
+Channels DVR only supports deeplinks **per channel**, not **per program**.  
+**Event-Level Deeplinks** is a workaround that launches the correct streaming app for the *event you clicked*.
 
-**How it works:**
-1. You tune to "Fruit Lane 5" in Channels DVR
-2. FruitDeepLinks detects which device is watching
-3. Looks up the current event's deeplink (ESPN+, Peacock, etc.)
-4. Launches the streaming app on your device automatically
+**What you get:**
+- A clean guide using a small set of **Fruit Lane** channels
+- When you tune a lane, FruitDeepLinks updates a `.strmlnk` file for that lane so Channels launches the right app
 
-**Setup:**
+**Requirements**
+- Works best on **tvOS** today; **Android testing is in progress**
+- FruitDeepLinks must have **read/write filesystem access** to your Channels DVR `DVR` folder (the one that contains `Imports/`)
+- You must set `CDVR_DVR_PATH` in your `.env` to enable it (leave blank to disable)
 
-1. **Enable the detector** - Add to your `.env`:
-   ```env
-   CDVR_DVR_PATH=/path/to/your/dvr
-   ```
-   Examples:
-   - Linux: `/mnt/storage/DVR`
-   - macOS: `/Volumes/Storage/DVR`  
-   - Synology: `/volume1/DVR`
+**How it works (high level):**
+1. You tune to “Fruit Lane 5” in Channels DVR
+2. FruitDeepLinks figures out which device is watching (Channels Client API on port `57000`)
+3. It looks up the current event’s deeplink (ESPN+, Peacock, etc.)
+4. It writes/updates: `<DVR>/Imports/fruitdeeplinks/lane5.strmlnk`
+5. Channels reprocesses that one file and launches the app
 
-2. **Restart container**:
-   ```bash
-   docker compose restart
-   ```
+**Enabled via `.env`:**
+```env
+CDVR_DVR_PATH=/path/to/your/DVR   # must contain Imports/
+CDVR_SERVER_PORT=8089
+CDVR_API_PORT=57000
+```
 
-3. **Add to Channels DVR**:
-   - M3U: `http://your-ip:6655/out/multisource_lanes.m3u`
-   - EPG: `http://your-ip:6655/out/multisource_lanes.xml`
-
-4. **Tune to a Fruit Lane** - The streaming app launches automatically! 🎉
-
-**Supported devices:**
-- Apple TV (tvOS)
-- Fire TV
-- Android TV
-
-**Notes:**
-- Only works with devices that expose the Channels DVR Client API (port 57000)
-- iOS/iPadOS devices do not support this feature
-- The detector is disabled by default - you must set `CDVR_DVR_PATH` to enable it
 
 ### Database Access
 
