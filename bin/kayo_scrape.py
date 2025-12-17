@@ -165,10 +165,10 @@ def normalize_kayo_event(content: Dict[str, Any], sport_from_panel: str) -> Dict
     # Calculate end time from duration if available
     end_time = None
     duration_str = content_display.get("duration", "")
+    
+    # First try: explicit duration field (format: "5:40:00")
     if duration_str and start_time:
         try:
-            # Duration format: "5:40:00" (hours:minutes:seconds)
-            from datetime import datetime, timedelta
             parts = duration_str.split(':')
             if len(parts) == 3:
                 hours, minutes, seconds = map(int, parts)
@@ -178,6 +178,64 @@ def normalize_kayo_event(content: Dict[str, Any], sport_from_panel: str) -> Dict
                 end_time = end_dt.isoformat().replace('+00:00', 'Z')
         except (ValueError, AttributeError) as e:
             logger.debug(f"Could not parse duration {duration_str}: {e}")
+    
+    # Second try: Extract from infoLine (format: "4h 10m", "3h", "54m")
+    if not end_time and start_time:
+        info_line = content_display.get("infoLine", [])
+        length_str = None
+        
+        for item in info_line:
+            if isinstance(item, dict) and item.get("type") == "length":
+                length_str = item.get("value", "")
+                break
+        
+        if length_str:
+            try:
+                import re
+                
+                # Parse strings like "4h 10m", "3h", "54m"
+                hours = 0
+                minutes = 0
+                
+                # Extract hours
+                h_match = re.search(r'(\d+)h', length_str)
+                if h_match:
+                    hours = int(h_match.group(1))
+                
+                # Extract minutes
+                m_match = re.search(r'(\d+)m', length_str)
+                if m_match:
+                    minutes = int(m_match.group(1))
+                
+                if hours > 0 or minutes > 0:
+                    start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                    end_dt = start_dt + timedelta(hours=hours, minutes=minutes)
+                    end_time = end_dt.isoformat().replace('+00:00', 'Z')
+                    logger.debug(f"Parsed length '{length_str}' -> {hours}h {minutes}m")
+            except Exception as e:
+                logger.debug(f"Could not parse length {length_str}: {e}")
+    
+    # Third try: Sport-specific duration estimates as fallback
+    if not end_time and start_time:
+        start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+        
+        # Sport-specific duration estimates (in hours)
+        sport_durations = {
+            'Cricket': 6,
+            'Gridiron': 3.5,
+            'Basketball': 2.5,
+            'Ice Hockey': 2.5,
+            'football': 2,
+            'Boxing': 3,
+            'Darts': 3,
+            'Wrestling': 3,
+            'Golf': 4,
+        }
+        
+        duration_hours = sport_durations.get(sport_name, 3)
+        end_dt = start_dt + timedelta(hours=duration_hours)
+        end_time = end_dt.isoformat().replace('+00:00', 'Z')
+        logger.debug(f"Estimated end time for {sport_name}: {duration_hours}h")
     
     # Venue - not directly available in this structure
     venue_name = None
