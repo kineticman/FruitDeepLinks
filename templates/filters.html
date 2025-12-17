@@ -399,40 +399,23 @@ renderLeagues();
 }
 
 async function savePreferences() {
-try {
-// Save core filter preferences
-const filtersRes = await fetch('/api/filters/preferences', {
-method: 'POST',
-headers: {'Content-Type': 'application/json'},
-body: JSON.stringify(currentPreferences)
-});
+    try {
+        // Save core filter preferences
+        const filtersRes = await fetch('/api/filters/preferences', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(currentPreferences)
+        });
 
-// Save provider lanes configuration
-const lanesPayload = {
-providers: (providerLanes || []).map(row => ({
-provider_code: row.provider_code,
-adb_enabled: row.adb_enabled ? 1 : 0,
-adb_lane_count: row.adb_lane_count || 0
-}))
-};
-
-const lanesRes = await fetch('/api/provider_lanes', {
-method: 'POST',
-headers: {'Content-Type': 'application/json'},
-body: JSON.stringify(lanesPayload)
-});
-
-if (filtersRes.ok && lanesRes.ok) {
-showStatus('Settings saved! Click "Apply Filters Now" to regenerate channels.', 'success');
-} else if (!filtersRes.ok) {
-showStatus(' Failed to save core filter settings', 'error');
-} else {
-showStatus(' Failed to save ADB provider lane settings', 'error');
-}
-} catch (err) {
-console.error('Error saving settings', err);
-showStatus(' Error saving settings', 'error');
-}
+        if (filtersRes.ok) {
+            showStatus('✓ Settings saved! Click "Apply Filters Now" to regenerate channels.', 'success');
+        } else {
+            showStatus('✗ Failed to save settings', 'error');
+        }
+    } catch (err) {
+        console.error('Error saving settings', err);
+        showStatus('✗ Error saving settings', 'error');
+    }
 }
 
 async function applyFilters() {
