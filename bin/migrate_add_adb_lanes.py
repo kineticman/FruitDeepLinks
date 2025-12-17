@@ -107,40 +107,83 @@ def populate_http_deeplinks(conn: sqlite3.Connection, log: logging.Logger) -> No
     
     cur = conn.cursor()
     
-    # Get playables that need HTTP versions
-    cur.execute("""
-        SELECT id, deeplink_url, provider 
-        FROM playables 
-        WHERE deeplink_url IS NOT NULL 
-          AND (http_deeplink_url IS NULL OR http_deeplink_url = '')
-    """)
-    
-    playables = cur.fetchall()
-    if not playables:
-        log.info("No playables need HTTP deeplink generation.")
+    # Check if playables table exists and has the required columns
+    try:
+        cur.execute("PRAGMA table_info(playables)")
+        columns = [row[1] for row in cur.fetchall()]
+        
+        if 'playables' not in ['playables']:  # Table check
+            log.info("playables table not found; skipping HTTP deeplink population")
+            return
+            
+        # Find the primary key column
+        pk_col = None
+        if 'id' in columns:
+            pk_col = 'id'
+        elif 'playable_id' in columns:
+            pk_col = 'playable_id'
+        else:
+            # Try to find any column with 'id' in it
+            for col in columns:
+                if 'id' in col.lower():
+                    pk_col = col
+                    break
+        
+        if not pk_col:
+            log.info("Could not find primary key column in playables; skipping HTTP deeplink population")
+            return
+            
+        if 'deeplink_url' not in columns:
+            log.info("deeplink_url column not found in playables; skipping HTTP deeplink population")
+            return
+            
+        log.info(f"Using primary key column: {pk_col}")
+        
+    except Exception as e:
+        log.info(f"Could not check playables schema: {e}; skipping HTTP deeplink population")
         return
     
-    log.info(f"Generating HTTP deeplinks for {len(playables)} playables...")
-    updated = 0
-    
-    for row in playables:
-        playable_id, original_deeplink, provider = row
+    # Get playables that need HTTP versions
+    try:
+        query = f"""
+            SELECT {pk_col}, deeplink_url, provider 
+            FROM playables 
+            WHERE deeplink_url IS NOT NULL 
+              AND (http_deeplink_url IS NULL OR http_deeplink_url = '')
+            LIMIT 1000
+        """
+        cur.execute(query)
         
-        # Generate HTTP version
-        http_deeplink = generate_http_deeplink(original_deeplink, provider)
+        playables = cur.fetchall()
+        if not playables:
+            log.info("No playables need HTTP deeplink generation.")
+            return
         
-        if http_deeplink and http_deeplink != original_deeplink:
-            cur.execute(
-                "UPDATE playables SET http_deeplink_url = ? WHERE id = ?",
-                (http_deeplink, playable_id)
-            )
-            updated += 1
-    
-    if updated > 0:
-        conn.commit()
-        log.info(f"Generated HTTP deeplinks for {updated} playables.")
-    else:
-        log.info("No playables had convertible deeplinks (this is OK, conversion happens at runtime).")
+        log.info(f"Generating HTTP deeplinks for {len(playables)} playables...")
+        updated = 0
+        
+        for row in playables:
+            playable_id, original_deeplink, provider = row
+            
+            # Generate HTTP version
+            http_deeplink = generate_http_deeplink(original_deeplink, provider)
+            
+            if http_deeplink and http_deeplink != original_deeplink:
+                cur.execute(
+                    f"UPDATE playables SET http_deeplink_url = ? WHERE {pk_col} = ?",
+                    (http_deeplink, playable_id)
+                )
+                updated += 1
+        
+        if updated > 0:
+            conn.commit()
+            log.info(f"Generated HTTP deeplinks for {updated} playables.")
+        else:
+            log.info("No playables had convertible deeplinks (this is OK, conversion happens at runtime).")
+            
+    except Exception as e:
+        log.info(f"Error during HTTP deeplink population: {e}; skipping (conversion happens at runtime anyway)")
+        return
 
 
 def migrate(db_path: Path) -> None:
