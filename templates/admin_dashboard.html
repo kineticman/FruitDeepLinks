@@ -100,8 +100,9 @@ color: #e2e8f0;
 <p class="subtitle">Multi-source sports event aggregator</p>
 
 <div class="nav-bar">
-<a href="/filters" class="btn btn-secondary"> Filters & Settings</a>
-<a href="/api" class="btn btn-secondary">API Helper</a>
+<a href="/filters" class="btn btn-secondary">🎛️ Filters & Settings</a>
+<a href="/adb" class="btn btn-secondary">📺 ADB Configuration</a>
+<a href="/api" class="btn btn-secondary">📡 API Helper</a>
 </div>
 
 <div class="grid">
@@ -113,6 +114,11 @@ color: #e2e8f0;
 <div class="card">
 <h2>Output Files</h2>
 <div id="file-list">Loading...</div>
+</div>
+
+<div class="card">
+<h2>Environment Variables</h2>
+<div id="env-vars">Loading...</div>
 </div>
 
 <div class="card">
@@ -241,6 +247,28 @@ refreshStatus.innerHTML = pieces.length ? pieces.join('<br>') : 'No refresh run 
 // Auto-refresh status block
 if (data.auto_refresh) {
 applyAutoSettingsToDom(data.auto_refresh);
+}
+
+// Environment variables
+const envVars = document.getElementById('env-vars');
+if (data.env_vars && Object.keys(data.env_vars).length > 0) {
+const envEntries = Object.entries(data.env_vars)
+.sort(([a], [b]) => a.localeCompare(b))
+.map(([key, val]) => {
+// Mask sensitive values
+let displayVal = val;
+if (key.toLowerCase().includes('key') || key.toLowerCase().includes('secret') || key.toLowerCase().includes('password')) {
+displayVal = '********';
+}
+// Truncate long values
+if (displayVal && displayVal.length > 60) {
+displayVal = displayVal.substring(0, 57) + '...';
+}
+return `<div class="stat"><span class="stat-label">${key}</span><span class="stat-value" style="font-size: 12px; font-family: monospace;">${displayVal || '(empty)'}</span></div>`;
+}).join('');
+envVars.innerHTML = envEntries;
+} else {
+envVars.innerHTML = '<div class="stat-value" style="color: #94a3b8;">No environment variables configured</div>';
 }
 
 } catch (err) {

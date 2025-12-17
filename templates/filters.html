@@ -224,30 +224,6 @@ Select which streaming services you have subscriptions to. Only events available
 </div>
 
 <div class="card">
-<h2>ADB Lane Providers</h2>
-<p class="section-description">
-Configure which providers should expose ADB lanes and how many lanes each gets.
-This is used by ADBTuner integrations. Changes here do not affect your normal Channels DVR view.
-</p>
-<div id="provider-lanes-loading" class="loading">Loading provider lanes...</div>
-<div id="provider-lanes-empty" class="loading" style="display: none;">No providers found. Run a refresh first.</div>
-<div id="provider-lanes-table-wrapper" style="display: none; overflow-x: auto;">
-<table class="provider-lanes-table">
-<thead>
-<tr>
-<th style="min-width: 140px;">Provider Code</th>
-<th style="min-width: 180px;">Name</th>
-<th style="min-width: 80px; text-align: right;">Events</th>
-<th style="min-width: 120px; text-align: center;">ADB Enabled</th>
-<th style="min-width: 120px;">ADB Lanes</th>
-</tr>
-</thead>
-<tbody id="provider-lanes-tbody"></tbody>
-</table>
-</div>
-</div>
-
-<div class="card">
 <h2>Sports Filter</h2>
 <p class="section-description">
 Hide sports you're not interested in. Disabled sports will be excluded from your channels.
@@ -267,7 +243,7 @@ Hide specific leagues or competitions. Disabled leagues will be excluded from yo
 
 <div class="actions">
 <button class="btn btn-success" onclick="savePreferences()">Save Settings</button>
-<button class="btn" style="background: #f59e0b;" onclick="applyFilters()"> Apply Filters Now</button>
+<button class="btn" style="background: #f59e0b;" onclick="applyFilters()">⚡ Apply Filters Now</button>
 <button class="btn" onclick="resetToDefaults()">Reset to Defaults</button>
 <div class="status-message" id="status-message"></div>
 </div>
@@ -286,7 +262,6 @@ sports: [],
 leagues: []
 };
 
-let providerLanes = [];
 
 
 async function loadFilters() {
@@ -306,129 +281,12 @@ renderProviders();
 renderSports();
 renderLeagues();
 updateStats();
-loadProviderLanes();
 
 } catch (err) {
 console.error('Failed to load filters:', err);
 showStatus('Failed to load filters', 'error');
 }
 }
-
-
-async function loadProviderLanes() {
-const loading = document.getElementById('provider-lanes-loading');
-const empty = document.getElementById('provider-lanes-empty');
-const wrapper = document.getElementById('provider-lanes-table-wrapper');
-const tbody = document.getElementById('provider-lanes-tbody');
-
-if (!loading || !wrapper || !tbody) {
-return;
-}
-
-loading.style.display = 'block';
-empty.style.display = 'none';
-wrapper.style.display = 'none';
-tbody.innerHTML = '';
-
-try {
-const res = await fetch('/api/provider_lanes');
-if (!res.ok) {
-loading.textContent = 'Failed to load provider lanes.';
-return;
-}
-const data = await res.json();
-providerLanes = Array.isArray(data.providers) ? data.providers : [];
-renderProviderLanes();
-} catch (err) {
-console.error('Error loading provider lanes', err);
-loading.textContent = 'Error loading provider lanes.';
-}
-}
-
-function getProviderMeta(code) {
-if (!availableFilters || !Array.isArray(availableFilters.providers)) {
-return { name: code, count: 0 };
-}
-const match = availableFilters.providers.find(p => p.scheme === code);
-if (!match) {
-return { name: code, count: 0 };
-}
-return { name: match.name || code, count: match.count || 0 };
-}
-
-function renderProviderLanes() {
-const loading = document.getElementById('provider-lanes-loading');
-const empty = document.getElementById('provider-lanes-empty');
-const wrapper = document.getElementById('provider-lanes-table-wrapper');
-const tbody = document.getElementById('provider-lanes-tbody');
-
-if (!loading || !wrapper || !tbody) {
-return;
-}
-
-if (!providerLanes || providerLanes.length === 0) {
-loading.style.display = 'none';
-empty.style.display = 'block';
-wrapper.style.display = 'none';
-return;
-}
-
-tbody.innerHTML = providerLanes.map(row => {
-const code = row.provider_code;
-const enabled = row.adb_enabled ? 1 : 0;
-const laneCount = row.adb_lane_count || 0;
-const meta = getProviderMeta(code);
-const safeCode = String(code).replace(/"/g, '&quot;');
-
-return `
-<tr>
-<td><code>${safeCode}</code></td>
-<td>${meta.name}</td>
-<td style="text-align: right;">${meta.count}</td>
-<td style="text-align: center;">
-<input type="checkbox"
-${enabled ? 'checked' : ''}
-onchange="toggleProviderLane('${safeCode}', this.checked)">
-</td>
-<td>
-<input type="number"
-min="0"
-value="${laneCount}"
-onchange="updateProviderLaneCount('${safeCode}', this.value)">
-</td>
-</tr>
-`;
-}).join('');
-
-loading.style.display = 'none';
-empty.style.display = 'none';
-wrapper.style.display = 'block';
-}
-
-function toggleProviderLane(code, isChecked) {
-providerLanes = providerLanes.map(row => {
-if (row.provider_code === code) {
-return Object.assign({}, row, {
-adb_enabled: isChecked ? 1 : 0
-});
-}
-return row;
-});
-}
-
-function updateProviderLaneCount(code, value) {
-const num = parseInt(value, 10);
-const laneCount = Number.isFinite(num) && num >= 0 ? num : 0;
-providerLanes = providerLanes.map(row => {
-if (row.provider_code === code) {
-return Object.assign({}, row, {
-adb_lane_count: laneCount
-});
-}
-return row;
-});
-}
-
 function renderProviders() {
 const grid = document.getElementById('providers-grid');
 const loading = document.getElementById('providers-loading');
@@ -541,40 +399,23 @@ renderLeagues();
 }
 
 async function savePreferences() {
-try {
-// Save core filter preferences
-const filtersRes = await fetch('/api/filters/preferences', {
-method: 'POST',
-headers: {'Content-Type': 'application/json'},
-body: JSON.stringify(currentPreferences)
-});
+    try {
+        // Save core filter preferences
+        const filtersRes = await fetch('/api/filters/preferences', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(currentPreferences)
+        });
 
-// Save provider lanes configuration
-const lanesPayload = {
-providers: (providerLanes || []).map(row => ({
-provider_code: row.provider_code,
-adb_enabled: row.adb_enabled ? 1 : 0,
-adb_lane_count: row.adb_lane_count || 0
-}))
-};
-
-const lanesRes = await fetch('/api/provider_lanes', {
-method: 'POST',
-headers: {'Content-Type': 'application/json'},
-body: JSON.stringify(lanesPayload)
-});
-
-if (filtersRes.ok && lanesRes.ok) {
-showStatus('Settings saved! Click "Apply Filters Now" to regenerate channels.', 'success');
-} else if (!filtersRes.ok) {
-showStatus(' Failed to save core filter settings', 'error');
-} else {
-showStatus(' Failed to save ADB provider lane settings', 'error');
-}
-} catch (err) {
-console.error('Error saving settings', err);
-showStatus(' Error saving settings', 'error');
-}
+        if (filtersRes.ok) {
+            showStatus('✓ Settings saved! Click "Apply Filters Now" to regenerate channels.', 'success');
+        } else {
+            showStatus('✗ Failed to save settings', 'error');
+        }
+    } catch (err) {
+        console.error('Error saving settings', err);
+        showStatus('✗ Error saving settings', 'error');
+    }
 }
 
 async function applyFilters() {

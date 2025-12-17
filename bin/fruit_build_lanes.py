@@ -144,8 +144,8 @@ def load_future_events(conn: sqlite3.Connection, days_ahead: int) -> List[Event]
                     seconds=runtime_secs if runtime_secs else 7200
                 )
 
-        # Filter by time window
-        if start_dt < now or start_dt > cutoff:
+        # Filter by time window - include events that are currently playing
+        if end_dt < now or start_dt > cutoff:
             continue
 
         end_padded = end_dt + timedelta(minutes=PADDING_MINUTES)
@@ -196,7 +196,7 @@ def create_lanes(conn: sqlite3.Connection, lane_count: int):
         logical_number = LANE_START_CH_DEFAULT + (lane_id - 1)
         cur.execute(
             "INSERT INTO lanes VALUES (?, ?, ?)",
-            (lane_id, f"Multi-Source Sports {lane_id}", logical_number),
+            (lane_id, f"Fruit Lane {lane_id}", logical_number),  # Renamed from "Multi-Source Sports"
         )
     conn.commit()
 

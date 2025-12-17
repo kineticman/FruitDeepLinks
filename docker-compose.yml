@@ -1,30 +1,24 @@
 version: '3.8'
-
 services:
   fruitdeeplinks:
     build: .
     container_name: fruitdeeplinks
     hostname: fruitdeeplinks
     shm_size: '2gb'
-
     environment:
       # Timezone
       - TZ=${TZ:-America/New_York}
-
       # Core URLs and ports
       - SERVER_URL=${SERVER_URL:-http://localhost:6655}
       - FRUIT_HOST_PORT=${FRUIT_HOST_PORT:-6655}
-
       # Channels DVR integration (optional)
       - CHANNELS_DVR_IP=${CHANNELS_DVR_IP:-}
       - CHANNELS_SOURCE_NAME=${CHANNELS_SOURCE_NAME:-fruitdeeplinks}
-
       # Database and output paths (inside container)
       - FRUIT_DB_PATH=${FRUIT_DB_PATH:-/app/data/fruit_events.db}
       - OUT_DIR=${OUT_DIR:-/app/out}
       - LOG_DIR=${LOG_DIR:-/app/logs}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-
       # Lane configuration (BETA)
       - FRUIT_LANES=${FRUIT_LANES:-50}
       - FRUIT_LANE_START_CH=${FRUIT_LANE_START_CH:-9000}
@@ -32,33 +26,31 @@ services:
       - FRUIT_PADDING_MINUTES=${FRUIT_PADDING_MINUTES:-45}
       - FRUIT_PLACEHOLDER_BLOCK_MINUTES=${FRUIT_PLACEHOLDER_BLOCK_MINUTES:-60}
       - FRUIT_PLACEHOLDER_EXTRA_DAYS=${FRUIT_PLACEHOLDER_EXTRA_DAYS:-5}
-
+      # CDVR Detector (BETA) - Auto-launch streaming apps
+      # Set CDVR_DVR_PATH to your HOST DVR path to enable
+      # Uses CHANNELS_DVR_IP for server communication
+      - CDVR_DVR_PATH=${CDVR_DVR_PATH:-}
+      - CDVR_SERVER_PORT=${CDVR_SERVER_PORT:-8089}
+      - CDVR_API_PORT=${CDVR_API_PORT:-57000}
       # Scraper behavior
       - HEADLESS=${HEADLESS:-true}
       - NO_NETWORK=${NO_NETWORK:-false}
-
       # Auto-refresh
       - AUTO_REFRESH_ENABLED=${AUTO_REFRESH_ENABLED:-true}
       - AUTO_REFRESH_TIME=${AUTO_REFRESH_TIME:-02:30}
-
     volumes:
       - ./data:/app/data
       - ./out:/app/out
       - ./logs:/app/logs
-      # templates are baked into the image via Dockerfile (COPY templates ./templates)
-      # so we don't need a bind mount here
-
+      # Mount DVR path for CDVR detector (optional - only if using detector feature)
+      # The HOST path from CDVR_DVR_PATH is mounted to /mnt/dvr inside container
+      # Container writes streamlink files to /mnt/dvr/Imports/fruitdeeplinks/
+      - ${CDVR_DVR_PATH:-/tmp/fruitdeeplinks-novol}:/mnt/dvr
     restart: unless-stopped
-
     ports:
-      # host:container
-      # FRUIT_HOST_PORT controls the HOST port; default 6655.
-      # Inside the container we always listen on 6655.
       - "${FRUIT_HOST_PORT:-6655}:6655"
-
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
-

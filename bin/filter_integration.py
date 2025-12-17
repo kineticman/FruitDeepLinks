@@ -223,8 +223,9 @@ def get_best_playable_for_event(
     if not playables:
         return None
 
-    best = get_best_deeplink(playables, enabled_services)
-    return best
+    # get_filtered_playables already filtered by logical service and sorted by priority
+    # Just return the first one (highest priority)
+    return playables[0]
 
 
 def get_best_deeplink_for_event(

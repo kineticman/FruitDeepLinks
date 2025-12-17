@@ -2,7 +2,7 @@
 
 **Universal Sports Aggregator for Channels DVR**
 
-FruitDeepLinks leverages Apple TV's Sports aggregation APIs to build a unified sports EPG with deeplinks to 18+ streaming services. One guide to rule them all.
+FruitDeepLinks leverages Apple TV's Sports aggregation APIs to build a unified sports EPG with deeplinks to 19+ streaming services. One guide to rule them all.
 
 [![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org)
@@ -151,7 +151,7 @@ If you’re unsure, **start with direct channels only** and ignore lanes/ADB unt
 
 ## 📺 Supported Services
 
-### Premium Sports (18+ Services)
+### Premium Sports (19+ Services)
 
 | Service       | Deeplink Type                 | Notes / Status                                      |
 |--------------|-------------------------------|-----------------------------------------------------|
@@ -165,7 +165,10 @@ If you’re unsure, **start with direct channels only** and ignore lanes/ADB unt
 | Max          | Web                           | Sports via Max (formerly HBO Max)                   |
 | Apple MLS    | Web                           | Apple TV MLS Season Pass                            |
 | Apple MLB    | Web                           | Apple TV MLB Friday Night Baseball                  |
+| Apple NBA    | Web                           | Apple TV NBA games                                  |
+| Apple NHL    | Web                           | Apple TV NHL games                                  |
 | DAZN         | Native (`dazn://`)            | DAZN sports                                         |
+| Kayo Sports  | Web                           | Australian sports (Cricket, AFL, NRL, etc.)         |
 | F1 TV        | Web                           | F1 TV Pro content                                   |
 | ViX          | Native (`vixapp://`)          | Spanish-language sports                             |
 | NFL+         | Native (`nflctv://`)          | NFL+ games & replays                                |
@@ -274,6 +277,15 @@ CHANNELS_SOURCE_NAME=fruitdeeplinks
 FRUIT_LANES=50
 FRUIT_LANE_START_CH=9000
 
+# Streaming service scraping (optional)
+KAYO_DAYS=7  # Days to scrape for Kayo Sports (default: 7)
+
+# CDVR Detector (BETA) - Auto-launch streaming apps
+# Leave blank to disable. Set to your DVR's base path to enable:
+CDVR_DVR_PATH=/mnt/storage/DVR
+CDVR_SERVER_PORT=8089
+CDVR_API_PORT=57000
+
 # Auto-refresh
 AUTO_REFRESH_ENABLED=true
 AUTO_REFRESH_TIME=02:30
@@ -306,6 +318,48 @@ docker exec fruitdeeplinks python3 /app/bin/fruit_export_lanes.py
 # ADB provider lanes (optional, for ADBTuner/ChromeCapture) - BETA
 docker exec fruitdeeplinks python3 /app/bin/fruit_export_adb_lanes.py
 ```
+
+### CDVR Detector (BETA) - Automatic Deeplink Launching
+
+The CDVR Detector automatically launches streaming apps when you tune to a "Fruit Lane" channel!
+
+**How it works:**
+1. You tune to "Fruit Lane 5" in Channels DVR
+2. FruitDeepLinks detects which device is watching
+3. Looks up the current event's deeplink (ESPN+, Peacock, etc.)
+4. Launches the streaming app on your device automatically
+
+**Setup:**
+
+1. **Enable the detector** - Add to your `.env`:
+   ```env
+   CDVR_DVR_PATH=/path/to/your/dvr
+   ```
+   Examples:
+   - Linux: `/mnt/storage/DVR`
+   - macOS: `/Volumes/Storage/DVR`  
+   - Synology: `/volume1/DVR`
+
+2. **Restart container**:
+   ```bash
+   docker compose restart
+   ```
+
+3. **Add to Channels DVR**:
+   - M3U: `http://your-ip:6655/out/multisource_lanes.m3u`
+   - EPG: `http://your-ip:6655/out/multisource_lanes.xml`
+
+4. **Tune to a Fruit Lane** - The streaming app launches automatically! 🎉
+
+**Supported devices:**
+- Apple TV (tvOS)
+- Fire TV
+- Android TV
+
+**Notes:**
+- Only works with devices that expose the Channels DVR Client API (port 57000)
+- iOS/iPadOS devices do not support this feature
+- The detector is disabled by default - you must set `CDVR_DVR_PATH` to enable it
 
 ### Database Access
 
@@ -447,7 +501,7 @@ Your Streaming Apps (via Deeplinks)
 
 ### Example 3: Premium Everything
 
-**Enabled Services:** All 18.
+**Enabled Services:** All 19.
 
 **Disabled Leagues:**
 
@@ -510,7 +564,7 @@ From real deployment (example):
 ```text
 Database: 1,483 total events
 After filtering: 133 events (91% reduction)
-Services enabled: 12 out of 18
+Services enabled: 12 out of 19
 
 Scrape time: ~8 minutes
 Filter apply time: ~10 seconds
@@ -522,6 +576,13 @@ Database size: ~15MB
 
 ## 🗓️ Roadmap
 
+### Recently Completed
+
+- [x] Kayo Sports integration (Australian sports streaming)
+- [x] Filter UI bug fixes (JavaScript errors resolved)
+- [x] Improved logical service mapping for web-based providers
+- [x] Sport name capitalization normalization
+
 ### Coming Soon
 
 - [ ] Chrome Capture / AH4C integration.
@@ -531,10 +592,10 @@ Database size: ~15MB
 
 ### Future
 
-- [ ] Additional content sources (ESPN+ API, Peacock direct).
-- [ ] Mobile companion app.
-- [ ] Plex/Emby support.
-- [ ] "Red Zone" style auto-switching.
+- [ ] Additional streaming sources (Optus Sport, DAZN expansion, etc.)
+- [ ] Mobile companion app
+- [ ] Plex/Emby support
+- [ ] "Red Zone" style auto-switching
 
 See `ROADMAP.md` for more details as it evolves.
 

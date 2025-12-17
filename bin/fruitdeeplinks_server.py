@@ -12,6 +12,8 @@ import sqlite3
 import subprocess
 import threading
 import time
+import tempfile
+import requests
 from pathlib import Path
 from datetime import datetime
 from collections import deque
@@ -66,6 +68,26 @@ DB_PATH = Path(os.getenv("FRUIT_DB_PATH") or os.getenv("PEACOCK_DB_PATH") or "/a
 OUT_DIR = Path(os.getenv("OUT_DIR", "/app/out"))
 BIN_DIR = Path(os.getenv("BIN_DIR", "/app/bin"))
 LOG_DIR = Path(os.getenv("LOG_DIR", "/app/logs"))
+
+# CDVR Detector Configuration
+CDVR_SERVER_IP = os.getenv("CHANNELS_DVR_IP", "192.168.86.72")
+CDVR_SERVER_PORT = int(os.getenv("CDVR_SERVER_PORT", "8089"))
+CDVR_API_PORT = int(os.getenv("CDVR_API_PORT", "57000"))
+# CDVR_DVR_PATH should be set by user - empty means detector disabled
+CDVR_DVR_PATH = os.getenv("CDVR_DVR_PATH", "")
+NUM_LANES = int(os.getenv("FRUIT_LANES", "50"))
+
+# Detector globals
+DUMMY_SEGMENT_PATH = None
+# Use /mnt/dvr mount point (mapped from user's CDVR_DVR_PATH via docker-compose)
+DETECTOR_ENABLED = bool(CDVR_DVR_PATH and CDVR_DVR_PATH.strip())
+STREAMLINK_DIR = Path("/mnt/dvr") / "Imports" / "Videos" / "FruitDeepLinks" if DETECTOR_ENABLED else None
+
+
+# Detector debounce (avoid spawning multiple detector threads per lane)
+DETECT_DEBOUNCE_SECONDS = float(os.getenv('DETECT_DEBOUNCE_SECONDS', '3'))
+DETECT_LAST_SPAWN = {}  # lane_number -> last_spawn_epoch
+DETECT_LAST_SPAWN_LOCK = threading.Lock()
 
 # Create Flask app
 app = Flask(__name__)
@@ -739,6 +761,77 @@ def get_current_events_by_lane(conn, at_ts=None):
             current_by_lane[lane_id] = dict(row)
     return current_by_lane
 
+
+def get_fallback_event_for_lane(conn, lane_id, at_ts):
+    """Get the most recent non-placeholder event for a lane within padding window.
+    
+    This is used when the current slot is a placeholder, but we're still within
+    the FRUIT_PADDING_MINUTES window of a recent real event. Returns the event
+    info so the deeplink stays active during the padding period.
+    
+    Returns dict with event info or None if no recent event found.
+    """
+    from datetime import datetime as _dt, timedelta, timezone
+    
+    padding_minutes = int(os.getenv('FRUIT_PADDING_MINUTES', '45'))
+    
+    # Parse at_ts to datetime
+    try:
+        now_dt = _dt.fromisoformat(at_ts.replace('Z', '+00:00'))
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        now_dt = _dt.now(timezone.utc)
+    
+    # Calculate padding window start
+    padding_window_start = now_dt - timedelta(minutes=padding_minutes)
+    
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    
+    try:
+        cur.execute(
+            """
+            SELECT
+                le.event_id,
+                le.start_utc,
+                le.end_utc,
+                le.chosen_provider,
+                e.title,
+                e.channel_name,
+                e.synopsis
+            FROM lane_events le
+            JOIN events e ON le.event_id = e.id
+            WHERE le.lane_id = ?
+              AND le.is_placeholder = 0
+              AND datetime(le.end_utc) >= datetime(?)
+              AND datetime(le.end_utc) <= datetime(?)
+            ORDER BY le.end_utc DESC
+            LIMIT 1
+            """,
+            (lane_id, padding_window_start.isoformat(), at_ts)
+        )
+        
+        row = cur.fetchone()
+        
+        if row:
+            return {
+                'event_id': row['event_id'],
+                'title': row['title'],
+                'channel_name': row['channel_name'],
+                'synopsis': row['synopsis'],
+                'start_utc': row['start_utc'],
+                'end_utc': row['end_utc'],
+                'chosen_provider': row['chosen_provider'],
+                'is_fallback': True
+            }
+        
+        return None
+        
+    except Exception as e:
+        log(f"Error in get_fallback_event_for_lane: {e}", "ERROR")
+        return None
+
 # ==================== Auto-refresh + Refresh Runner ====================
 def schedule_auto_refresh_from_settings():
     """Create/refresh the APScheduler job based on current settings"""
@@ -874,6 +967,320 @@ def run_refresh(skip_scrape=False, source="manual"):
             refresh_status["last_status_manual"] = outcome
 
 
+# ==================== CDVR Detector Functions ====================
+def create_dummy_segment():
+    """Create a simple black video segment using ffmpeg"""
+    global DUMMY_SEGMENT_PATH
+    
+    try:
+        temp_file = tempfile.NamedTemporaryFile(suffix='.ts', delete=False)
+        DUMMY_SEGMENT_PATH = temp_file.name
+        temp_file.close()
+        
+        log("Creating dummy video segment for HLS streams...", "INFO")
+        
+        result = subprocess.run([
+            'ffmpeg', '-y',
+            '-f', 'lavfi', '-i', 'color=black:s=1280x720:r=30',
+            '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo',
+            '-t', '60',
+            '-c:v', 'libx264', '-preset', 'ultrafast',
+            '-c:a', 'aac', '-b:a', '128k',
+            '-pix_fmt', 'yuv420p',
+            '-f', 'mpegts',
+            DUMMY_SEGMENT_PATH
+        ], check=True, capture_output=True, timeout=60)
+        
+        file_size = os.path.getsize(DUMMY_SEGMENT_PATH)
+        log(f"Created dummy segment: {DUMMY_SEGMENT_PATH} ({file_size} bytes)", "INFO")
+        return True
+        
+    except Exception as e:
+        log(f"Could not create dummy segment: {e}", "WARN")
+        log("Install ffmpeg: apt-get install ffmpeg", "WARN")
+        return False
+
+def bootstrap_streamlink_files():
+    """Bootstrap streamlink files for CDVR detector on startup"""
+    if not DETECTOR_ENABLED:
+        log("CDVR Detector: Disabled (CDVR_DVR_PATH not set)", "INFO")
+        return False
+    
+    log("CDVR Detector: Bootstrapping streamlink files...", "INFO")
+    
+    cdvr_url = f"http://{CDVR_SERVER_IP}:{CDVR_SERVER_PORT}"
+    
+    try:
+        STREAMLINK_DIR.mkdir(parents=True, exist_ok=True)
+        log(f"Streamlink directory ready: {STREAMLINK_DIR}", "INFO")
+        
+        placeholder_deeplink = "about:blank"
+        files_created = 0
+        
+        for lane_num in range(1, NUM_LANES + 1):
+            filepath = STREAMLINK_DIR / f"lane{lane_num}.strmlnk"
+            
+            if not filepath.exists():
+                filepath.write_text(placeholder_deeplink)
+                files_created += 1
+        
+        if files_created > 0:
+            log(f"Created {files_created} new streamlink files", "INFO")
+            log("Triggering CDVR scan to index files...", "INFO")
+            
+            scan_resp = requests.put(f"{cdvr_url}/dvr/scanner/scan", timeout=30)
+            
+            if scan_resp.status_code == 200:
+                log("CDVR scan triggered, waiting for indexing...", "INFO")
+                time.sleep(10)  # Wait for initial indexing
+            else:
+                log(f"CDVR scan failed: {scan_resp.status_code}", "WARN")
+        else:
+            log(f"All {NUM_LANES} streamlink files already exist", "INFO")
+        
+        # Hide FruitDeepLinks group from GUI
+        try:
+            groups_resp = requests.get(f"{cdvr_url}/dvr/groups?all=true", timeout=5)
+            groups = groups_resp.json()
+            
+            group_id = None
+            for group in groups:
+                if group.get('Name') == 'FruitDeepLinks':
+                    group_id = group.get('ID')
+                    break
+            
+            if group_id:
+                hide_resp = requests.put(f"{cdvr_url}/dvr/groups/{group_id}/visibility/hidden", timeout=5)
+                if hide_resp.status_code == 200:
+                    log("Hidden FruitDeepLinks group from CDVR GUI", "INFO")
+        except Exception:
+            pass
+        
+        log("CDVR Detector bootstrap complete", "INFO")
+        return True
+        
+    except Exception as e:
+        log(f"Bootstrap error: {e}", "ERROR")
+        return False
+
+def get_deeplink_for_lane(lane_number: int, self_base_url: str, deeplink_format: str = "scheme") -> dict:
+    """Get deeplink for the current event on this lane from local whatson API.
+
+    Args:
+        lane_number: Lane ID to query
+        self_base_url: Base URL like http://127.0.0.1:6655 (no trailing slash)
+        deeplink_format: 'scheme' for Apple TV (default), 'http' for Android/Fire TV
+    """
+    try:
+        base = (self_base_url or "").rstrip("/")
+        if not base:
+            base = f"http://127.0.0.1:{int(os.getenv('PORT', 6655))}"
+
+        api_url = f"{base}/whatson/{lane_number}?include=deeplink&deeplink_format={deeplink_format}"
+        resp = requests.get(api_url, timeout=3)
+
+        if resp.status_code != 200:
+            return None
+
+        data = resp.json() if resp.content else None
+        if not data or not data.get("ok") or not data.get("event_uid"):
+            return None
+
+        deeplink = data.get("deeplink_url") or data.get("deeplink_url_full")
+        if not deeplink:
+            return None
+
+        title = data.get("title") or f"Lane {lane_number} Event"
+        event_uid = data.get("event_uid")
+        is_fallback = data.get("is_fallback", False)
+
+        # Log if we're using a fallback deeplink
+        if is_fallback:
+            log(f"get_deeplink_for_lane: Lane {lane_number} using FALLBACK deeplink for '{title}'", "INFO")
+
+        return {
+            "deeplink": deeplink,
+            "title": title,
+            "event_uid": event_uid,
+            "event_data": data,
+            "is_fallback": is_fallback,
+        }
+
+    except Exception:
+        return None
+
+def trigger_playback_on_client(client_ip: str, deeplink: str, lane_number: int) -> dict:
+    """Orchestrate playback: update strmlnk, reprocess, trigger client"""
+    result = {
+        "lane_number": lane_number,
+        "strm_updated": False,
+        "file_id": None,
+        "cdvr_reprocessed": False,
+        "recording_id": None,
+        "playback_triggered": False
+    }
+    
+    try:
+        log(f"Triggering playback for lane {lane_number} on {client_ip}", "INFO")
+        log(f"Deeplink to use: {deeplink}", "INFO")
+        
+        # Update streamlink file
+        strmlnk_path = STREAMLINK_DIR / f"lane{lane_number}.strmlnk"
+        strmlnk_path.write_text(deeplink)
+        result["strm_updated"] = True
+        log(f"Updated streamlink file: {strmlnk_path}", "INFO")
+        
+        # Get file ID from CDVR
+        cdvr_url = f"http://{CDVR_SERVER_IP}:{CDVR_SERVER_PORT}"
+        files_resp = requests.get(f"{cdvr_url}/dvr/files", timeout=10)
+        files = files_resp.json()
+        
+        lane_filename = f"FruitDeepLinks/lane{lane_number}.strmlnk"
+        file_id = None
+        
+        for file_obj in files:
+            if file_obj.get('Path') == lane_filename:
+                file_id = file_obj.get('ID')
+                result["file_id"] = file_id
+                result["recording_id"] = file_id
+                break
+        
+        if not file_id:
+            result["error"] = f"File {lane_filename} not found in CDVR"
+            log(f"ERROR: File not found in CDVR: {lane_filename}", "ERROR")
+            return result
+        
+        log(f"Found CDVR file ID: {file_id}", "INFO")
+        
+        # Reprocess file (fast method from SLM)
+        reprocess_resp = requests.put(f"{cdvr_url}/dvr/files/{file_id}/reprocess", timeout=10)
+        
+        if reprocess_resp.status_code == 200:
+            result["cdvr_reprocessed"] = True
+            log(f"Reprocessed file successfully", "INFO")
+            time.sleep(2)
+        else:
+            result["error"] = f"Reprocess returned {reprocess_resp.status_code}"
+            log(f"ERROR: Reprocess failed with status {reprocess_resp.status_code}", "ERROR")
+            return result
+        
+        # Trigger playback on client
+        play_url = f"http://{client_ip}:{CDVR_API_PORT}/api/play/recording/{file_id}"
+        log(f"Triggering play at: {play_url}", "INFO")
+        play_resp = requests.post(play_url, timeout=5)
+        
+        if play_resp.status_code == 200:
+            result["playback_triggered"] = True
+            log(f"Successfully triggered deeplink on {client_ip}", "INFO")
+        else:
+            log(f"Play request returned status {play_resp.status_code}", "WARN")
+        
+        return result
+        
+    except Exception as e:
+        log(f"Playback trigger error: {e}", "ERROR")
+        result["error"] = str(e)
+        return result
+
+def auto_detect_and_trigger(lane_number: int, hint_client_ip: str, self_base_url: str):
+    """Auto-detection that polls CDVR clients and triggers deeplink playback.
+
+    Notes:
+      - The HLS request usually comes from the CDVR server, not the end device.
+      - Some installs report connected=false even while recently seen, so we use recency.
+    """
+    try:
+        cdvr_clients_url = f"http://{CDVR_SERVER_IP}:{CDVR_SERVER_PORT}/dvr/clients/info"
+        resp = requests.get(cdvr_clients_url, timeout=5)
+        if resp.status_code != 200:
+            log(f"Detector: /dvr/clients/info returned {resp.status_code}", "WARN")
+            return
+
+        clients = resp.json() or []
+        log(f"Detector: clients returned={len(clients)} hint_ip={hint_client_ip}", "INFO")
+
+        def has_api_support(platform_str: str) -> bool:
+            if not platform_str:
+                return False
+            p = platform_str.lower()
+            return any(x in p for x in ["tvos", "firetv", "androidtv", "android"])
+
+        now_ms = int(time.time() * 1000)
+        recent = []
+        for c in clients:
+            if not has_api_support(c.get("platform", "")):
+                continue
+            seen_at = c.get("seen_at")
+            try:
+                age_ms = now_ms - int(seen_at)
+            except Exception:
+                age_ms = 999999999
+            if age_ms <= 90_000:
+                recent.append((age_ms, c))
+
+        candidates = [c for (_age, c) in sorted(recent, key=lambda t: t[0])] if recent else [
+            c for c in clients if has_api_support(c.get("platform", ""))
+        ]
+
+        log(f"Detector: candidates={len(candidates)} (recent={len(recent)})", "INFO")
+
+        for client in candidates:
+            client_ip = client.get("local_ip")
+            if not client_ip:
+                continue
+
+            try:
+                status_url = f"http://{client_ip}:{CDVR_API_PORT}/api/status"
+                status_resp = requests.get(status_url, timeout=3)
+                if status_resp.status_code != 200:
+                    continue
+                status = status_resp.json() or {}
+
+                if status.get("status") != "playing":
+                    continue
+
+                channel = status.get("channel") or {}
+                ch_name = channel.get("name") or ""
+
+                import re
+                lane_match = re.search(r"(\d+)\s*$", ch_name)
+                if not lane_match:
+                    continue
+
+                detected_lane = int(lane_match.group(1))
+                if detected_lane != int(lane_number):
+                    continue
+
+                log(f"Detector: matched lane={lane_number} client={client_ip} ch='{ch_name}'", "INFO")
+                
+                # Detect platform and choose deeplink format
+                platform = client.get("platform", "").lower()
+                is_android = any(x in platform for x in ["android", "firetv"])
+                deeplink_format = "http" if is_android else "scheme"
+                
+                log(f"Detector: client platform={platform}, using deeplink_format={deeplink_format}", "INFO")
+
+                deeplink_info = get_deeplink_for_lane(int(lane_number), self_base_url, deeplink_format)
+                if not deeplink_info:
+                    log(f"Detector: no deeplink found for lane={lane_number}", "WARN")
+                    return
+
+                deeplink = deeplink_info.get("deeplink")
+                result = trigger_playback_on_client(client_ip, deeplink, int(lane_number))
+                
+                return
+
+            except Exception as e:
+                log(f"Detector: error checking client {client_ip}: {e}", "WARN")
+                continue
+
+        log(f"Detector: no matching playing client found for lane={lane_number}", "INFO")
+
+    except Exception as e:
+        log(f"Detector: fatal error: {e}", "ERROR")
+
+
+
 # ==================== File Serving / API ====================
 @app.route("/")
 def index():
@@ -886,6 +1293,11 @@ def index():
 def api_helper():
     """Simple HTML API helper page"""
     return load_template("api_helper.html")
+
+@app.route("/adb")
+def adb_config_page():
+    """ADB configuration page"""
+    return load_template("adb_config.html")
 
 @app.route("/api/status")
 def api_status():
@@ -911,6 +1323,26 @@ def api_status():
         except Exception:
             next_run = None
 
+    # Environment variables (for display on admin page)
+    env_vars = {
+        "SERVER_URL": os.getenv("SERVER_URL", ""),
+        "FRUIT_HOST_PORT": os.getenv("FRUIT_HOST_PORT", ""),
+        "CHANNELS_DVR_IP": os.getenv("CHANNELS_DVR_IP", ""),
+        "CHANNELS_SOURCE_NAME": os.getenv("CHANNELS_SOURCE_NAME", ""),
+        "CDVR_DVR_PATH": os.getenv("CDVR_DVR_PATH", ""),
+        "CDVR_SERVER_PORT": os.getenv("CDVR_SERVER_PORT", ""),
+        "CDVR_API_PORT": os.getenv("CDVR_API_PORT", ""),
+        "TZ": os.getenv("TZ", ""),
+        "FRUIT_LANES": os.getenv("FRUIT_LANES", ""),
+        "FRUIT_LANE_START_CH": os.getenv("FRUIT_LANE_START_CH", ""),
+        "AUTO_REFRESH_ENABLED": os.getenv("AUTO_REFRESH_ENABLED", ""),
+        "AUTO_REFRESH_TIME": os.getenv("AUTO_REFRESH_TIME", ""),
+        "HEADLESS": os.getenv("HEADLESS", ""),
+        "LOG_LEVEL": os.getenv("LOG_LEVEL", ""),
+    }
+    # Filter out empty values
+    env_vars = {k: v for k, v in env_vars.items() if v}
+
     return jsonify(
         {
             "status": "online",
@@ -922,6 +1354,7 @@ def api_status():
                 "time": auto_settings.get("time", "02:30"),
                 "next_run": next_run,
             },
+            "env_vars": env_vars,
             "timestamp": datetime.now().isoformat(),
         }
     )
@@ -1276,11 +1709,13 @@ def api_adb_lane_deeplink(provider_code, lane_number):
     
     Query Parameters:
     - format: 'text' (default) or 'json'
+    - deeplink_format: 'scheme' (default) or 'http' (for Android/Fire TV)
     - at: ISO timestamp (default: now)
     
     Examples:
     - /api/adb/lanes/sportscenter/1/deeplink?format=text
     - /api/adb/lanes/pplus/3/deeplink?format=json
+    - /api/adb/lanes/aiv/2/deeplink?format=json&deeplink_format=http
     
     Returns:
     - Text format: Just the deeplink URL (e.g., "sportscenter://...")
@@ -1301,6 +1736,9 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         at_ts = request.args.get("at")
         if not at_ts:
             at_ts = _dt.utcnow().isoformat(timespec="seconds")
+        
+        # Get deeplink format preference
+        deeplink_format = request.args.get("deeplink_format", "scheme").lower()
         
         cur = conn.cursor()
         
@@ -1401,6 +1839,16 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         link_info = get_event_link_info(conn, db_event_id, uid_col, primary_col, full_col)
         deeplink_url = link_info.get("deeplink_url") or link_info.get("deeplink_url_full") or event_id_str
         
+        # Convert to HTTP format if requested (for Android/Fire TV)
+        if deeplink_format == "http" and deeplink_url:
+            try:
+                from deeplink_converter import generate_http_deeplink
+                http_version = generate_http_deeplink(deeplink_url, provider_code)
+                if http_version:
+                    deeplink_url = http_version
+            except ImportError:
+                log("deeplink_converter not available for HTTP conversion", "WARN")
+        
         # Return response
         fmt = (request.args.get("format") or "text").lower()
         if fmt == "text":
@@ -1417,7 +1865,8 @@ def api_adb_lane_deeplink(provider_code, lane_number):
                 "start_utc": start_utc,
                 "stop_utc": stop_utc,
                 "event_start_utc": event_row["start_utc"],
-                "event_end_utc": event_row["end_utc"]
+                "event_end_utc": event_row["end_utc"],
+                "deeplink_format": deeplink_format
             })
     
     except Exception as e:
@@ -1538,9 +1987,12 @@ def whatson_lane(lane_id):
       GET /whatson/1?include=deeplink
       GET /whatson/1?deeplink=1
       GET /whatson/1?dynamic=1
+      GET /whatson/1?deeplink_format=http  (for Android/Fire TV)
+      GET /whatson/1?deeplink_format=scheme (for Apple TV, default)
 
     Plain text deeplink:
       GET /whatson/1?format=txt&param=deeplink_url
+      GET /whatson/1?format=txt&param=deeplink_url&deeplink_format=http
     """
     if not DB_PATH.exists():
         if request.args.get("format") == "txt":
@@ -1561,6 +2013,9 @@ def whatson_lane(lane_id):
         want_deeplink = True
     if request.args.get("dynamic") in ("1", "true", "yes"):
         want_deeplink = True
+    
+    # Deeplink format: 'http' for Android/Fire TV, 'scheme' for Apple TV (default)
+    deeplink_format = request.args.get("deeplink_format", "scheme").lower()
 
     fmt = (request.args.get("format") or "json").lower()
     param = request.args.get("param") or "event_uid"
@@ -1598,13 +2053,63 @@ def whatson_lane(lane_id):
         event_uid = None
         deeplink_url = None
         deeplink_url_full = None
+        is_fallback = False
+        title = None
+        channel_name = None
+        synopsis = None
 
-        if row:
+        # Check if current event is a placeholder - if so, try fallback
+        if row and row["is_placeholder"]:
+            log(f"Lane {lane_id}: Current slot is placeholder, checking for fallback event within padding window", "INFO")
+            fallback = get_fallback_event_for_lane(conn, lane_id, at_ts)
+            
+            if fallback:
+                event_id = fallback['event_id']
+                title = fallback['title']
+                channel_name = fallback['channel_name']
+                synopsis = fallback['synopsis']
+                is_fallback = True
+                
+                log(f"Lane {lane_id}: Using FALLBACK event '{title}' (ended at {fallback['end_utc']})", "INFO")
+                
+                # Get deeplink info for fallback event
+                link_info = get_event_link_info(conn, event_id, uid_col, primary_col, full_col)
+                event_uid = link_info.get("event_uid")
+                deeplink_url = link_info.get("deeplink_url")
+                deeplink_url_full = link_info.get("deeplink_url_full")
+            else:
+                log(f"Lane {lane_id}: No fallback event found within padding window", "INFO")
+        elif row and not row["is_placeholder"]:
+            # Normal case: non-placeholder event
             event_id = row["event_id"]
+            title = row["title"]
+            channel_name = row["channel_name"]
+            synopsis = row["synopsis"]
+            
             link_info = get_event_link_info(conn, event_id, uid_col, primary_col, full_col)
             event_uid = link_info.get("event_uid")
             deeplink_url = link_info.get("deeplink_url")
             deeplink_url_full = link_info.get("deeplink_url_full")
+        
+        # Convert to HTTP format if requested (for Android/Fire TV)
+        if deeplink_format == "http":
+            try:
+                from deeplink_converter import generate_http_deeplink
+                
+                # Try to convert primary deeplink
+                if deeplink_url:
+                    http_version = generate_http_deeplink(deeplink_url)
+                    if http_version:
+                        deeplink_url = http_version
+                
+                # Try to convert full deeplink
+                if deeplink_url_full:
+                    http_version = generate_http_deeplink(deeplink_url_full)
+                    if http_version:
+                        deeplink_url_full = http_version
+                        
+            except ImportError:
+                log("deeplink_converter not available, using original scheme URLs", "WARN")
 
         conn.close()
 
@@ -1627,10 +2132,18 @@ def whatson_lane(lane_id):
             "event_uid": event_uid,
             "at": at_ts,
         }
+        
+        # Add title if available
+        if title:
+            payload["title"] = title
 
         if want_deeplink:
             payload["deeplink_url"] = deeplink_url
             payload["deeplink_url_full"] = deeplink_url_full
+            
+        # Add fallback indicator
+        if is_fallback:
+            payload["is_fallback"] = True
 
         return jsonify(payload)
 
@@ -1786,6 +2299,91 @@ def load_template(template_name):
     """
 
 
+# ==================== CDVR Detector Routes ====================
+@app.route('/lane/<int:lane_number>/stream.m3u8', methods=['GET', 'HEAD'])
+def serve_lane_hls(lane_number):
+    """Serve a minimal *live-ish* HLS playlist and trigger auto-detection in background."""
+    if not DETECTOR_ENABLED:
+        return "CDVR Detector not enabled. Set CDVR_DVR_PATH in .env", 503
+    
+    remote = request.remote_addr
+    ua = request.headers.get("User-Agent", "-")
+    self_base_url = request.host_url.rstrip("/")  # e.g. http://192.168.86.80:6655
+
+    log(f"LANE_HIT lane={lane_number} remote={remote} ua={ua}", "INFO")
+
+    # Debounce detector spawns per-lane (CDVR often re-requests the playlist quickly)
+    spawn = True
+    now = time.time()
+    try:
+        with DETECT_LAST_SPAWN_LOCK:
+            last = DETECT_LAST_SPAWN.get(int(lane_number), 0)
+            if (now - float(last)) < float(DETECT_DEBOUNCE_SECONDS):
+                spawn = False
+            else:
+                DETECT_LAST_SPAWN[int(lane_number)] = now
+    except Exception:
+        spawn = True
+
+    def delayed_detect(lane: int, hint_ip: str, base_url: str):
+        time.sleep(2)
+        log(f"DETECTOR_START lane={lane}", "INFO")
+        try:
+            auto_detect_and_trigger(lane, hint_ip, base_url)
+        except Exception as e:
+            log(f"DETECTOR_CRASH lane={lane}: {e}", "ERROR")
+
+    if spawn:
+        threading.Thread(
+            target=delayed_detect,
+            args=(int(lane_number), remote, self_base_url),
+            daemon=True,
+        ).start()
+
+    # Build a "live-ish" playlist:
+    #  - NO #EXT-X-ENDLIST
+    #  - moving MEDIA-SEQUENCE
+    #  - multiple segments (same underlying TS is fine for a dummy stream)
+    epoch = int(now)
+    seq = epoch  # monotonic enough per request for dummy streaming
+
+    playlist = (
+        "#EXTM3U\n"
+        "#EXT-X-VERSION:3\n"
+        "#EXT-X-TARGETDURATION:60\n"
+        f"#EXT-X-MEDIA-SEQUENCE:{seq}\n"
+        "#EXTINF:60.0,\n"
+        f"/lane/{lane_number}/segment.ts?seq={seq}\n"
+        "#EXTINF:60.0,\n"
+        f"/lane/{lane_number}/segment.ts?seq={seq+1}\n"
+        "#EXTINF:60.0,\n"
+        f"/lane/{lane_number}/segment.ts?seq={seq+2}\n"
+    )
+
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+
+    if request.method == "HEAD":
+        return Response("", mimetype="application/vnd.apple.mpegurl", headers=headers)
+
+    return Response(playlist, mimetype="application/vnd.apple.mpegurl", headers=headers)
+
+@app.route('/lane/<int:lane_number>/segment.ts')
+def serve_segment(lane_number):
+    """Serve the dummy video segment."""
+    if DUMMY_SEGMENT_PATH and os.path.exists(DUMMY_SEGMENT_PATH):
+        resp = send_file(DUMMY_SEGMENT_PATH, mimetype='video/mp2t')
+        # Encourage clients to refetch even if they hit the same URL repeatedly.
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+    return "Segment not available", 404
 
 
 # ==================== Main ====================
@@ -1797,6 +2395,18 @@ if __name__ == "__main__":
 
     log(f"Server running on http://{host}:{port}", "INFO")
     log(f"Admin dashboard: http://{host}:{port}/", "INFO")
+    
+    # Bootstrap CDVR detector (if enabled)
+    if DETECTOR_ENABLED:
+        log("Initializing CDVR Detector...", "INFO")
+        log(f"CDVR Server: {CDVR_SERVER_IP}:{CDVR_SERVER_PORT}", "INFO")
+        log(f"Streamlink Directory: {STREAMLINK_DIR}", "INFO")
+        log(f"Number of Lanes: {NUM_LANES}", "INFO")
+        
+        create_dummy_segment()
+        bootstrap_streamlink_files()
+    else:
+        log("CDVR Detector: Disabled (set CDVR_DVR_PATH in .env to enable)", "INFO")
 
     # Start APScheduler-based auto-refresh if available
     start_scheduler_if_available()

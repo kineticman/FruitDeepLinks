@@ -51,6 +51,47 @@ def get_provider_from_channel(channel_name: str) -> str:
     else:
         return channel_name
 
+def get_provider_display_name(provider_id: str) -> str:
+    """Map provider IDs to friendly display names using logical_service_mapper"""
+    if not provider_id:
+        return None
+    
+    # Try to import and use the logical service mapper
+    try:
+        from logical_service_mapper import get_service_display_name
+        return get_service_display_name(provider_id)
+    except ImportError:
+        pass
+    
+    # Fallback to local mapping if import fails
+    provider_lower = provider_id.lower()
+    
+    provider_map = {
+        'sportscenter': 'ESPN+',
+        'sportsonespn': 'ESPN+',
+        'peacock': 'Peacock',
+        'peacocktv': 'Peacock',
+        'peacock_web': 'Peacock (Web)',
+        'pplus': 'Paramount+',
+        'aiv': 'Prime Video',
+        'gametime': 'Prime Video TNF',
+        'cbssportsapp': 'CBS Sports',
+        'foxone': 'FOX Sports',
+        'dazn': 'DAZN',
+        'open.dazn.com': 'DAZN',
+        'max': 'Max',
+        'f1tv': 'F1 TV',
+        'apple_mls': 'Apple MLS',
+        'apple_mlb': 'Apple MLB',
+        'apple_nba': 'Apple NBA',
+        'apple_nhl': 'Apple NHL',
+        'apple_other': 'Apple TV+',
+        'https': 'Web - Other',
+        'http': 'Web - Other',
+    }
+    
+    return provider_map.get(provider_lower, provider_id.title())
+
 # -------------------- Image helper (matches fruit_export_hybrid) --------------------
 def get_event_image_url(conn: sqlite3.Connection, event: Dict) -> Optional[str]:
     """
@@ -132,7 +173,7 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
         
         chan = ET.SubElement(tv, "channel", id=chan_id)
         dn = ET.SubElement(chan, "display-name")
-        dn.text = lane.get("name") or f"Sports Lane {lane_id}"
+        dn.text = f"Fruit Lane {lane_id}"  # Renamed from "Multi-Source Sports"
         
         # Add channel number if it exists
         if lane.get("logical_number"):
@@ -173,23 +214,43 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
                 desc = f"{desc} - on {provider}"
             ET.SubElement(prog, "desc").text = desc
             
-            # Categories
-            if channel_name:
-                provider = get_provider_from_channel(channel_name)
-                ET.SubElement(prog, "category").text = provider
-            ET.SubElement(prog, "category").text = "Sports"
-            
-            # Genres
-            genres_json = event.get("genres_json")
-            if genres_json:
-                try:
-                    genres = json.loads(genres_json)
-                    if isinstance(genres, list):
-                        for g in genres:
-                            if g and g != "Sports":
-                                ET.SubElement(prog, "category").text = str(g)
-                except Exception:
-                    pass
+            # Categories - skip for placeholders
+            is_placeholder = event.get("is_placeholder")
+            # Only add categories for real events (is_placeholder == 0 or False or None)
+            if is_placeholder != 1 and is_placeholder != True:
+                # Add provider/service (ESPN+, Peacock, etc)
+                chosen_provider = event.get("chosen_provider")
+                chosen_logical_service = event.get("chosen_logical_service")
+                
+                # Use logical service first (already mapped), then provider
+                provider_name = None
+                if chosen_logical_service:
+                    provider_name = get_provider_display_name(chosen_logical_service)
+                elif chosen_provider:
+                    provider_name = get_provider_display_name(chosen_provider)
+                elif channel_name:
+                    # Fallback to channel name parsing
+                    provider_name = get_provider_from_channel(channel_name)
+                
+                if provider_name:
+                    ET.SubElement(prog, "category").text = provider_name
+                
+                # Add standard categories
+                ET.SubElement(prog, "category").text = "Sports"
+                ET.SubElement(prog, "category").text = "Sports Event"
+                ET.SubElement(prog, "category").text = "Live"
+                
+                # Genres (Hockey, Soccer, etc)
+                genres_json = event.get("genres_json")
+                if genres_json:
+                    try:
+                        genres = json.loads(genres_json)
+                        if isinstance(genres, list):
+                            for g in genres:
+                                if g and g != "Sports":
+                                    ET.SubElement(prog, "category").text = str(g)
+                    except Exception:
+                        pass
             
             # Image (uses same Apple shelf logic as direct exporter)
             img_url = get_event_image_url(conn, event)
@@ -209,7 +270,7 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
 
 # -------------------- Lanes M3U --------------------
 def build_lanes_m3u(conn: sqlite3.Connection, m3u_path: str, server_url: str, epg_prefix: str = "lane."):
-    """Export lanes to M3U playlist"""
+    """Export lanes to M3U playlist for CDVR detector"""
     
     # Get all lanes
     cur = conn.cursor()
@@ -228,13 +289,13 @@ def build_lanes_m3u(conn: sqlite3.Connection, m3u_path: str, server_url: str, ep
         for lane in lanes:
             lane_id = lane["lane_id"]
             chan_id = f"{epg_prefix}{lane_id}"
-            name = lane.get("name") or f"Sports Lane {lane_id}"
+            name = f"Fruit Lane {lane_id}"  # Renamed from "Multi-Source Sports"
             chno = lane.get("logical_number") or lane_id
             
-            # Stream URL points to your server's lane endpoint
-            stream_url = f"{server_url}/lanes/{lane_id}/stream.m3u8"
+            # Stream URL points to detector endpoint on main server
+            stream_url = f"{server_url}/lane/{lane_id}/stream.m3u8"
             
-            f.write(f'#EXTINF:-1 tvg-id="{chan_id}" tvg-chno="{chno}" group-title="Sports Lanes",{name}\n')
+            f.write(f'#EXTINF:-1 tvg-id="{chan_id}" tvg-chno="{chno}" group-title="FruitDeepLinks",{name}\n')
             f.write(f"{stream_url}\n\n")
     
     Path(m3u_path).parent.mkdir(parents=True, exist_ok=True)
