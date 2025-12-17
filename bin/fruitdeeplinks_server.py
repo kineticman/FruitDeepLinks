@@ -1253,6 +1253,26 @@ def api_status():
         except Exception:
             next_run = None
 
+    # Environment variables (for display on admin page)
+    env_vars = {
+        "SERVER_URL": os.getenv("SERVER_URL", ""),
+        "FRUIT_HOST_PORT": os.getenv("FRUIT_HOST_PORT", ""),
+        "CHANNELS_DVR_IP": os.getenv("CHANNELS_DVR_IP", ""),
+        "CHANNELS_SOURCE_NAME": os.getenv("CHANNELS_SOURCE_NAME", ""),
+        "CDVR_DVR_PATH": os.getenv("CDVR_DVR_PATH", ""),
+        "CDVR_SERVER_PORT": os.getenv("CDVR_SERVER_PORT", ""),
+        "CDVR_API_PORT": os.getenv("CDVR_API_PORT", ""),
+        "TZ": os.getenv("TZ", ""),
+        "FRUIT_LANES": os.getenv("FRUIT_LANES", ""),
+        "FRUIT_LANE_START_CH": os.getenv("FRUIT_LANE_START_CH", ""),
+        "AUTO_REFRESH_ENABLED": os.getenv("AUTO_REFRESH_ENABLED", ""),
+        "AUTO_REFRESH_TIME": os.getenv("AUTO_REFRESH_TIME", ""),
+        "HEADLESS": os.getenv("HEADLESS", ""),
+        "LOG_LEVEL": os.getenv("LOG_LEVEL", ""),
+    }
+    # Filter out empty values
+    env_vars = {k: v for k, v in env_vars.items() if v}
+
     return jsonify(
         {
             "status": "online",
@@ -1264,6 +1284,7 @@ def api_status():
                 "time": auto_settings.get("time", "02:30"),
                 "next_run": next_run,
             },
+            "env_vars": env_vars,
             "timestamp": datetime.now().isoformat(),
         }
     )
