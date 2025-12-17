@@ -761,6 +761,77 @@ def get_current_events_by_lane(conn, at_ts=None):
             current_by_lane[lane_id] = dict(row)
     return current_by_lane
 
+
+def get_fallback_event_for_lane(conn, lane_id, at_ts):
+    """Get the most recent non-placeholder event for a lane within padding window.
+    
+    This is used when the current slot is a placeholder, but we're still within
+    the FRUIT_PADDING_MINUTES window of a recent real event. Returns the event
+    info so the deeplink stays active during the padding period.
+    
+    Returns dict with event info or None if no recent event found.
+    """
+    from datetime import datetime as _dt, timedelta, timezone
+    
+    padding_minutes = int(os.getenv('FRUIT_PADDING_MINUTES', '45'))
+    
+    # Parse at_ts to datetime
+    try:
+        now_dt = _dt.fromisoformat(at_ts.replace('Z', '+00:00'))
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        now_dt = _dt.now(timezone.utc)
+    
+    # Calculate padding window start
+    padding_window_start = now_dt - timedelta(minutes=padding_minutes)
+    
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    
+    try:
+        cur.execute(
+            """
+            SELECT
+                le.event_id,
+                le.start_utc,
+                le.end_utc,
+                le.chosen_provider,
+                e.title,
+                e.channel_name,
+                e.synopsis
+            FROM lane_events le
+            JOIN events e ON le.event_id = e.id
+            WHERE le.lane_id = ?
+              AND le.is_placeholder = 0
+              AND datetime(le.end_utc) >= datetime(?)
+              AND datetime(le.end_utc) <= datetime(?)
+            ORDER BY le.end_utc DESC
+            LIMIT 1
+            """,
+            (lane_id, padding_window_start.isoformat(), at_ts)
+        )
+        
+        row = cur.fetchone()
+        
+        if row:
+            return {
+                'event_id': row['event_id'],
+                'title': row['title'],
+                'channel_name': row['channel_name'],
+                'synopsis': row['synopsis'],
+                'start_utc': row['start_utc'],
+                'end_utc': row['end_utc'],
+                'chosen_provider': row['chosen_provider'],
+                'is_fallback': True
+            }
+        
+        return None
+        
+    except Exception as e:
+        log(f"Error in get_fallback_event_for_lane: {e}", "ERROR")
+        return None
+
 # ==================== Auto-refresh + Refresh Runner ====================
 def schedule_auto_refresh_from_settings():
     """Create/refresh the APScheduler job based on current settings"""
@@ -1021,12 +1092,18 @@ def get_deeplink_for_lane(lane_number: int, self_base_url: str, deeplink_format:
 
         title = data.get("title") or f"Lane {lane_number} Event"
         event_uid = data.get("event_uid")
+        is_fallback = data.get("is_fallback", False)
+
+        # Log if we're using a fallback deeplink
+        if is_fallback:
+            log(f"get_deeplink_for_lane: Lane {lane_number} using FALLBACK deeplink for '{title}'", "INFO")
 
         return {
             "deeplink": deeplink,
             "title": title,
             "event_uid": event_uid,
             "event_data": data,
+            "is_fallback": is_fallback,
         }
 
     except Exception:
@@ -1976,33 +2053,63 @@ def whatson_lane(lane_id):
         event_uid = None
         deeplink_url = None
         deeplink_url_full = None
+        is_fallback = False
+        title = None
+        channel_name = None
+        synopsis = None
 
-        if row:
+        # Check if current event is a placeholder - if so, try fallback
+        if row and row["is_placeholder"]:
+            log(f"Lane {lane_id}: Current slot is placeholder, checking for fallback event within padding window", "INFO")
+            fallback = get_fallback_event_for_lane(conn, lane_id, at_ts)
+            
+            if fallback:
+                event_id = fallback['event_id']
+                title = fallback['title']
+                channel_name = fallback['channel_name']
+                synopsis = fallback['synopsis']
+                is_fallback = True
+                
+                log(f"Lane {lane_id}: Using FALLBACK event '{title}' (ended at {fallback['end_utc']})", "INFO")
+                
+                # Get deeplink info for fallback event
+                link_info = get_event_link_info(conn, event_id, uid_col, primary_col, full_col)
+                event_uid = link_info.get("event_uid")
+                deeplink_url = link_info.get("deeplink_url")
+                deeplink_url_full = link_info.get("deeplink_url_full")
+            else:
+                log(f"Lane {lane_id}: No fallback event found within padding window", "INFO")
+        elif row and not row["is_placeholder"]:
+            # Normal case: non-placeholder event
             event_id = row["event_id"]
+            title = row["title"]
+            channel_name = row["channel_name"]
+            synopsis = row["synopsis"]
+            
             link_info = get_event_link_info(conn, event_id, uid_col, primary_col, full_col)
             event_uid = link_info.get("event_uid")
             deeplink_url = link_info.get("deeplink_url")
             deeplink_url_full = link_info.get("deeplink_url_full")
-            
-            # Convert to HTTP format if requested (for Android/Fire TV)
-            if deeplink_format == "http":
-                try:
-                    from deeplink_converter import generate_http_deeplink
-                    
-                    # Try to convert primary deeplink
-                    if deeplink_url:
-                        http_version = generate_http_deeplink(deeplink_url)
-                        if http_version:
-                            deeplink_url = http_version
-                    
-                    # Try to convert full deeplink
-                    if deeplink_url_full:
-                        http_version = generate_http_deeplink(deeplink_url_full)
-                        if http_version:
-                            deeplink_url_full = http_version
-                            
-                except ImportError:
-                    log("deeplink_converter not available, using original scheme URLs", "WARN")
+        
+        # Convert to HTTP format if requested (for Android/Fire TV)
+        if deeplink_format == "http":
+            try:
+                from deeplink_converter import generate_http_deeplink
+                
+                # Try to convert primary deeplink
+                if deeplink_url:
+                    http_version = generate_http_deeplink(deeplink_url)
+                    if http_version:
+                        deeplink_url = http_version
+                
+                # Try to convert full deeplink
+                if deeplink_url_full:
+                    http_version = generate_http_deeplink(deeplink_url_full)
+                    if http_version:
+                        deeplink_url_full = http_version
+                        
+            except ImportError:
+                log("deeplink_converter not available, using original scheme URLs", "WARN")
 
         conn.close()
 
@@ -2025,10 +2132,18 @@ def whatson_lane(lane_id):
             "event_uid": event_uid,
             "at": at_ts,
         }
+        
+        # Add title if available
+        if title:
+            payload["title"] = title
 
         if want_deeplink:
             payload["deeplink_url"] = deeplink_url
             payload["deeplink_url_full"] = deeplink_url_full
+            
+        # Add fallback indicator
+        if is_fallback:
+            payload["is_fallback"] = True
 
         return jsonify(payload)
 
