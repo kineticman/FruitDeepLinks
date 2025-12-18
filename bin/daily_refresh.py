@@ -71,6 +71,7 @@ def main():
         if not run_step(1, total_steps, "Scraping Apple TV Sports", [
             "python3", "multi_scraper.py",
             "--headless",
+            "--seeds", "300",
             "--out", str(OUT_DIR / "multi_scraped.json"),
         ]):
             return 1

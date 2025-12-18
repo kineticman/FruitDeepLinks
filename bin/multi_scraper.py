@@ -694,6 +694,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--terms", default=default_terms(), help="comma-separated search terms (we always prepend 'all')")
     ap.add_argument("--seeds", type=int, default=0, help="max seeds per term; 0=use all discovered seeds")
+    ap.add_argument("--fetch-shelf-limit", type=int, default=0, help="max shelf events to fetch individually (0=disabled, shelf events stay as shelf-only)")
     ap.add_argument("--max-preseed", type=int, default=220, help="cap seeds discovered per term BEFORE scraping (HTML first, then network-only)")
     ap.add_argument("--early-stop", type=int, default=8, help="rolling window size to stop when last N seeds yielded 0 (0=disabled)")
     ap.add_argument("--adaptive-window", type=int, default=12, help="guard: never early-stop inside the first N seeds of a term")
@@ -792,6 +793,51 @@ def main():
         if args.leagues and not global_time_exceeded():
             league_events = crawl_leagues(driver, utscf, utsk, seen_ids)
             all_events += league_events
+
+        # NEW: Fetch shelf events individually up to limit
+        if args.fetch_shelf_limit and args.fetch_shelf_limit > 0 and not global_time_exceeded():
+            print("\n" + "=" * 60)
+            print(f"FETCHING SHELF EVENTS INDIVIDUALLY (limit: {args.fetch_shelf_limit})")
+            print("=" * 60)
+            
+            # Collect shelf-only event IDs
+            shelf_ids_to_fetch = []
+            for e in all_events:
+                if e.get("source") == "shelf":
+                    eid = e.get("id")
+                    if eid:
+                        shelf_ids_to_fetch.append(eid)
+            
+            # Limit to requested count
+            shelf_ids_to_fetch = shelf_ids_to_fetch[:args.fetch_shelf_limit]
+            
+            print(f"  Found {len(shelf_ids_to_fetch)} shelf events to fetch individually")
+            
+            # Remove old shelf versions from results
+            shelf_ids_set = set(shelf_ids_to_fetch)
+            all_events = [e for e in all_events if not (e.get("source") == "shelf" and e.get("id") in shelf_ids_set)]
+            
+            # Fetch each shelf event individually
+            fetched_count = 0
+            for i, shelf_id in enumerate(shelf_ids_to_fetch, 1):
+                if global_time_exceeded():
+                    print("  Global time limit reached - stopping shelf fetch")
+                    break
+                
+                print(f"  [Shelf {i}/{len(shelf_ids_to_fetch)}] {shelf_id}")
+                try:
+                    data = fetch_event_v3(driver, shelf_id, utscf, utsk)
+                    if isinstance(data, dict) and data.get("data"):
+                        # Mark as main event now that it's fully fetched
+                        main_event = {"id": shelf_id, "status": 200, "raw_data": data, "source": "main"}
+                        all_events.append(main_event)
+                        fetched_count += 1
+                except Exception as e:
+                    print(f"    error: {e}")
+                
+                time.sleep(0.18)
+            
+            print(f"  Successfully fetched {fetched_count} shelf events individually")
 
         out_path.write_text(json.dumps(all_events, indent=2), encoding="utf-8")
 
