@@ -520,6 +520,8 @@ def build_direct_m3u(
 
     preferences = load_user_preferences(conn) if FILTERING_AVAILABLE else {}
     enabled_services = preferences.get("enabled_services", [])
+    priority_map = preferences.get("service_priorities", {})
+    amazon_penalty = preferences.get("amazon_penalty", True)
 
     skipped_no_deeplink = 0
     reason_counts: Dict[str, int] = {}
