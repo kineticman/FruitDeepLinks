@@ -20,6 +20,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
+# Import logical service mapper
+try:
+    from logical_service_mapper import get_logical_service_for_playable
+    LOGICAL_SERVICE_AVAILABLE = True
+except ImportError:
+    LOGICAL_SERVICE_AVAILABLE = False
+    print("[KAYO] Warning: logical_service_mapper not available, logical_service will be NULL")
+
 
 def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Ingest Kayo feed into FruitDeepLinks DB")
@@ -130,14 +138,39 @@ def normalize_kayo_event(raw_event: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
     for idx, p in enumerate(raw_event.get("playables") or []):
         playable_id = p.get("playable_id") or f"{event_id}-playable-{idx}"
         provider = p.get("provider") or "kayo"
+        deeplink_play = p.get("deeplink_play")
+        deeplink_open = p.get("deeplink_open")
+        playable_url = p.get("playable_url")
+        
+        # Determine logical_service using mapper
+        logical_service = None
+        if LOGICAL_SERVICE_AVAILABLE:
+            try:
+                logical_service = get_logical_service_for_playable(
+                    provider=provider,
+                    deeplink_play=deeplink_play,
+                    deeplink_open=deeplink_open,
+                    playable_url=playable_url,
+                    event_id=event_id,
+                    conn=None  # Don't need conn for Kayo
+                )
+            except Exception as e:
+                print(f"[KAYO] Warning: Could not map logical_service for {playable_id}: {e}")
+                # Fallback: Kayo provider maps to kayo_web
+                logical_service = "kayo_web" if provider == "kayo" else provider
+        else:
+            # Fallback: Kayo provider maps to kayo_web
+            logical_service = "kayo_web" if provider == "kayo" else provider
+        
         playable_rows.append(
             {
                 "event_id": event_id,
                 "playable_id": playable_id,
                 "provider": provider,
-                "playable_url": p.get("playable_url"),
-                "deeplink_play": p.get("deeplink_play"),
-                "deeplink_open": p.get("deeplink_open"),
+                "logical_service": logical_service,
+                "playable_url": playable_url,
+                "deeplink_play": deeplink_play,
+                "deeplink_open": deeplink_open,
                 "priority": p.get("priority", 10),
                 "created_utc": datetime.now(timezone.utc).isoformat(),
             }

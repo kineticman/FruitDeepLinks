@@ -1785,6 +1785,129 @@ def api_filters_preferences():
 
 
 # ==================== Provider Lanes API ====================
+def get_provider_lane_stats(conn: sqlite3.Connection) -> list[dict]:
+    """
+    Get comprehensive stats for each logical service for ADB lane configuration.
+    
+    Returns list of dicts with:
+    {
+        "provider_code": "watchtnt",
+        "name": "TNT",
+        "event_count": 45,        # Unique events with this service
+        "playable_count": 52,     # Total playables (may have duplicates)
+        "future_event_count": 30, # Events that haven't ended yet
+        "adb_enabled": 0,         # From provider_lanes table
+        "adb_lane_count": 0       # From provider_lanes table
+    }
+    """
+    cur = conn.cursor()
+    
+    # Get stats from playables grouped by logical_service
+    # Check if logical_service column exists first
+    cur.execute("PRAGMA table_info(playables)")
+    columns = [row[1] for row in cur.fetchall()]
+    
+    if 'logical_service' in columns:
+        # Use stored logical_service column
+        cur.execute("""
+            SELECT 
+                p.logical_service as service_code,
+                COUNT(DISTINCT p.event_id) as event_count,
+                COUNT(*) as playable_count,
+                COUNT(DISTINCT CASE 
+                    WHEN datetime(e.end_utc) > datetime('now') 
+                    THEN p.event_id 
+                END) as future_event_count
+            FROM playables p
+            LEFT JOIN events e ON p.event_id = e.id
+            WHERE p.logical_service IS NOT NULL
+              AND p.logical_service != ''
+            GROUP BY p.logical_service
+            ORDER BY event_count DESC
+        """)
+    else:
+        # Fallback: use provider column
+        cur.execute("""
+            SELECT 
+                p.provider as service_code,
+                COUNT(DISTINCT p.event_id) as event_count,
+                COUNT(*) as playable_count,
+                COUNT(DISTINCT CASE 
+                    WHEN datetime(e.end_utc) > datetime('now') 
+                    THEN p.event_id 
+                END) as future_event_count
+            FROM playables p
+            LEFT JOIN events e ON p.event_id = e.id
+            WHERE p.provider IS NOT NULL
+              AND p.provider != ''
+            GROUP BY p.provider
+            ORDER BY event_count DESC
+        """)
+    
+    services = {}
+    for row in cur.fetchall():
+        service_code = row[0]
+        
+        # Get display name
+        display_name = service_code
+        if LOGICAL_SERVICES_AVAILABLE:
+            try:
+                from logical_service_mapper import get_service_display_name
+                display_name = get_service_display_name(service_code)
+            except:
+                display_name = service_code.upper()
+        
+        services[service_code] = {
+            "provider_code": service_code,
+            "name": display_name,
+            "event_count": row[1],
+            "playable_count": row[2],
+            "future_event_count": row[3],
+            "adb_enabled": 0,
+            "adb_lane_count": 0,
+            "created_at": None,
+            "updated_at": None
+        }
+    
+    # Merge with provider_lanes configuration
+    cur.execute("""
+        SELECT provider_code, adb_enabled, adb_lane_count, created_at, updated_at
+        FROM provider_lanes
+    """)
+    
+    for row in cur.fetchall():
+        code = row[0]
+        if code in services:
+            services[code]["adb_enabled"] = row[1]
+            services[code]["adb_lane_count"] = row[2]
+            services[code]["created_at"] = row[3]
+            services[code]["updated_at"] = row[4]
+        else:
+            # Service in provider_lanes but no playables (could be old/disabled)
+            display_name = code
+            if LOGICAL_SERVICES_AVAILABLE:
+                try:
+                    from logical_service_mapper import get_service_display_name
+                    display_name = get_service_display_name(code)
+                except:
+                    display_name = code.upper()
+            
+            services[code] = {
+                "provider_code": code,
+                "name": display_name,
+                "event_count": 0,
+                "playable_count": 0,
+                "future_event_count": 0,
+                "adb_enabled": row[1],
+                "adb_lane_count": row[2],
+                "created_at": row[3],
+                "updated_at": row[4]
+            }
+    
+    # Sort by event count (descending), then by name
+    return sorted(services.values(), key=lambda x: (-x["event_count"], x["name"]))
+
+
 @app.route("/api/provider_lanes", methods=["GET", "POST"])
 def api_provider_lanes():
     """
@@ -1803,47 +1926,24 @@ def api_provider_lanes():
     conn.row_factory = sqlite3.Row
     try:
         if request.method == "GET":
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT provider_code, adb_enabled, adb_lane_count,
-                       created_at, updated_at
-                  FROM provider_lanes
-                 ORDER BY provider_code
-                """
-            )
-            rows = [dict(row) for row in cur.fetchall()]
-
-            # Augment with logical web services (e.g., max, peacock_web) so they
-            # can appear in the ADB Lane Providers table even though their raw
-            # provider is "https".
+            # Use enhanced stats function that shows event counts
             try:
-                if LOGICAL_SERVICES_AVAILABLE:
-                    service_counts = get_all_logical_services_with_counts(conn)
-                    existing_codes = {row["provider_code"] for row in rows}
-                    extra_rows = []
-                    for service_code, _count in service_counts.items():
-                        if service_code in existing_codes:
-                            continue
-                        # Skip generic buckets; those are either already present
-                        # or not useful for user-facing ADB config.
-                        if service_code in ("http", "https"):
-                            continue
-                        extra_rows.append(
-                            {
-                                "provider_code": service_code,
-                                "adb_enabled": 0,
-                                "adb_lane_count": 0,
-                                "created_at": None,
-                                "updated_at": None,
-                            }
-                        )
-                    if extra_rows:
-                        rows.extend(sorted(extra_rows, key=lambda r: r["provider_code"]))
+                providers = get_provider_lane_stats(conn)
+                return jsonify({"status": "success", "providers": providers})
             except Exception as e:
-                log(f"api_provider_lanes: failed to merge logical services: {e}", "ERROR")
-
-            return jsonify({"status": "success", "providers": rows})
+                log(f"Error getting provider lane stats: {e}", "ERROR")
+                # Fallback to old behavior
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT provider_code, adb_enabled, adb_lane_count,
+                           created_at, updated_at
+                      FROM provider_lanes
+                     ORDER BY provider_code
+                    """
+                )
+                rows = [dict(row) for row in cur.fetchall()]
+                return jsonify({"status": "success", "providers": rows})
 
         # POST
         payload = request.get_json(silent=True) or {}

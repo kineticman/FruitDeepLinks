@@ -312,6 +312,8 @@ def build_direct_xmltv(
     # Load user preferences for deeplink selection
     preferences = load_user_preferences(conn) if FILTERING_AVAILABLE else {}
     enabled_services = preferences.get("enabled_services", [])
+    priority_map = preferences.get("service_priorities", {})
+    amazon_penalty = preferences.get("amazon_penalty", True)
 
     now = datetime.now(timezone.utc)
     tv = ET.Element("tv")
@@ -328,7 +330,7 @@ def build_direct_xmltv(
         deeplink_url = None
         if FILTERING_AVAILABLE:
             # Try filtered playables first
-            deeplink_url = get_best_deeplink_for_event(conn, event_id, enabled_services)
+            deeplink_url = get_best_deeplink_for_event(conn, event_id, enabled_services, priority_map, amazon_penalty)
 
         if not deeplink_url and FILTERING_AVAILABLE:
             # Fallback to raw_attributes
@@ -561,7 +563,7 @@ def build_direct_m3u(
                 p_rows = []
 
             if FILTERING_AVAILABLE and p_rows:
-                deeplink_url = get_best_deeplink_for_event(conn, event_id, enabled_services)
+                deeplink_url = get_best_deeplink_for_event(conn, event_id, enabled_services, priority_map, amazon_penalty)
 
             # Second pass: use logical_service_mapper directly on playables
             if (
