@@ -4,6 +4,7 @@
 <title>Filters & Settings - FruitDeepLinks</title>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -98,7 +99,8 @@ background: #ef4444;
 border-color: #ef4444;
 }
 .checkbox::after {
-content: 'color: white;
+content: '✓';
+color: white;
 font-weight: bold;
 display: none;
 }
@@ -107,7 +109,7 @@ display: none;
 display: block;
 }
 .filter-item.disabled .checkbox::after {
-content: '';
+content: '✗';
 }
 .filter-info {
 flex: 1;
@@ -187,6 +189,125 @@ font-size: 24px;
 font-weight: 600;
 color: #60a5fa;
 }
+.priority-list {
+display: flex;
+flex-direction: column;
+gap: 8px;
+max-width: 600px;
+}
+.priority-item {
+background: #0f172a;
+border: 2px solid #334155;
+border-radius: 8px;
+padding: 12px 16px;
+display: flex;
+align-items: center;
+gap: 12px;
+cursor: grab;
+transition: all 0.2s;
+}
+.priority-item:active {
+cursor: grabbing;
+}
+.priority-item.sortable-ghost {
+opacity: 0.4;
+background: #1e293b;
+}
+.priority-item.sortable-drag {
+opacity: 0.8;
+box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+.drag-handle {
+font-size: 20px;
+color: #64748b;
+cursor: grab;
+user-select: none;
+}
+.priority-number {
+min-width: 40px;
+text-align: center;
+font-weight: 600;
+color: #60a5fa;
+font-size: 18px;
+}
+.priority-service-info {
+flex: 1;
+}
+.priority-service-name {
+font-weight: 600;
+margin-bottom: 2px;
+}
+.priority-service-code {
+font-size: 12px;
+color: #94a3b8;
+}
+.amazon-penalty-option {
+margin-top: 20px;
+padding: 16px;
+background: #0f172a;
+border-radius: 8px;
+border: 1px solid #334155;
+}
+.amazon-penalty-option label {
+display: flex;
+align-items: center;
+gap: 12px;
+cursor: pointer;
+}
+.amazon-penalty-option input[type="checkbox"] {
+width: 20px;
+height: 20px;
+cursor: pointer;
+}
+.priority-help {
+color: #94a3b8;
+font-size: 14px;
+margin-bottom: 16px;
+padding: 12px;
+background: #0f172a;
+border-radius: 6px;
+border-left: 3px solid #60a5fa;
+}
+.examples-grid {
+display: grid;
+gap: 12px;
+}
+.example-card {
+background: #0f172a;
+border: 1px solid #334155;
+border-radius: 8px;
+padding: 16px;
+}
+.example-title {
+font-weight: 600;
+margin-bottom: 8px;
+color: #e2e8f0;
+}
+.example-services {
+display: flex;
+flex-wrap: wrap;
+gap: 6px;
+margin: 8px 0;
+}
+.example-service {
+padding: 4px 10px;
+border-radius: 4px;
+font-size: 12px;
+background: #1e293b;
+border: 1px solid #334155;
+}
+.example-service.winner {
+background: #14532d;
+border-color: #22c55e;
+color: #22c55e;
+font-weight: 600;
+}
+.example-reason {
+font-size: 13px;
+color: #94a3b8;
+margin-top: 8px;
+font-style: italic;
+}
 </style>
 </head>
 <body>
@@ -214,7 +335,7 @@ color: #60a5fa;
 </div>
 
 <div class="card">
-<h2>Streaming Services</h2>
+<h2>📺 Streaming Services</h2>
 <p class="section-description">
 Select which streaming services you have subscriptions to. Only events available on your selected services will be included in generated playlists.
 <strong>Green = Enabled</strong> (will be included) | <strong>Red = Disabled</strong> (will be excluded)
@@ -224,7 +345,40 @@ Select which streaming services you have subscriptions to. Only events available
 </div>
 
 <div class="card">
-<h2>Sports Filter</h2>
+<h2>🎯 Service Priority Order</h2>
+<div class="priority-help">
+<strong>⚡ When multiple services have the same event, which should be used?</strong><br>
+Drag services to reorder them. Higher position = higher priority. Services at the top will be preferred over those below.
+</div>
+
+<div id="priority-loading" class="loading">Loading priorities...</div>
+<div id="priority-list" class="priority-list" style="display: none;"></div>
+
+<div class="amazon-penalty-option">
+<label>
+<input type="checkbox" id="amazon-penalty" checked>
+<div>
+<strong>Prefer direct streaming services over Amazon redirects</strong><br>
+<span style="font-size: 13px; color: #94a3b8;">
+Amazon Prime often redirects to other services (TNT, HBO Max, etc.). 
+When enabled, we'll use the direct service link when available.
+</span>
+</div>
+</label>
+</div>
+</div>
+
+<div class="card">
+<h2>🔍 Selection Examples</h2>
+<p class="section-description">
+See which services will be selected for events with multiple options. This updates as you change priorities.
+</p>
+<div id="examples-loading" class="loading">Loading examples...</div>
+<div id="examples-grid" class="examples-grid" style="display: none;"></div>
+</div>
+
+<div class="card">
+<h2>⚽ Sports Filter</h2>
 <p class="section-description">
 Hide sports you're not interested in. Disabled sports will be excluded from your channels.
 </p>
@@ -233,7 +387,7 @@ Hide sports you're not interested in. Disabled sports will be excluded from your
 </div>
 
 <div class="card">
-<h2>Leagues Filter</h2>
+<h2>🏆 Leagues Filter</h2>
 <p class="section-description">
 Hide specific leagues or competitions. Disabled leagues will be excluded from your channels.
 </p>
@@ -253,7 +407,9 @@ Hide specific leagues or competitions. Disabled leagues will be excluded from yo
 let currentPreferences = {
 enabled_services: [],
 disabled_sports: [],
-disabled_leagues: []
+disabled_leagues: [],
+service_priorities: {},
+amazon_penalty: true
 };
 
 let availableFilters = {
@@ -262,7 +418,7 @@ sports: [],
 leagues: []
 };
 
-
+let sortableInstance = null;
 
 async function loadFilters() {
 try {
@@ -273,20 +429,176 @@ availableFilters = data.filters;
 currentPreferences = data.preferences;
 
 // If no enabled services, default to ALL enabled
-if (currentPreferences.enabled_services.length === 0) {
+if (!currentPreferences.enabled_services || currentPreferences.enabled_services.length === 0) {
 currentPreferences.enabled_services = availableFilters.providers.map(p => p.scheme);
 }
+
+// Load priorities
+await loadPriorities();
 
 renderProviders();
 renderSports();
 renderLeagues();
+renderPriorities();
 updateStats();
+
+// Load selection examples
+loadSelectionExamples();
 
 } catch (err) {
 console.error('Failed to load filters:', err);
 showStatus('Failed to load filters', 'error');
 }
 }
+
+async function loadPriorities() {
+try {
+const res = await fetch('/api/filters/priorities');
+const data = await res.json();
+
+currentPreferences.service_priorities = data.service_priorities || {};
+currentPreferences.amazon_penalty = data.amazon_penalty !== undefined ? data.amazon_penalty : true;
+
+document.getElementById('amazon-penalty').checked = currentPreferences.amazon_penalty;
+} catch (err) {
+console.error('Failed to load priorities:', err);
+}
+}
+
+function renderPriorities() {
+const container = document.getElementById('priority-list');
+const loading = document.getElementById('priority-loading');
+
+// Get only enabled services
+const enabledServices = availableFilters.providers.filter(p => 
+currentPreferences.enabled_services.includes(p.scheme)
+);
+
+if (enabledServices.length === 0) {
+loading.textContent = 'No services enabled. Enable services above to set priorities.';
+return;
+}
+
+// Sort by priority (highest first)
+enabledServices.sort((a, b) => {
+const priorityA = currentPreferences.service_priorities[a.scheme] || 50;
+const priorityB = currentPreferences.service_priorities[b.scheme] || 50;
+return priorityB - priorityA;
+});
+
+container.innerHTML = enabledServices.map((provider, index) => {
+const priority = currentPreferences.service_priorities[provider.scheme] || 50;
+return `
+<div class="priority-item" data-service="${provider.scheme}" data-priority="${priority}">
+<div class="drag-handle">⋮⋮</div>
+<div class="priority-number">${priority}</div>
+<div class="priority-service-info">
+<div class="priority-service-name">${provider.name}</div>
+<div class="priority-service-code">${provider.scheme} • ${provider.count} events</div>
+</div>
+</div>
+`;
+}).join('');
+
+loading.style.display = 'none';
+container.style.display = 'flex';
+
+// Initialize Sortable.js
+if (sortableInstance) {
+sortableInstance.destroy();
+}
+
+sortableInstance = new Sortable(container, {
+animation: 150,
+handle: '.drag-handle',
+ghostClass: 'sortable-ghost',
+dragClass: 'sortable-drag',
+onEnd: function(evt) {
+updatePrioritiesFromOrder();
+loadSelectionExamples(); // Refresh examples after reorder
+}
+});
+}
+
+function updatePrioritiesFromOrder() {
+const items = document.querySelectorAll('.priority-item');
+const totalItems = items.length;
+
+// Recalculate priorities based on position
+// Top item gets highest priority, bottom gets lowest
+items.forEach((item, index) => {
+const service = item.dataset.service;
+// Distribute priorities evenly from 100 (top) to 10 (bottom)
+const newPriority = Math.round(100 - (index / Math.max(1, totalItems - 1)) * 90);
+currentPreferences.service_priorities[service] = newPriority;
+
+// Update display
+const priorityEl = item.querySelector('.priority-number');
+if (priorityEl) {
+priorityEl.textContent = newPriority;
+}
+item.dataset.priority = newPriority;
+});
+}
+
+async function loadSelectionExamples() {
+const examplesGrid = document.getElementById('examples-grid');
+const loading = document.getElementById('examples-loading');
+
+try {
+const res = await fetch('/api/filters/selection-examples');
+const data = await res.json();
+
+if (!data.examples || data.examples.length === 0) {
+loading.textContent = 'No multi-service events found to show examples.';
+return;
+}
+
+examplesGrid.innerHTML = data.examples.map(example => {
+const availableHtml = example.available_services.map(svc => {
+const isWinner = example.selected_service && svc.code === example.selected_service.code;
+return `<span class="example-service ${isWinner ? 'winner' : ''}">${svc.name}</span>`;
+}).join('');
+
+const winnerText = example.selected_service 
+? `✅ Selected: <strong>${example.selected_service.name}</strong>`
+: '❌ No service selected';
+
+return `
+<div class="example-card">
+<div class="example-title">${example.title}</div>
+<div style="font-size: 12px; color: #64748b; margin-bottom: 8px;">
+${example.channel} • ${new Date(example.start_utc).toLocaleString()}
+</div>
+<div class="example-services">${availableHtml}</div>
+<div class="example-reason">
+${winnerText}<br>
+<span style="color: #64748b;">${example.reason}</span>
+</div>
+</div>
+`;
+}).join('');
+
+loading.style.display = 'none';
+examplesGrid.style.display = 'grid';
+
+} catch (err) {
+console.error('Failed to load examples:', err);
+loading.textContent = 'Failed to load selection examples.';
+}
+}
+
+// Update Amazon penalty when checkbox changes
+document.addEventListener('DOMContentLoaded', function() {
+const checkbox = document.getElementById('amazon-penalty');
+if (checkbox) {
+checkbox.addEventListener('change', function() {
+currentPreferences.amazon_penalty = this.checked;
+loadSelectionExamples(); // Refresh examples
+});
+}
+});
+
 function renderProviders() {
 const grid = document.getElementById('providers-grid');
 const loading = document.getElementById('providers-loading');
@@ -376,6 +688,8 @@ currentPreferences.enabled_services.splice(index, 1);
 currentPreferences.enabled_services.push(scheme);
 }
 renderProviders();
+renderPriorities(); // Update priority list when services change
+loadSelectionExamples(); // Refresh examples
 }
 
 function toggleSport(name) {
@@ -399,36 +713,65 @@ renderLeagues();
 }
 
 async function savePreferences() {
-    try {
-        // Save core filter preferences
-        const filtersRes = await fetch('/api/filters/preferences', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(currentPreferences)
-        });
+try {
+// Save filter preferences (services, sports, leagues)
+const filtersRes = await fetch('/api/filters/preferences', {
+method: 'POST',
+headers: {'Content-Type': 'application/json'},
+body: JSON.stringify({
+enabled_services: currentPreferences.enabled_services,
+disabled_sports: currentPreferences.disabled_sports,
+disabled_leagues: currentPreferences.disabled_leagues
+})
+});
 
-        if (filtersRes.ok) {
-            showStatus('✓ Settings saved! Click "Apply Filters Now" to regenerate channels.', 'success');
-        } else {
-            showStatus('✗ Failed to save settings', 'error');
-        }
-    } catch (err) {
-        console.error('Error saving settings', err);
-        showStatus('✗ Error saving settings', 'error');
-    }
+// Save priorities and Amazon penalty
+const prioritiesRes = await fetch('/api/filters/priorities', {
+method: 'POST',
+headers: {'Content-Type': 'application/json'},
+body: JSON.stringify({
+service_priorities: currentPreferences.service_priorities,
+amazon_penalty: currentPreferences.amazon_penalty
+})
+});
+
+if (filtersRes.ok && prioritiesRes.ok) {
+showStatus('Settings saved! Click Apply Filters Now to regenerate channels.', 'success');
+} else {
+showStatus('Failed to save settings', 'error');
+}
+} catch (err) {
+console.error('Error saving settings', err);
+showStatus('Error saving settings', 'error');
+}
 }
 
 async function applyFilters() {
 // Save first, then apply
 try {
-const saveRes = await fetch('/api/filters/preferences', {
+// Save filters
+const saveFiltersRes = await fetch('/api/filters/preferences', {
 method: 'POST',
 headers: {'Content-Type': 'application/json'},
-body: JSON.stringify(currentPreferences)
+body: JSON.stringify({
+enabled_services: currentPreferences.enabled_services,
+disabled_sports: currentPreferences.disabled_sports,
+disabled_leagues: currentPreferences.disabled_leagues
+})
 });
 
-if (!saveRes.ok) {
-showStatus(' Failed to save settings', 'error');
+// Save priorities
+const savePrioritiesRes = await fetch('/api/filters/priorities', {
+method: 'POST',
+headers: {'Content-Type': 'application/json'},
+body: JSON.stringify({
+service_priorities: currentPreferences.service_priorities,
+amazon_penalty: currentPreferences.amazon_penalty
+})
+});
+
+if (!saveFiltersRes.ok || !savePrioritiesRes.ok) {
+showStatus('Failed to save settings', 'error');
 return;
 }
 
@@ -439,7 +782,7 @@ headers: {'Content-Type': 'application/json'}
 });
 
 if (applyRes.ok) {
-showStatus(' Applying filters... This takes ~10 seconds. Check dashboard for progress.', 'success');
+showStatus('Applying filters... This takes ~10 seconds. Check dashboard for progress.', 'success');
 
 // Redirect to dashboard after 2 seconds
 setTimeout(() => {
@@ -447,10 +790,10 @@ window.location.href = '/';
 }, 2000);
 } else {
 const data = await applyRes.json();
-showStatus(' ' + (data.error || 'Failed to apply filters'), 'error');
+showStatus((data.error || 'Failed to apply filters'), 'error');
 }
 } catch (err) {
-showStatus(' Error applying filters', 'error');
+showStatus('Error applying filters', 'error');
 }
 }
 
@@ -459,11 +802,15 @@ if (confirm('Reset all filters to defaults? This will enable all services and sp
 currentPreferences = {
 enabled_services: availableFilters.providers.map(p => p.scheme),
 disabled_sports: [],
-disabled_leagues: []
+disabled_leagues: [],
+service_priorities: {}, // Will use defaults from backend
+amazon_penalty: true
 };
 renderProviders();
 renderSports();
 renderLeagues();
+renderPriorities();
+loadSelectionExamples();
 showStatus('Reset to defaults. Click Save to apply.', 'success');
 }
 }
@@ -489,4 +836,3 @@ loadFilters();
 </script>
 </body>
 </html>
-"""

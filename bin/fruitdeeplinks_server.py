@@ -182,7 +182,13 @@ def get_user_preferences():
     """Get user filtering preferences"""
     conn = get_db_connection()
     if not conn:
-        return {"enabled_services": [], "disabled_sports": [], "disabled_leagues": []}
+        return {
+            "enabled_services": [],
+            "disabled_sports": [],
+            "disabled_leagues": [],
+            "service_priorities": {},
+            "amazon_penalty": True
+        }
 
     try:
         cur = conn.cursor()
@@ -195,6 +201,8 @@ def get_user_preferences():
                 "enabled_services": [],
                 "disabled_sports": [],
                 "disabled_leagues": [],
+                "service_priorities": {},
+                "amazon_penalty": True
             }
 
         prefs = {}
@@ -207,14 +215,43 @@ def get_user_preferences():
                 prefs[key] = []
 
         conn.close()
-        return {
+        
+        # Parse and return all preferences including priorities
+        result = {
             "enabled_services": prefs.get("enabled_services", []),
             "disabled_sports": prefs.get("disabled_sports", []),
             "disabled_leagues": prefs.get("disabled_leagues", []),
         }
+        
+        # Add service_priorities (merge with defaults if needed)
+        if "service_priorities" in prefs:
+            try:
+                custom = json.loads(prefs["service_priorities"]) if isinstance(prefs["service_priorities"], str) else prefs["service_priorities"]
+                result["service_priorities"] = custom if custom else {}
+            except Exception:
+                result["service_priorities"] = {}
+        else:
+            result["service_priorities"] = {}
+        
+        # Add amazon_penalty
+        if "amazon_penalty" in prefs:
+            try:
+                result["amazon_penalty"] = bool(json.loads(prefs["amazon_penalty"]) if isinstance(prefs["amazon_penalty"], str) else prefs["amazon_penalty"])
+            except Exception:
+                result["amazon_penalty"] = True
+        else:
+            result["amazon_penalty"] = True
+        
+        return result
     except Exception as e:
         log(f"Error loading preferences: {e}", "ERROR")
-        return {"enabled_services": [], "disabled_sports": [], "disabled_leagues": []}
+        return {
+            "enabled_services": [],
+            "disabled_sports": [],
+            "disabled_leagues": [],
+            "service_priorities": {},
+            "amazon_penalty": True
+        }
 
 
 def save_user_preferences(prefs):
@@ -1562,6 +1599,171 @@ def api_filters():
     return jsonify({"filters": filters, "preferences": prefs})
 
 
+@app.route("/api/filters/priorities", methods=["GET", "POST"])
+def api_filter_priorities():
+    """Get or update service priority order and Amazon penalty setting"""
+    if request.method == "GET":
+        prefs = get_user_preferences()
+        return jsonify({
+            "service_priorities": prefs.get("service_priorities", {}),
+            "amazon_penalty": prefs.get("amazon_penalty", True)
+        })
+    
+    elif request.method == "POST":
+        data = request.json or {}
+        prefs = get_user_preferences()
+        
+        # Update priorities if provided
+        if "service_priorities" in data:
+            prefs["service_priorities"] = data["service_priorities"]
+        
+        # Update Amazon penalty if provided
+        if "amazon_penalty" in data:
+            prefs["amazon_penalty"] = bool(data["amazon_penalty"])
+        
+        if save_user_preferences(prefs):
+            log("Service priorities updated", "INFO")
+            return jsonify({"status": "success"})
+        else:
+            return jsonify({"status": "error", "message": "Failed to save priorities"}), 500
+
+
+@app.route("/api/filters/selection-examples")
+def api_selection_examples():
+    """Get sample events showing which services would be selected"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database not found"}), 500
+    
+    try:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        
+        # Get user preferences
+        if FILTERING_AVAILABLE:
+            prefs = load_user_preferences(conn)
+        else:
+            prefs = get_user_preferences()
+        
+        enabled_services = prefs.get("enabled_services", [])
+        priority_map = prefs.get("service_priorities", {})
+        amazon_penalty = prefs.get("amazon_penalty", True)
+        
+        # Find events with multiple DISTINCT services (more interesting for examples)
+        cur.execute("""
+            SELECT e.id, e.title, e.channel_name, e.start_utc,
+                   COUNT(DISTINCT p.logical_service) as service_count
+            FROM events e
+            JOIN playables p ON e.id = p.event_id
+            WHERE datetime(e.end_utc) > datetime('now')
+              AND p.logical_service IS NOT NULL
+            GROUP BY e.id
+            HAVING service_count > 1
+            ORDER BY service_count DESC, e.start_utc ASC
+            LIMIT 10
+        """)
+        
+        examples = []
+        for row in cur.fetchall():
+            event_id = row["id"]
+            
+            # Get all playables for this event
+            if FILTERING_AVAILABLE:
+                from filter_integration import get_filtered_playables, get_service_display_name
+                
+                # Query ALL playables directly from DB to show what's available
+                cur.execute("""
+                    SELECT DISTINCT provider, deeplink_play, deeplink_open, playable_url
+                    FROM playables
+                    WHERE event_id = ?
+                """, (event_id,))
+                
+                # Determine logical service for each unique playable
+                seen_services = {}
+                for prow in cur.fetchall():
+                    # Import here to avoid circular imports
+                    try:
+                        from logical_service_mapper import get_logical_service_for_playable
+                        logical_service = get_logical_service_for_playable(
+                            provider=prow[0],
+                            deeplink_play=prow[1],
+                            deeplink_open=prow[2],
+                            playable_url=prow[3],
+                            event_id=event_id,
+                            conn=conn
+                        )
+                    except ImportError:
+                        logical_service = prow[0]  # Fallback to provider
+                    
+                    if logical_service not in seen_services:
+                        seen_services[logical_service] = {
+                            "code": logical_service,
+                            "name": get_service_display_name(logical_service),
+                            "priority": priority_map.get(logical_service, 50)
+                        }
+                
+                available_services = list(seen_services.values())
+                # Sort by priority for better display
+                available_services.sort(key=lambda s: -s["priority"])
+                
+                # Get filtered playables (with user preferences) to determine winner
+                filtered_playables = get_filtered_playables(
+                    conn, event_id, enabled_services, priority_map, amazon_penalty
+                )
+                
+                winner = filtered_playables[0] if filtered_playables else None
+                winner_info = None
+                reason = "No enabled services match"
+                
+                if winner:
+                    winner_code = winner["logical_service"]
+                    winner_priority = priority_map.get(winner_code, 50)
+                    winner_info = {
+                        "code": winner_code,
+                        "name": get_service_display_name(winner_code),
+                        "priority": winner_priority
+                    }
+                    
+                    # Build reason
+                    if len(filtered_playables) == 1:
+                        reason = f"Only enabled service available"
+                    else:
+                        reason = f"Highest priority ({winner_priority}) among enabled services"
+                        
+                        # Check if Amazon penalty applied
+                        has_amazon = any(s["code"] == "aiv" for s in available_services)
+                        has_non_amazon = any(s["code"] != "aiv" for s in available_services)
+                        if amazon_penalty and has_amazon and has_non_amazon and winner_code != "aiv":
+                            reason += " (Amazon deprioritized)"
+            else:
+                # Fallback without filter_integration
+                available_services = []
+                winner_info = None
+                reason = "Filter integration not available"
+            
+            examples.append({
+                "title": row["title"],
+                "channel": row["channel_name"],
+                "start_utc": row["start_utc"],
+                "available_services": available_services,
+                "selected_service": winner_info,
+                "reason": reason
+            })
+        
+        conn.close()
+        return jsonify({
+            "examples": examples,
+            "preferences": {
+                "enabled_services": enabled_services,
+                "amazon_penalty": amazon_penalty
+            }
+        })
+        
+    except Exception as e:
+        log(f"Error in selection-examples: {e}", "ERROR")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/filters/preferences", methods=["GET", "POST"])
 def api_filters_preferences():
     """Get or update user filter preferences"""
@@ -2289,11 +2491,11 @@ def load_template(template_name):
     <html>
     <head><title>Template Error</title><style>body{{font-family:sans-serif;padding:40px;background:#1a1a1a;color:#eee;}}</style></head>
     <body>
-        <h1>❌ Template Error</h1>
+        <h1>âŒ Template Error</h1>
         <p>Could not load template: <code>{template_name}</code></p>
         <p>Searched in:</p>
         <ul>{''.join(f'<li><code>{p}</code></li>' for p in template_paths)}</ul>
-        <p><a href="/">← Back to Dashboard</a></p>
+        <p><a href="/">â† Back to Dashboard</a></p>
     </body>
     </html>
     """

@@ -240,6 +240,29 @@ def build_lanes_for_provider(
         )
         return 0
 
+    # Filter out events with null timestamps
+    valid_events = [
+        (event_id, start_utc, stop_utc)
+        for (event_id, start_utc, stop_utc) in events
+        if start_utc is not None and stop_utc is not None
+    ]
+    
+    if len(valid_events) < len(events):
+        null_count = len(events) - len(valid_events)
+        log.warning(
+            "Provider %s: filtered out %d events with null timestamps (keeping %d valid events)",
+            provider_code,
+            null_count,
+            len(valid_events),
+        )
+    
+    if not valid_events:
+        log.warning(
+            "Provider %s has no events with valid timestamps; skipping lane assignment.",
+            provider_code,
+        )
+        return 0
+
     # Local ISO8601 parser that can handle the typical Apple-style timestamps.
     def _parse_iso(ts: str) -> datetime:
         """Parse ISO8601 into a *naive* datetime (UTC-like).
@@ -248,6 +271,15 @@ def build_lanes_for_provider(
         offset-naive datetimes. The source timestamps are UTC-ish
         (e.g. 2025-12-06T00:00:00+00:00), so dropping tzinfo is fine.
         """
+        # Handle None/null timestamps
+        if ts is None or not isinstance(ts, str):
+            log.warning(
+                "Provider %s: encountered null/invalid timestamp (type=%s), treating as datetime.min",
+                provider_code,
+                type(ts).__name__,
+            )
+            return datetime.min
+        
         try:
             dt = datetime.fromisoformat(ts)
         except Exception:
@@ -267,7 +299,7 @@ def build_lanes_for_provider(
     # Attach parsed datetimes and sort.
     events_with_dt = [
         (event_id, start_utc, stop_utc, _parse_iso(start_utc), _parse_iso(stop_utc))
-        for (event_id, start_utc, stop_utc) in events
+        for (event_id, start_utc, stop_utc) in valid_events
     ]
     events_with_dt.sort(key=lambda row: (row[3], row[4]))  # (start_dt, stop_dt)
 
