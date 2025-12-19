@@ -755,6 +755,73 @@ def get_event_link_info(conn, event_id, uid_col, primary_deeplink_col, full_deep
     }
 
 
+
+def get_playable_id_for_event(conn, event_id: str, provider_code: str = None) -> str:
+    """Best-effort lookup of playables.playable_id for an event (+ optional provider).
+
+    This is mainly used to convert scheme deeplinks (e.g. sportscenter://...playChannel=espn1)
+    into a working ESPN Watch HTTP URL which requires the playable_id (airing/playback id).
+    """
+    if not event_id:
+        return None
+
+    try:
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(playables)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        if "playable_id" not in cols:
+            return None
+
+        # Prefer a provider match when possible (logical_service is preferred when present)
+        if provider_code:
+            if "logical_service" in cols:
+                cur.execute(
+                    """
+                    SELECT playable_id
+                    FROM playables
+                    WHERE event_id = ?
+                      AND playable_id IS NOT NULL
+                      AND playable_id != ''
+                      AND (logical_service = ? OR provider = ?)
+                    ORDER BY priority ASC
+                    LIMIT 1
+                    """,
+                    (event_id, provider_code, provider_code),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT playable_id
+                    FROM playables
+                    WHERE event_id = ?
+                      AND playable_id IS NOT NULL
+                      AND playable_id != ''
+                      AND provider = ?
+                    ORDER BY priority ASC
+                    LIMIT 1
+                    """,
+                    (event_id, provider_code),
+                )
+        else:
+            cur.execute(
+                """
+                SELECT playable_id
+                FROM playables
+                WHERE event_id = ?
+                  AND playable_id IS NOT NULL
+                  AND playable_id != ''
+                ORDER BY priority ASC
+                LIMIT 1
+                """,
+                (event_id,),
+            )
+
+        row = cur.fetchone()
+        return row[0] if row and row[0] else None
+    except Exception:
+        return None
+
 def get_current_events_by_lane(conn, at_ts=None):
     """Return dict of lane_id -> minimal current event row at the given time.
 
@@ -2145,7 +2212,15 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         if deeplink_format == "http" and deeplink_url:
             try:
                 from deeplink_converter import generate_http_deeplink
-                http_version = generate_http_deeplink(deeplink_url, provider_code)
+                playable_uuid = get_playable_id_for_event(conn, db_event_id, provider_code)
+                try:
+                    http_version = generate_http_deeplink(
+                        deeplink_url,
+                        provider=provider_code,
+                        playable_id=playable_uuid,
+                    )
+                except TypeError:
+                    http_version = generate_http_deeplink(deeplink_url, provider_code)
                 if http_version:
                     deeplink_url = http_version
             except ImportError:
@@ -2335,6 +2410,7 @@ def whatson_lane(lane_id):
                 le.start_utc,
                 le.end_utc,
                 le.is_placeholder,
+                le.chosen_provider,
                 e.title,
                 e.channel_name,
                 e.synopsis
@@ -2360,6 +2436,14 @@ def whatson_lane(lane_id):
         channel_name = None
         synopsis = None
 
+        event_id = None
+        chosen_provider = None
+        try:
+            if row is not None and "chosen_provider" in row.keys():
+                chosen_provider = row["chosen_provider"]
+        except Exception:
+            chosen_provider = None
+
         # Check if current event is a placeholder - if so, try fallback
         if row and row["is_placeholder"]:
             log(f"Lane {lane_id}: Current slot is placeholder, checking for fallback event within padding window", "INFO")
@@ -2371,6 +2455,7 @@ def whatson_lane(lane_id):
                 channel_name = fallback['channel_name']
                 synopsis = fallback['synopsis']
                 is_fallback = True
+                chosen_provider = fallback.get('chosen_provider') or chosen_provider
                 
                 log(f"Lane {lane_id}: Using FALLBACK event '{title}' (ended at {fallback['end_utc']})", "INFO")
                 
@@ -2400,16 +2485,41 @@ def whatson_lane(lane_id):
                 
                 # Try to convert primary deeplink
                 if deeplink_url:
-                    http_version = generate_http_deeplink(deeplink_url)
+                    playable_uuid = get_playable_id_for_event(conn, event_id, chosen_provider)
+                    try:
+                        http_version = generate_http_deeplink(
+                            deeplink_url,
+                            provider=chosen_provider,
+                            playable_id=playable_uuid,
+                        )
+                    except TypeError:
+                        # Backwards compatible with older converter signatures
+                        http_version = (
+                            generate_http_deeplink(deeplink_url, chosen_provider)
+                            if chosen_provider
+                            else generate_http_deeplink(deeplink_url)
+                        )
                     if http_version:
                         deeplink_url = http_version
-                
+
                 # Try to convert full deeplink
                 if deeplink_url_full:
-                    http_version = generate_http_deeplink(deeplink_url_full)
+                    playable_uuid = get_playable_id_for_event(conn, event_id, chosen_provider)
+                    try:
+                        http_version = generate_http_deeplink(
+                            deeplink_url_full,
+                            provider=chosen_provider,
+                            playable_id=playable_uuid,
+                        )
+                    except TypeError:
+                        http_version = (
+                            generate_http_deeplink(deeplink_url_full, chosen_provider)
+                            if chosen_provider
+                            else generate_http_deeplink(deeplink_url_full)
+                        )
                     if http_version:
                         deeplink_url_full = http_version
-                        
+
             except ImportError:
                 log("deeplink_converter not available, using original scheme URLs", "WARN")
 
