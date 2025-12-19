@@ -314,9 +314,43 @@ def load_apple_events(json_path: str) -> List[Dict[str, Any]]:
     if isinstance(data, dict) and "events" in data: return data["events"]
     raise ValueError(f"Unexpected JSON format in {json_path}")
 
-def ensure_events_schema(conn: sqlite3.Connection):
-    # Expect tables from ingester; ensure they exist + basic indexes for speed.
+def load_apple_events_from_db(db_path: str) -> List[Dict[str, Any]]:
+    """Load events from apple_events.db (with GZIP decompression)"""
+    import gzip
+    
+    conn = sqlite3.connect(db_path)
     cur = conn.cursor()
+    
+    cur.execute("SELECT event_id, source, raw_json_gzip FROM apple_events")
+    
+    events = []
+    for event_id, source, compressed in cur.fetchall():
+        try:
+            # Decompress GZIP
+            json_str = gzip.decompress(compressed).decode('utf-8')
+            raw_data = json.loads(json_str)
+            
+            events.append({
+                "id": event_id,
+                "status": 200,
+                "raw_data": raw_data,
+                "source": source
+            })
+        except Exception as e:
+            print(f"Warning: Failed to decompress event {event_id}: {e}")
+    
+    conn.close()
+    return events
+
+def ensure_events_schema(conn: sqlite3.Connection):
+    """Ensure FruitDeepLinks schema exists (events + images + playables).
+
+    This importer historically relied on an external ingester to create tables.
+    We now make the importer self-sufficient and idempotent.
+    """
+    cur = conn.cursor()
+
+    # Core events table (existing schema)
     cur.execute("""CREATE TABLE IF NOT EXISTS events (
         id TEXT PRIMARY KEY, pvid TEXT, slug TEXT, title TEXT, title_brief TEXT,
         synopsis TEXT, synopsis_brief TEXT, channel_name TEXT, channel_provider_id TEXT,
@@ -325,18 +359,50 @@ def ensure_events_schema(conn: sqlite3.Connection):
         start_utc TEXT, end_utc TEXT, created_ms INTEGER, created_utc TEXT,
         hero_image_url TEXT,
         last_seen_utc TEXT, raw_attributes_json TEXT)""")
+
     cur.execute("""CREATE TABLE IF NOT EXISTS event_images (
-        event_id TEXT, img_type TEXT, url TEXT, PRIMARY KEY (event_id, img_type, url))""")
+        event_id TEXT, img_type TEXT, url TEXT,
+        PRIMARY KEY (event_id, img_type, url))""")
+
+    # Playables table (multi-provider punchouts)
+    cur.execute("""CREATE TABLE IF NOT EXISTS playables (
+        event_id TEXT NOT NULL,
+        playable_id TEXT NOT NULL,
+        provider TEXT,
+        service_name TEXT,
+        logical_service TEXT,
+        deeplink_play TEXT,
+        deeplink_open TEXT,
+        playable_url TEXT,
+        title TEXT,
+        content_id TEXT,
+        priority INTEGER DEFAULT 0,
+        created_utc TEXT,
+        PRIMARY KEY (event_id, playable_id)
+    )""")
+
+    # --- Backward-compatible schema upgrades (ALTER TABLE if needed) --------
+    def _ensure_cols(table: str, cols: dict):
+        cur.execute(f"PRAGMA table_info({table})")
+        existing = {row[1] for row in cur.fetchall()}
+        for name, decl in cols.items():
+            if name not in existing:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+    _ensure_cols("playables", {
+        "service_name": "TEXT",
+        "logical_service": "TEXT",
+        "priority": "INTEGER DEFAULT 0",
+        "created_utc": "TEXT"
+    })
+
+    # Indexes (create after ALTERs so they don't fail on older tables)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_events_pvid ON events(pvid)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_events_time ON events(start_utc, end_utc)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_event_images_event ON event_images(event_id)")
-
-    # Ensure hero_image_url column exists on existing databases
-    cur.execute("PRAGMA table_info(events)")
-    cols = [row[1] for row in cur.fetchall()]
-    if "hero_image_url" not in cols:
-        cur.execute("ALTER TABLE events ADD COLUMN hero_image_url TEXT")
-        conn.commit()
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_playables_event ON playables(event_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_playables_event_priority ON playables(event_id, priority DESC)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_playables_logical_service ON playables(logical_service)")
 
     conn.commit()
 
@@ -387,95 +453,115 @@ def upsert_images(conn: sqlite3.Connection, images: List[Tuple[str, str, str]], 
         images,
     )
 
-def extract_playables(apple_event: Dict, event_id: str) -> List[Tuple]:
-    """Extract playables from Apple event for multi-punchout support
-    
-    Handles normalized structure (flat dict with playables key)
-    Supports both dict and list formats for playables
+def extract_playables(
+    apple_event: Dict[str, Any],
+    event_id: str,
+    conn: Optional[sqlite3.Connection] = None
+) -> List[Tuple]:
+    """Extract playables from Apple event for multi-punchout support.
+
+    Returns tuples matching the playables table schema:
+      (event_id, playable_id, provider, service_name, logical_service,
+       deeplink_play, deeplink_open, playable_url, title, content_id, priority, created_utc)
+
+    Notes:
+    - Supports normalized structure (flat dict with playables key)
+    - Supports both dict and list formats for playables
+    - If logical_service_mapper is available, computes logical_service + priority
+      (including Apple TV league detection when conn is provided).
     """
-    # Get playables from normalized event structure
     playables_data = apple_event.get("playables", {})
-    
     if not playables_data:
         return []
-    
-    from datetime import datetime, timezone
-    now_utc = datetime.now(timezone.utc).isoformat()
-    
-    # Try to import logical service mapper for priority calculation
-    try:
-        from logical_service_mapper import (
-            get_logical_service_for_playable,
-            get_logical_service_priority
-        )
-        LOGICAL_SERVICES_AVAILABLE = True
-    except ImportError:
-        LOGICAL_SERVICES_AVAILABLE = False
-    
-    # Handle dict format (most common after normalization)
+
+    # Normalize playables_data to a list of dicts
     if isinstance(playables_data, dict):
         playables_list = list(playables_data.values())
     else:
-        # Handle list format (fallback)
         playables_list = playables_data
-    
-    result = []
+
+    from datetime import datetime, timezone
+    now_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    # Optional logical service mapper
+    LOGICAL_SERVICES_AVAILABLE = False
+    get_logical_service_for_playable = None
+    get_logical_service_priority = None
+    try:
+        from logical_service_mapper import get_logical_service_for_playable, get_logical_service_priority  # type: ignore
+        LOGICAL_SERVICES_AVAILABLE = True
+    except Exception:
+        LOGICAL_SERVICES_AVAILABLE = False
+
+    result: List[Tuple] = []
     for playable in playables_list:
         if not isinstance(playable, dict):
             continue
-            
-        playable_id = playable.get("id", "")
+
+        playable_id = playable.get("id") or playable.get("playableId") or ""
         if not playable_id:
             continue
-        
-        # Extract deeplinks - use INDIVIDUAL playable's punchoutUrls
-        punchout = playable.get("punchoutUrls", {})
+
+        # Extract deeplinks - use INDIVIDUAL playable's punchoutUrls (most important)
+        punchout = playable.get("punchoutUrls") or {}
         deeplink_play = punchout.get("play") or playable.get("deeplink_play")
         deeplink_open = punchout.get("open") or playable.get("deeplink_open")
-        playable_url = playable.get("playable_url") or playable.get("url")
-        
-        # Determine provider from URL scheme
+        playable_url = playable.get("playable_url") or playable.get("url") or playable.get("playableUrl")
+
+        # Determine provider (scheme) from best available URL
         provider = None
         url = deeplink_play or deeplink_open or playable_url or ""
         if url and "://" in url:
-            provider = url.split("://")[0]
-        
+            provider = url.split("://", 1)[0]
+        elif url.startswith("http://") or url.startswith("https://"):
+            provider = "https"
+
         title = playable.get("displayName") or playable.get("title") or playable.get("name")
         content_id = playable.get("content_id") or playable.get("contentId")
-        
-        # Calculate priority using logical service mapper if available
-        priority = 0  # Default fallback
-        if LOGICAL_SERVICES_AVAILABLE:
+
+        # Apple-friendly label (what you saw in your stats output)
+        service_name = (
+            playable.get("serviceName")
+            or playable.get("serviceDisplayName")
+            or playable.get("providerName")
+        )
+
+        # Calculate logical service + priority if available
+        logical_service = None
+        priority = 0
+        if LOGICAL_SERVICES_AVAILABLE and get_logical_service_for_playable and get_logical_service_priority:
             try:
-                # Note: We can't pass conn here since we don't have it in this function
-                # For Apple TV league detection, that will happen during backfill or
-                # can be enhanced later. For now, we get the provider-based priority.
                 logical_service = get_logical_service_for_playable(
-                    provider=provider,
+                    provider=provider or "",
                     deeplink_play=deeplink_play,
                     deeplink_open=deeplink_open,
                     playable_url=playable_url,
                     event_id=event_id,
-                    conn=None  # Will use basic URL-based detection
+                    conn=conn
                 )
-                priority = get_logical_service_priority(logical_service)
-            except Exception as e:
-                # Fallback to 0 if priority calculation fails
+                priority = int(get_logical_service_priority(logical_service))
+            except Exception:
+                logical_service = None
                 priority = 0
-        
+
         result.append((
             event_id,
-            playable_id,
+            str(playable_id),
             provider,
+            service_name,
+            logical_service,
             deeplink_play,
             deeplink_open,
             playable_url,
             title,
             content_id,
-            priority,  # Now using calculated priority
+            priority,
             now_utc
         ))
-    
+
+    # Stable ordering (highest priority first) helps debugging and deterministic imports
+    result.sort(key=lambda r: (-(r[10] or 0), str(r[2] or ""), str(r[1] or "")))
+
     return result
 
 def upsert_playables(conn: sqlite3.Connection, playables: List[Tuple], dry: bool = False):
@@ -488,13 +574,8 @@ def upsert_playables(conn: sqlite3.Connection, playables: List[Tuple], dry: bool
         return
     
     cur = conn.cursor()
-    
-    # Check if playables table exists
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='playables'")
-    if not cur.fetchone():
-        # Silently skip if table doesn't exist yet
-        return
-    
+    # Ensure playables table exists (idempotent)
+    ensure_events_schema(conn)
     # Delete existing playables for this event (refresh)
     if playables:
         event_id = playables[0][0]
@@ -503,27 +584,35 @@ def upsert_playables(conn: sqlite3.Connection, playables: List[Tuple], dry: bool
     # Insert new playables
     cur.executemany("""
         INSERT INTO playables (
-            event_id, playable_id, provider, deeplink_play, deeplink_open,
-            playable_url, title, content_id, priority, created_utc
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            event_id, playable_id, provider, service_name, logical_service,
+            deeplink_play, deeplink_open, playable_url, title, content_id, priority, created_utc
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, playables)
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--apple-json", required=True, help="parsed_events.json from multi_scraper.py")
+    ap.add_argument("--apple-json", help="Legacy: JSON file from multi_scraper.py")
+    ap.add_argument("--apple-db", help="apple_events.db from apple_scraper_db.py (recommended)")
     ap.add_argument("--fruit-db", help="SQLite DB path for FruitDeepLinks events (recommended)")
     ap.add_argument("--peacock-db", help="DEPRECATED: legacy SQLite DB path; use --fruit-db instead")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
+    # Determine source: DB or JSON
+    if args.apple_db:
+        events = load_apple_events_from_db(args.apple_db)
+        print(f"Loaded {len(events)} Apple TV events from database")
+    elif args.apple_json:
+        events = load_apple_events(args.apple_json)
+        print(f"Loaded {len(events)} Apple TV events from JSON")
+    else:
+        ap.error("You must provide either --apple-db (recommended) or --apple-json (legacy)")
+    
     db_path_str = args.fruit_db or args.peacock_db
     if not db_path_str:
         ap.error("You must provide --fruit-db (preferred) or --peacock-db")
     db_path = Path(db_path_str)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    events = load_apple_events(args.apple_json)
-    print(f"Loaded {len(events)} Apple TV events")
 
     conn = sqlite3.connect(str(db_path))
     ensure_events_schema(conn)
@@ -544,7 +633,7 @@ def main():
         upsert_images(conn, imgs, dry=args.dry_run)
         
         # Extract playables from normalized event
-        playables = extract_playables(normalized, mapped["id"])
+        playables = extract_playables(normalized, mapped["id"], conn=conn)
         if playables:
             playables_extracted += len(playables)
         upsert_playables(conn, playables, dry=args.dry_run)

@@ -58,31 +58,54 @@ def main():
     # Check for --skip-scrape flag
     skip_scrape = "--skip-scrape" in sys.argv
 
-    # Step 1: Scrape Apple TV Sports
+    # Step 1: Scrape Apple TV Sports (into apple_events.db)
     if skip_scrape:
         print("\n" + "=" * 60)
         print(f"[1/{total_steps}] Scraping Apple TV Sports. SKIPPED")
         print("=" * 60)
-        multi_scraped = OUT_DIR / "multi_scraped.json"
-        if not multi_scraped.exists():
-            print(f"ERROR: --skip-scrape set but {multi_scraped} not found")
+        apple_db = DATA_DIR / "apple_events.db"
+        if not apple_db.exists():
+            print(f"ERROR: --skip-scrape set but {apple_db} not found")
             return 1
     else:
-        if not run_step(1, total_steps, "Scraping Apple TV Sports", [
-            "python3", "multi_scraper.py",
+        # Step 1a: Scrape all search terms
+        if not run_step(1, total_steps, "Scraping Apple TV Sports (all terms)", [
+            "python3", "apple_scraper_db.py",
             "--headless",
-            "--out", str(OUT_DIR / "multi_scraped.json"),
+            "--db", str(DATA_DIR / "apple_events.db"),
+        ]):
+            return 1
+        
+        # Step 1b: Upgrade all shelf events to full
+        print("\n" + "=" * 60)
+        print(f"[1b/{total_steps}] Upgrading shelf events to full")
+        print("=" * 60)
+        if not run_step("1b", total_steps, "Upgrading all shelf events", [
+            "python3", "apple_scraper_db.py",
+            "--headless",
+            "--skip-seeds",
+            "--upgrade-shelf-limit", "9999",
+            "--db", str(DATA_DIR / "apple_events.db"),
         ]):
             return 1
 
     # Step 2: Scrape Kayo Sports
     kayo_days = os.getenv("KAYO_DAYS", "7")
-    if not run_step(2, total_steps, f"Scraping Kayo Sports ({kayo_days} days)", [
-        "python3", "kayo_scrape.py",
-        "--out", str(OUT_DIR / "kayo_raw.json"),
-        "--days", kayo_days,
-    ]):
-        return 1
+    kayo_json = OUT_DIR / "kayo_raw.json"
+
+    if skip_scrape:
+        print("\n" + "=" * 60)
+        print(f"[2/{total_steps}] Scraping Kayo Sports ({kayo_days} days). SKIPPED")
+        print("=" * 60)
+        if not kayo_json.exists():
+            print(f"WARNING: --skip-scrape set but {kayo_json} not found; Kayo ingest will be skipped.")
+    else:
+        if not run_step(2, total_steps, f"Scraping Kayo Sports ({kayo_days} days)", [
+            "python3", "kayo_scrape.py",
+            "--out", str(kayo_json),
+            "--days", kayo_days,
+        ]):
+            return 1
 
     # Fresh-install safety: ensure DB file exists before migrations
     if not DB_PATH.exists():
@@ -117,10 +140,10 @@ def main():
     ]):
         return 1
 
-    # Step 6: Import Apple TV events (reads multi_scraped.json directly)
-    if not run_step(6, total_steps, "Importing Apple TV events to database", [
+    # Step 6: Import Apple TV events (DB-to-DB from apple_events.db)
+    if not run_step(6, total_steps, "Importing Apple TV events to master database", [
         "python3", "fruit_import_appletv.py",
-        "--apple-json", str(OUT_DIR / "multi_scraped.json"),
+        "--apple-db", str(DATA_DIR / "apple_events.db"),
         "--fruit-db", str(DB_PATH),
     ]):
         return 1

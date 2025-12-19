@@ -182,7 +182,13 @@ def get_user_preferences():
     """Get user filtering preferences"""
     conn = get_db_connection()
     if not conn:
-        return {"enabled_services": [], "disabled_sports": [], "disabled_leagues": []}
+        return {
+            "enabled_services": [],
+            "disabled_sports": [],
+            "disabled_leagues": [],
+            "service_priorities": {},
+            "amazon_penalty": True
+        }
 
     try:
         cur = conn.cursor()
@@ -195,6 +201,8 @@ def get_user_preferences():
                 "enabled_services": [],
                 "disabled_sports": [],
                 "disabled_leagues": [],
+                "service_priorities": {},
+                "amazon_penalty": True
             }
 
         prefs = {}
@@ -207,14 +215,43 @@ def get_user_preferences():
                 prefs[key] = []
 
         conn.close()
-        return {
+        
+        # Parse and return all preferences including priorities
+        result = {
             "enabled_services": prefs.get("enabled_services", []),
             "disabled_sports": prefs.get("disabled_sports", []),
             "disabled_leagues": prefs.get("disabled_leagues", []),
         }
+        
+        # Add service_priorities (merge with defaults if needed)
+        if "service_priorities" in prefs:
+            try:
+                custom = json.loads(prefs["service_priorities"]) if isinstance(prefs["service_priorities"], str) else prefs["service_priorities"]
+                result["service_priorities"] = custom if custom else {}
+            except Exception:
+                result["service_priorities"] = {}
+        else:
+            result["service_priorities"] = {}
+        
+        # Add amazon_penalty
+        if "amazon_penalty" in prefs:
+            try:
+                result["amazon_penalty"] = bool(json.loads(prefs["amazon_penalty"]) if isinstance(prefs["amazon_penalty"], str) else prefs["amazon_penalty"])
+            except Exception:
+                result["amazon_penalty"] = True
+        else:
+            result["amazon_penalty"] = True
+        
+        return result
     except Exception as e:
         log(f"Error loading preferences: {e}", "ERROR")
-        return {"enabled_services": [], "disabled_sports": [], "disabled_leagues": []}
+        return {
+            "enabled_services": [],
+            "disabled_sports": [],
+            "disabled_leagues": [],
+            "service_priorities": {},
+            "amazon_penalty": True
+        }
 
 
 def save_user_preferences(prefs):
@@ -717,6 +754,73 @@ def get_event_link_info(conn, event_id, uid_col, primary_deeplink_col, full_deep
         "deeplink_url_full": deeplink_full,
     }
 
+
+
+def get_playable_id_for_event(conn, event_id: str, provider_code: str = None) -> str:
+    """Best-effort lookup of playables.playable_id for an event (+ optional provider).
+
+    This is mainly used to convert scheme deeplinks (e.g. sportscenter://...playChannel=espn1)
+    into a working ESPN Watch HTTP URL which requires the playable_id (airing/playback id).
+    """
+    if not event_id:
+        return None
+
+    try:
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(playables)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        if "playable_id" not in cols:
+            return None
+
+        # Prefer a provider match when possible (logical_service is preferred when present)
+        if provider_code:
+            if "logical_service" in cols:
+                cur.execute(
+                    """
+                    SELECT playable_id
+                    FROM playables
+                    WHERE event_id = ?
+                      AND playable_id IS NOT NULL
+                      AND playable_id != ''
+                      AND (logical_service = ? OR provider = ?)
+                    ORDER BY priority ASC
+                    LIMIT 1
+                    """,
+                    (event_id, provider_code, provider_code),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT playable_id
+                    FROM playables
+                    WHERE event_id = ?
+                      AND playable_id IS NOT NULL
+                      AND playable_id != ''
+                      AND provider = ?
+                    ORDER BY priority ASC
+                    LIMIT 1
+                    """,
+                    (event_id, provider_code),
+                )
+        else:
+            cur.execute(
+                """
+                SELECT playable_id
+                FROM playables
+                WHERE event_id = ?
+                  AND playable_id IS NOT NULL
+                  AND playable_id != ''
+                ORDER BY priority ASC
+                LIMIT 1
+                """,
+                (event_id,),
+            )
+
+        row = cur.fetchone()
+        return row[0] if row and row[0] else None
+    except Exception:
+        return None
 
 def get_current_events_by_lane(conn, at_ts=None):
     """Return dict of lane_id -> minimal current event row at the given time.
@@ -1562,6 +1666,171 @@ def api_filters():
     return jsonify({"filters": filters, "preferences": prefs})
 
 
+@app.route("/api/filters/priorities", methods=["GET", "POST"])
+def api_filter_priorities():
+    """Get or update service priority order and Amazon penalty setting"""
+    if request.method == "GET":
+        prefs = get_user_preferences()
+        return jsonify({
+            "service_priorities": prefs.get("service_priorities", {}),
+            "amazon_penalty": prefs.get("amazon_penalty", True)
+        })
+    
+    elif request.method == "POST":
+        data = request.json or {}
+        prefs = get_user_preferences()
+        
+        # Update priorities if provided
+        if "service_priorities" in data:
+            prefs["service_priorities"] = data["service_priorities"]
+        
+        # Update Amazon penalty if provided
+        if "amazon_penalty" in data:
+            prefs["amazon_penalty"] = bool(data["amazon_penalty"])
+        
+        if save_user_preferences(prefs):
+            log("Service priorities updated", "INFO")
+            return jsonify({"status": "success"})
+        else:
+            return jsonify({"status": "error", "message": "Failed to save priorities"}), 500
+
+
+@app.route("/api/filters/selection-examples")
+def api_selection_examples():
+    """Get sample events showing which services would be selected"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database not found"}), 500
+    
+    try:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        
+        # Get user preferences
+        if FILTERING_AVAILABLE:
+            prefs = load_user_preferences(conn)
+        else:
+            prefs = get_user_preferences()
+        
+        enabled_services = prefs.get("enabled_services", [])
+        priority_map = prefs.get("service_priorities", {})
+        amazon_penalty = prefs.get("amazon_penalty", True)
+        
+        # Find events with multiple DISTINCT services (more interesting for examples)
+        cur.execute("""
+            SELECT e.id, e.title, e.channel_name, e.start_utc,
+                   COUNT(DISTINCT p.logical_service) as service_count
+            FROM events e
+            JOIN playables p ON e.id = p.event_id
+            WHERE datetime(e.end_utc) > datetime('now')
+              AND p.logical_service IS NOT NULL
+            GROUP BY e.id
+            HAVING service_count > 1
+            ORDER BY service_count DESC, e.start_utc ASC
+            LIMIT 10
+        """)
+        
+        examples = []
+        for row in cur.fetchall():
+            event_id = row["id"]
+            
+            # Get all playables for this event
+            if FILTERING_AVAILABLE:
+                from filter_integration import get_filtered_playables, get_service_display_name
+                
+                # Query ALL playables directly from DB to show what's available
+                cur.execute("""
+                    SELECT DISTINCT provider, deeplink_play, deeplink_open, playable_url
+                    FROM playables
+                    WHERE event_id = ?
+                """, (event_id,))
+                
+                # Determine logical service for each unique playable
+                seen_services = {}
+                for prow in cur.fetchall():
+                    # Import here to avoid circular imports
+                    try:
+                        from logical_service_mapper import get_logical_service_for_playable
+                        logical_service = get_logical_service_for_playable(
+                            provider=prow[0],
+                            deeplink_play=prow[1],
+                            deeplink_open=prow[2],
+                            playable_url=prow[3],
+                            event_id=event_id,
+                            conn=conn
+                        )
+                    except ImportError:
+                        logical_service = prow[0]  # Fallback to provider
+                    
+                    if logical_service not in seen_services:
+                        seen_services[logical_service] = {
+                            "code": logical_service,
+                            "name": get_service_display_name(logical_service),
+                            "priority": priority_map.get(logical_service, 50)
+                        }
+                
+                available_services = list(seen_services.values())
+                # Sort by priority for better display
+                available_services.sort(key=lambda s: -s["priority"])
+                
+                # Get filtered playables (with user preferences) to determine winner
+                filtered_playables = get_filtered_playables(
+                    conn, event_id, enabled_services, priority_map, amazon_penalty
+                )
+                
+                winner = filtered_playables[0] if filtered_playables else None
+                winner_info = None
+                reason = "No enabled services match"
+                
+                if winner:
+                    winner_code = winner["logical_service"]
+                    winner_priority = priority_map.get(winner_code, 50)
+                    winner_info = {
+                        "code": winner_code,
+                        "name": get_service_display_name(winner_code),
+                        "priority": winner_priority
+                    }
+                    
+                    # Build reason
+                    if len(filtered_playables) == 1:
+                        reason = f"Only enabled service available"
+                    else:
+                        reason = f"Highest priority ({winner_priority}) among enabled services"
+                        
+                        # Check if Amazon penalty applied
+                        has_amazon = any(s["code"] == "aiv" for s in available_services)
+                        has_non_amazon = any(s["code"] != "aiv" for s in available_services)
+                        if amazon_penalty and has_amazon and has_non_amazon and winner_code != "aiv":
+                            reason += " (Amazon deprioritized)"
+            else:
+                # Fallback without filter_integration
+                available_services = []
+                winner_info = None
+                reason = "Filter integration not available"
+            
+            examples.append({
+                "title": row["title"],
+                "channel": row["channel_name"],
+                "start_utc": row["start_utc"],
+                "available_services": available_services,
+                "selected_service": winner_info,
+                "reason": reason
+            })
+        
+        conn.close()
+        return jsonify({
+            "examples": examples,
+            "preferences": {
+                "enabled_services": enabled_services,
+                "amazon_penalty": amazon_penalty
+            }
+        })
+        
+    except Exception as e:
+        log(f"Error in selection-examples: {e}", "ERROR")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/filters/preferences", methods=["GET", "POST"])
 def api_filters_preferences():
     """Get or update user filter preferences"""
@@ -1583,6 +1852,129 @@ def api_filters_preferences():
 
 
 # ==================== Provider Lanes API ====================
+def get_provider_lane_stats(conn: sqlite3.Connection) -> list[dict]:
+    """
+    Get comprehensive stats for each logical service for ADB lane configuration.
+    
+    Returns list of dicts with:
+    {
+        "provider_code": "watchtnt",
+        "name": "TNT",
+        "event_count": 45,        # Unique events with this service
+        "playable_count": 52,     # Total playables (may have duplicates)
+        "future_event_count": 30, # Events that haven't ended yet
+        "adb_enabled": 0,         # From provider_lanes table
+        "adb_lane_count": 0       # From provider_lanes table
+    }
+    """
+    cur = conn.cursor()
+    
+    # Get stats from playables grouped by logical_service
+    # Check if logical_service column exists first
+    cur.execute("PRAGMA table_info(playables)")
+    columns = [row[1] for row in cur.fetchall()]
+    
+    if 'logical_service' in columns:
+        # Use stored logical_service column
+        cur.execute("""
+            SELECT 
+                p.logical_service as service_code,
+                COUNT(DISTINCT p.event_id) as event_count,
+                COUNT(*) as playable_count,
+                COUNT(DISTINCT CASE 
+                    WHEN datetime(e.end_utc) > datetime('now') 
+                    THEN p.event_id 
+                END) as future_event_count
+            FROM playables p
+            LEFT JOIN events e ON p.event_id = e.id
+            WHERE p.logical_service IS NOT NULL
+              AND p.logical_service != ''
+            GROUP BY p.logical_service
+            ORDER BY event_count DESC
+        """)
+    else:
+        # Fallback: use provider column
+        cur.execute("""
+            SELECT 
+                p.provider as service_code,
+                COUNT(DISTINCT p.event_id) as event_count,
+                COUNT(*) as playable_count,
+                COUNT(DISTINCT CASE 
+                    WHEN datetime(e.end_utc) > datetime('now') 
+                    THEN p.event_id 
+                END) as future_event_count
+            FROM playables p
+            LEFT JOIN events e ON p.event_id = e.id
+            WHERE p.provider IS NOT NULL
+              AND p.provider != ''
+            GROUP BY p.provider
+            ORDER BY event_count DESC
+        """)
+    
+    services = {}
+    for row in cur.fetchall():
+        service_code = row[0]
+        
+        # Get display name
+        display_name = service_code
+        if LOGICAL_SERVICES_AVAILABLE:
+            try:
+                from logical_service_mapper import get_service_display_name
+                display_name = get_service_display_name(service_code)
+            except:
+                display_name = service_code.upper()
+        
+        services[service_code] = {
+            "provider_code": service_code,
+            "name": display_name,
+            "event_count": row[1],
+            "playable_count": row[2],
+            "future_event_count": row[3],
+            "adb_enabled": 0,
+            "adb_lane_count": 0,
+            "created_at": None,
+            "updated_at": None
+        }
+    
+    # Merge with provider_lanes configuration
+    cur.execute("""
+        SELECT provider_code, adb_enabled, adb_lane_count, created_at, updated_at
+        FROM provider_lanes
+    """)
+    
+    for row in cur.fetchall():
+        code = row[0]
+        if code in services:
+            services[code]["adb_enabled"] = row[1]
+            services[code]["adb_lane_count"] = row[2]
+            services[code]["created_at"] = row[3]
+            services[code]["updated_at"] = row[4]
+        else:
+            # Service in provider_lanes but no playables (could be old/disabled)
+            display_name = code
+            if LOGICAL_SERVICES_AVAILABLE:
+                try:
+                    from logical_service_mapper import get_service_display_name
+                    display_name = get_service_display_name(code)
+                except:
+                    display_name = code.upper()
+            
+            services[code] = {
+                "provider_code": code,
+                "name": display_name,
+                "event_count": 0,
+                "playable_count": 0,
+                "future_event_count": 0,
+                "adb_enabled": row[1],
+                "adb_lane_count": row[2],
+                "created_at": row[3],
+                "updated_at": row[4]
+            }
+    
+    # Sort by event count (descending), then by name
+    return sorted(services.values(), key=lambda x: (-x["event_count"], x["name"]))
+
+
 @app.route("/api/provider_lanes", methods=["GET", "POST"])
 def api_provider_lanes():
     """
@@ -1601,47 +1993,24 @@ def api_provider_lanes():
     conn.row_factory = sqlite3.Row
     try:
         if request.method == "GET":
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT provider_code, adb_enabled, adb_lane_count,
-                       created_at, updated_at
-                  FROM provider_lanes
-                 ORDER BY provider_code
-                """
-            )
-            rows = [dict(row) for row in cur.fetchall()]
-
-            # Augment with logical web services (e.g., max, peacock_web) so they
-            # can appear in the ADB Lane Providers table even though their raw
-            # provider is "https".
+            # Use enhanced stats function that shows event counts
             try:
-                if LOGICAL_SERVICES_AVAILABLE:
-                    service_counts = get_all_logical_services_with_counts(conn)
-                    existing_codes = {row["provider_code"] for row in rows}
-                    extra_rows = []
-                    for service_code, _count in service_counts.items():
-                        if service_code in existing_codes:
-                            continue
-                        # Skip generic buckets; those are either already present
-                        # or not useful for user-facing ADB config.
-                        if service_code in ("http", "https"):
-                            continue
-                        extra_rows.append(
-                            {
-                                "provider_code": service_code,
-                                "adb_enabled": 0,
-                                "adb_lane_count": 0,
-                                "created_at": None,
-                                "updated_at": None,
-                            }
-                        )
-                    if extra_rows:
-                        rows.extend(sorted(extra_rows, key=lambda r: r["provider_code"]))
+                providers = get_provider_lane_stats(conn)
+                return jsonify({"status": "success", "providers": providers})
             except Exception as e:
-                log(f"api_provider_lanes: failed to merge logical services: {e}", "ERROR")
-
-            return jsonify({"status": "success", "providers": rows})
+                log(f"Error getting provider lane stats: {e}", "ERROR")
+                # Fallback to old behavior
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT provider_code, adb_enabled, adb_lane_count,
+                           created_at, updated_at
+                      FROM provider_lanes
+                     ORDER BY provider_code
+                    """
+                )
+                rows = [dict(row) for row in cur.fetchall()]
+                return jsonify({"status": "success", "providers": rows})
 
         # POST
         payload = request.get_json(silent=True) or {}
@@ -1843,7 +2212,15 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         if deeplink_format == "http" and deeplink_url:
             try:
                 from deeplink_converter import generate_http_deeplink
-                http_version = generate_http_deeplink(deeplink_url, provider_code)
+                playable_uuid = get_playable_id_for_event(conn, db_event_id, provider_code)
+                try:
+                    http_version = generate_http_deeplink(
+                        deeplink_url,
+                        provider=provider_code,
+                        playable_id=playable_uuid,
+                    )
+                except TypeError:
+                    http_version = generate_http_deeplink(deeplink_url, provider_code)
                 if http_version:
                     deeplink_url = http_version
             except ImportError:
@@ -2033,6 +2410,7 @@ def whatson_lane(lane_id):
                 le.start_utc,
                 le.end_utc,
                 le.is_placeholder,
+                le.chosen_provider,
                 e.title,
                 e.channel_name,
                 e.synopsis
@@ -2058,6 +2436,14 @@ def whatson_lane(lane_id):
         channel_name = None
         synopsis = None
 
+        event_id = None
+        chosen_provider = None
+        try:
+            if row is not None and "chosen_provider" in row.keys():
+                chosen_provider = row["chosen_provider"]
+        except Exception:
+            chosen_provider = None
+
         # Check if current event is a placeholder - if so, try fallback
         if row and row["is_placeholder"]:
             log(f"Lane {lane_id}: Current slot is placeholder, checking for fallback event within padding window", "INFO")
@@ -2069,6 +2455,7 @@ def whatson_lane(lane_id):
                 channel_name = fallback['channel_name']
                 synopsis = fallback['synopsis']
                 is_fallback = True
+                chosen_provider = fallback.get('chosen_provider') or chosen_provider
                 
                 log(f"Lane {lane_id}: Using FALLBACK event '{title}' (ended at {fallback['end_utc']})", "INFO")
                 
@@ -2098,16 +2485,41 @@ def whatson_lane(lane_id):
                 
                 # Try to convert primary deeplink
                 if deeplink_url:
-                    http_version = generate_http_deeplink(deeplink_url)
+                    playable_uuid = get_playable_id_for_event(conn, event_id, chosen_provider)
+                    try:
+                        http_version = generate_http_deeplink(
+                            deeplink_url,
+                            provider=chosen_provider,
+                            playable_id=playable_uuid,
+                        )
+                    except TypeError:
+                        # Backwards compatible with older converter signatures
+                        http_version = (
+                            generate_http_deeplink(deeplink_url, chosen_provider)
+                            if chosen_provider
+                            else generate_http_deeplink(deeplink_url)
+                        )
                     if http_version:
                         deeplink_url = http_version
-                
+
                 # Try to convert full deeplink
                 if deeplink_url_full:
-                    http_version = generate_http_deeplink(deeplink_url_full)
+                    playable_uuid = get_playable_id_for_event(conn, event_id, chosen_provider)
+                    try:
+                        http_version = generate_http_deeplink(
+                            deeplink_url_full,
+                            provider=chosen_provider,
+                            playable_id=playable_uuid,
+                        )
+                    except TypeError:
+                        http_version = (
+                            generate_http_deeplink(deeplink_url_full, chosen_provider)
+                            if chosen_provider
+                            else generate_http_deeplink(deeplink_url_full)
+                        )
                     if http_version:
                         deeplink_url_full = http_version
-                        
+
             except ImportError:
                 log("deeplink_converter not available, using original scheme URLs", "WARN")
 
@@ -2289,11 +2701,11 @@ def load_template(template_name):
     <html>
     <head><title>Template Error</title><style>body{{font-family:sans-serif;padding:40px;background:#1a1a1a;color:#eee;}}</style></head>
     <body>
-        <h1>❌ Template Error</h1>
+        <h1>âŒ Template Error</h1>
         <p>Could not load template: <code>{template_name}</code></p>
         <p>Searched in:</p>
         <ul>{''.join(f'<li><code>{p}</code></li>' for p in template_paths)}</ul>
-        <p><a href="/">← Back to Dashboard</a></p>
+        <p><a href="/">â† Back to Dashboard</a></p>
     </body>
     </html>
     """

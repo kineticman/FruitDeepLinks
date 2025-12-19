@@ -208,10 +208,29 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
             
             # Description
             desc = event.get("synopsis") or title
+            
+            # Strip any existing "Available on X" text from the synopsis
+            # (it was added during import with channel_name, but we want to use chosen_provider instead)
+            import re
+            desc = re.sub(r'\s*-\s*Available on [^-]+$', '', desc)
+            
+            # Use the same provider logic as categories for consistency
+            chosen_provider = event.get("chosen_provider")
+            chosen_logical_service = event.get("chosen_logical_service")
             channel_name = event.get("channel_name")
-            if channel_name:
-                provider = get_provider_from_channel(channel_name)
-                desc = f"{desc} - on {provider}"
+            
+            # Get provider name using same priority as categories
+            provider_for_desc = None
+            if chosen_logical_service:
+                provider_for_desc = get_provider_display_name(chosen_logical_service)
+            elif chosen_provider:
+                provider_for_desc = get_provider_display_name(chosen_provider)
+            elif channel_name:
+                provider_for_desc = get_provider_from_channel(channel_name)
+            
+            if provider_for_desc:
+                desc = f"{desc} - Available on {provider_for_desc}"
+            
             ET.SubElement(prog, "desc").text = desc
             
             # Categories - skip for placeholders
@@ -219,8 +238,7 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
             # Only add categories for real events (is_placeholder == 0 or False or None)
             if is_placeholder != 1 and is_placeholder != True:
                 # Add provider/service (ESPN+, Peacock, etc)
-                chosen_provider = event.get("chosen_provider")
-                chosen_logical_service = event.get("chosen_logical_service")
+                # Reuse variables already fetched for description
                 
                 # Use logical service first (already mapped), then provider
                 provider_name = None

@@ -41,6 +41,75 @@ except ImportError:
         return 25
 
 
+def get_default_service_priorities() -> Dict[str, int]:
+    """
+    Get smart default priorities for streaming services.
+    
+    Priority Tiers (1-100 scale):
+    - 90-100: Premium direct services (ESPN+, Peacock, Paramount+, etc.)
+    - 70-89: Cable/network services (TNT, TBS, NBC, Fox, etc.)
+    - 50-69: League-specific services (NBA League Pass, MLB.TV, etc.)
+    - 30-49: Free/broadcast services (ABC, NBC broadcast, etc.)
+    - 10-29: Aggregators with redirects (Amazon Prime Video)
+    - 1-9: Fallback/generic web services
+    
+    Returns:
+        Dict mapping service codes to priority values (higher = preferred)
+    """
+    return {
+        # Tier 1: Premium Sports Services (90-100)
+        "sportsonespn": 100,      # ESPN+ - comprehensive sports
+        "peacock": 98,             # Peacock - NBC Sports, Premier League
+        "peacock_web": 98,         # Peacock web version
+        "pplus": 96,               # Paramount+ - CBS Sports, Champions League
+        "paramount_web": 96,       # Paramount+ web version
+        "cbs_web": 95,             # CBS Sports
+        "max": 94,                 # Max (HBO Max) - Sports coverage
+        "apple_mls": 92,           # Apple MLS Season Pass
+        "apple_mlb": 92,           # Apple MLB Friday Night Baseball
+        
+        # Tier 2: Cable/Network Sports (70-89)
+        "watchtnt": 88,            # TNT - NBA, NHL, MLB
+        "watchtru": 87,            # TruTV - March Madness
+        "watchtbs": 86,            # TBS - MLB, NBA
+        "fox_web": 85,             # Fox Sports
+        "fs1": 84,                 # Fox Sports 1
+        "fs2": 83,                 # Fox Sports 2
+        "nbcsports": 82,           # NBC Sports
+        "usanetwork": 81,          # USA Network
+        "golf": 80,                # Golf Channel
+        "espn": 79,                # ESPN cable
+        "espn2": 78,               # ESPN2
+        "espnu": 77,               # ESPNU
+        "btn": 76,                 # Big Ten Network
+        "accnetwork": 75,          # ACC Network
+        "secnetwork": 74,          # SEC Network
+        
+        # Tier 3: League-Specific Services (50-69)
+        "nba": 68,                 # NBA League Pass
+        "nhl": 67,                 # NHL.TV
+        "mlb": 66,                 # MLB.TV
+        "f1tv": 65,                # F1 TV Pro
+        "dazn": 64,                # DAZN
+        "fubo": 63,                # FuboTV
+        "sling": 62,               # Sling TV
+        
+        # Tier 4: Free/Broadcast (30-49)
+        "abc": 48,                 # ABC (free broadcast)
+        "nbc": 47,                 # NBC (free broadcast)
+        "cbs": 46,                 # CBS (free broadcast)
+        "fox": 45,                 # Fox (free broadcast)
+        
+        # Tier 5: Aggregators (10-29)
+        "aiv": 15,                 # Amazon Prime Video - often redirects to other services
+        
+        # Tier 6: Generic/Fallback (1-9)
+        "https": 5,                # Generic web link
+        "http": 4,                 # Generic web link
+        "web": 3,                  # Generic web service
+    }
+
+
 def load_user_preferences(conn: sqlite3.Connection) -> Dict[str, Any]:
     """
     Load user filter preferences from database
@@ -49,7 +118,9 @@ def load_user_preferences(conn: sqlite3.Connection) -> Dict[str, Any]:
         {
             "enabled_services": ["sportsonespn", "peacock", ...],
             "disabled_sports": ["Women's Basketball", ...],
-            "disabled_leagues": ["WNBA", ...]
+            "disabled_leagues": ["WNBA", ...],
+            "service_priorities": {"sportsonespn": 100, "peacock": 98, ...},
+            "amazon_penalty": True
         }
     """
     try:
@@ -65,6 +136,8 @@ def load_user_preferences(conn: sqlite3.Connection) -> Dict[str, Any]:
                 "enabled_services": [],
                 "disabled_sports": [],
                 "disabled_leagues": [],
+                "service_priorities": get_default_service_priorities(),
+                "amazon_penalty": True,
             }
 
         prefs: Dict[str, Any] = {}
@@ -77,17 +150,45 @@ def load_user_preferences(conn: sqlite3.Connection) -> Dict[str, Any]:
             except Exception:
                 prefs[key] = []
 
-        return {
+        # Parse special keys
+        result = {
             "enabled_services": prefs.get("enabled_services", []),
             "disabled_sports": prefs.get("disabled_sports", []),
             "disabled_leagues": prefs.get("disabled_leagues", []),
         }
+        
+        # Service priorities (with smart defaults)
+        if "service_priorities" in prefs:
+            try:
+                custom_priorities = json.loads(prefs["service_priorities"]) if isinstance(prefs["service_priorities"], str) else prefs["service_priorities"]
+                # Merge with defaults (user values override defaults)
+                default_priorities = get_default_service_priorities()
+                default_priorities.update(custom_priorities)
+                result["service_priorities"] = default_priorities
+            except Exception:
+                result["service_priorities"] = get_default_service_priorities()
+        else:
+            result["service_priorities"] = get_default_service_priorities()
+        
+        # Amazon penalty flag
+        if "amazon_penalty" in prefs:
+            try:
+                result["amazon_penalty"] = bool(json.loads(prefs["amazon_penalty"]) if isinstance(prefs["amazon_penalty"], str) else prefs["amazon_penalty"])
+            except Exception:
+                result["amazon_penalty"] = True
+        else:
+            result["amazon_penalty"] = True
+        
+        return result
+        
     except Exception as e:
         print(f"Warning: Could not load user preferences: {e}")
         return {
             "enabled_services": [],
             "disabled_sports": [],
             "disabled_leagues": [],
+            "service_priorities": get_default_service_priorities(),
+            "amazon_penalty": True,
         }
 
 
@@ -131,8 +232,47 @@ def should_include_event(event: Dict[str, Any], preferences: Dict[str, Any]) -> 
     return True
 
 
+def apply_amazon_penalty(
+    playables: List[Dict[str, Any]], 
+    amazon_penalty: bool = True
+) -> List[Dict[str, Any]]:
+    """
+    Apply penalty to Amazon Prime Video when direct service alternatives exist.
+    
+    Amazon often acts as an aggregator, redirecting to services like TNT, TBS, 
+    HBO Max, etc. When a direct link to those services is available, prefer it.
+    
+    Args:
+        playables: List of playable dicts (must have 'logical_service' key)
+        amazon_penalty: If True, move Amazon to end when alternatives exist
+    
+    Returns:
+        Reordered playables list (or original if penalty disabled)
+    """
+    if not amazon_penalty or not playables:
+        return playables
+    
+    # Check if we have non-Amazon options
+    has_non_amazon = any(
+        p.get("logical_service") != "aiv" for p in playables
+    )
+    
+    if not has_non_amazon:
+        # Only Amazon available, no penalty needed
+        return playables
+    
+    # Separate Amazon from other services
+    amazon_playables = [p for p in playables if p.get("logical_service") == "aiv"]
+    other_playables = [p for p in playables if p.get("logical_service") != "aiv"]
+    
+    # Return non-Amazon first, then Amazon as fallback
+    return other_playables + amazon_playables
+
+
 def get_filtered_playables(
-    conn: sqlite3.Connection, event_id: str, enabled_services: List[str]
+    conn: sqlite3.Connection, event_id: str, enabled_services: List[str],
+    priority_map: Optional[Dict[str, int]] = None,
+    amazon_penalty: bool = True
 ) -> List[Dict[str, Any]]:
     """
     Get playables for an event, filtered by enabled services using logical service mapping
@@ -141,6 +281,8 @@ def get_filtered_playables(
         conn: Database connection
         event_id: Event ID
         enabled_services: List of enabled logical service codes
+        priority_map: Optional dict of service code -> priority (higher = better)
+        amazon_penalty: If True, deprioritize Amazon when alternatives exist
 
     Returns:
         List of playable dicts, filtered and sorted by priority
@@ -196,8 +338,19 @@ def get_filtered_playables(
                 # No filtering - include all
                 playables.append(playable)
 
-        # Sort by logical service priority
-        if LOGICAL_SERVICES_AVAILABLE:
+        # Apply Amazon penalty if enabled
+        playables = apply_amazon_penalty(playables, amazon_penalty)
+
+        # Sort by user priorities (if provided) or fallback to system priorities
+        if priority_map:
+            playables.sort(
+                key=lambda p: (
+                    -priority_map.get(p["logical_service"], 50),  # User priority (negative for descending)
+                    get_logical_service_priority(p["logical_service"])  # System fallback
+                )
+            )
+        elif LOGICAL_SERVICES_AVAILABLE:
+            # Fallback to system priorities only
             playables.sort(
                 key=lambda p: get_logical_service_priority(p["logical_service"])
             )
@@ -210,7 +363,9 @@ def get_filtered_playables(
 
 
 def get_best_playable_for_event(
-    conn: sqlite3.Connection, event_id: str, enabled_services: List[str]
+    conn: sqlite3.Connection, event_id: str, enabled_services: List[str],
+    priority_map: Optional[Dict[str, int]] = None,
+    amazon_penalty: bool = True
 ) -> Optional[Dict[str, Any]]:
     """
     Get the best playable dict for an event based on user preferences.
@@ -219,7 +374,9 @@ def get_best_playable_for_event(
         Dict representing the best playable (includes provider, logical_service,
         deeplink_* fields, etc.), or None if nothing suitable.
     """
-    playables = get_filtered_playables(conn, event_id, enabled_services)
+    playables = get_filtered_playables(
+        conn, event_id, enabled_services, priority_map, amazon_penalty
+    )
     if not playables:
         return None
 
@@ -229,7 +386,9 @@ def get_best_playable_for_event(
 
 
 def get_best_deeplink_for_event(
-    conn: sqlite3.Connection, event_id: str, enabled_services: List[str]
+    conn: sqlite3.Connection, event_id: str, enabled_services: List[str],
+    priority_map: Optional[Dict[str, int]] = None,
+    amazon_penalty: bool = True
 ) -> Optional[str]:
     """
     Get the best deeplink for an event based on user preferences
@@ -238,11 +397,15 @@ def get_best_deeplink_for_event(
         conn: Database connection
         event_id: Event ID
         enabled_services: List of enabled provider schemes
+        priority_map: Optional dict of service code -> priority
+        amazon_penalty: If True, deprioritize Amazon when alternatives exist
 
     Returns:
         Best deeplink URL, or None if no suitable playables
     """
-    best = get_best_playable_for_event(conn, event_id, enabled_services)
+    best = get_best_playable_for_event(
+        conn, event_id, enabled_services, priority_map, amazon_penalty
+    )
     if not best:
         return None
 

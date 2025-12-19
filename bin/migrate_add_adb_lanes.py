@@ -91,99 +91,91 @@ def ensure_http_deeplink_column(conn: sqlite3.Connection, log: logging.Logger) -
 
 def populate_http_deeplinks(conn: sqlite3.Connection, log: logging.Logger) -> None:
     """
-    Generate HTTP deeplinks for existing playables using deeplink_converter.
-    
-    This is optional - deeplinks are converted at runtime if not pre-stored.
+    OPTIONAL PRE-POPULATION:
+      Fill playables.http_deeplink_url for rows that have a deeplink but no HTTP version yet.
+
+    Notes:
+      - Source column is deeplink_play (primary), with fallbacks:
+          deeplink_open, playable_url
+      - playables PK is composite: (event_id, playable_id)
+      - Pass playable_id to converter (required for ESPN playChannel case)
+      - Safe/idempotent: only fills blank http_deeplink_url
     """
-    try:
-        # Import converter (optional, system works without pre-population)
-        import sys
-        from pathlib import Path
-        sys.path.insert(0, str(Path(__file__).parent))
-        from deeplink_converter import generate_http_deeplink
-    except ImportError:
-        log.info("deeplink_converter not available; skipping HTTP deeplink population (will convert at runtime)")
-        return
-    
     cur = conn.cursor()
-    
-    # Check if playables table exists and has the required columns
-    try:
-        cur.execute("PRAGMA table_info(playables)")
-        columns = [row[1] for row in cur.fetchall()]
-        
-        if 'playables' not in ['playables']:  # Table check
-            log.info("playables table not found; skipping HTTP deeplink population")
-            return
-            
-        # Find the primary key column
-        pk_col = None
-        if 'id' in columns:
-            pk_col = 'id'
-        elif 'playable_id' in columns:
-            pk_col = 'playable_id'
-        else:
-            # Try to find any column with 'id' in it
-            for col in columns:
-                if 'id' in col.lower():
-                    pk_col = col
-                    break
-        
-        if not pk_col:
-            log.info("Could not find primary key column in playables; skipping HTTP deeplink population")
-            return
-            
-        if 'deeplink_url' not in columns:
-            log.info("deeplink_url column not found in playables; skipping HTTP deeplink population")
-            return
-            
-        log.info(f"Using primary key column: {pk_col}")
-        
-    except Exception as e:
-        log.info(f"Could not check playables schema: {e}; skipping HTTP deeplink population")
+
+    # Inspect schema
+    cur.execute("PRAGMA table_info(playables)")
+    cols = [r[1] for r in cur.fetchall()]
+
+    if "http_deeplink_url" not in cols:
+        log.info("Column playables.http_deeplink_url not found; skipping prefill.")
         return
-    
-    # Get playables that need HTTP versions
-    try:
-        query = f"""
-            SELECT {pk_col}, deeplink_url, provider 
-            FROM playables 
-            WHERE deeplink_url IS NOT NULL 
-              AND (http_deeplink_url IS NULL OR http_deeplink_url = '')
-            LIMIT 1000
-        """
-        cur.execute(query)
-        
-        playables = cur.fetchall()
-        if not playables:
-            log.info("No playables need HTTP deeplink generation.")
-            return
-        
-        log.info(f"Generating HTTP deeplinks for {len(playables)} playables...")
-        updated = 0
-        
-        for row in playables:
-            playable_id, original_deeplink, provider = row
-            
-            # Generate HTTP version
-            http_deeplink = generate_http_deeplink(original_deeplink, provider)
-            
-            if http_deeplink and http_deeplink != original_deeplink:
-                cur.execute(
-                    f"UPDATE playables SET http_deeplink_url = ? WHERE {pk_col} = ?",
-                    (http_deeplink, playable_id)
-                )
-                updated += 1
-        
-        if updated > 0:
-            conn.commit()
-            log.info(f"Generated HTTP deeplinks for {updated} playables.")
-        else:
-            log.info("No playables had convertible deeplinks (this is OK, conversion happens at runtime).")
-            
-    except Exception as e:
-        log.info(f"Error during HTTP deeplink population: {e}; skipping (conversion happens at runtime anyway)")
+
+    # Determine available source columns in priority order
+    src_cols = [c for c in ("deeplink_play", "deeplink_open", "playable_url", "deeplink_url") if c in cols]
+    if not src_cols:
+        log.info("No deeplink columns found in playables; skipping prefill.")
         return
+
+    if "event_id" not in cols or "playable_id" not in cols:
+        log.info("playables missing event_id/playable_id; skipping prefill.")
+        return
+
+    # Import converter (supports new signature; fall back to old if needed)
+    try:
+        from deeplink_converter import generate_http_deeplink
+    except Exception as e:
+        log.info(f"deeplink_converter not available; skipping prefill (runtime conversion will be used). ({e})")
+        return
+
+    primary_col = "deeplink_play" if "deeplink_play" in cols else src_cols[0]
+    log.info(f"Prefilling http_deeplink_url from {primary_col} (fallbacks: {', '.join(src_cols)})")
+
+    # Pull rows needing HTTP; limit to keep migration snappy
+    query = f"""
+        SELECT event_id, playable_id, provider,
+               {', '.join(src_cols)}
+        FROM playables
+        WHERE (http_deeplink_url IS NULL OR http_deeplink_url = '')
+          AND ({primary_col} IS NOT NULL AND {primary_col} != '')
+        LIMIT 20000
+    """
+    cur.execute(query)
+    rows = cur.fetchall()
+
+    if not rows:
+        log.info("No playables need HTTP deeplink generation.")
+        return
+
+    log.info(f"Generating HTTP deeplinks for {len(rows)} playables...")
+    updated = 0
+
+    for row in rows:
+        event_id, playable_id, provider, *candidates = row
+
+        # pick first non-empty candidate in our priority order
+        deeplink = next((d for d in candidates if d), None)
+        if not deeplink:
+            continue
+
+        try:
+            http_url = generate_http_deeplink(deeplink, provider=provider, playable_id=playable_id)
+        except TypeError:
+            # Back-compat: generate_http_deeplink(url, provider)
+            http_url = generate_http_deeplink(deeplink, provider)
+
+        if not http_url:
+            continue
+
+        cur.execute(
+            "UPDATE playables SET http_deeplink_url = ? WHERE event_id = ? AND playable_id = ?",
+            (http_url, event_id, playable_id),
+        )
+        updated += cur.rowcount
+
+    if updated:
+        conn.commit()
+    log.info(f"HTTP deeplink generation complete. Updated {updated} rows.")
 
 
 def migrate(db_path: Path) -> None:
@@ -204,11 +196,10 @@ def migrate(db_path: Path) -> None:
         ensure_adb_lanes_table(conn, log)
         
         # Ensure http_deeplink_url column in playables
-        http_col_added = ensure_http_deeplink_column(conn, log)
+        ensure_http_deeplink_column(conn, log)
         
-        # Optionally populate HTTP deeplinks (works without this, converts at runtime)
-        if http_col_added:
-            populate_http_deeplinks(conn, log)
+        # Optionally pre-populate HTTP deeplinks (safe/idempotent)
+        populate_http_deeplinks(conn, log)
             
     finally:
         conn.close()

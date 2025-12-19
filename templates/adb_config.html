@@ -174,7 +174,7 @@ Each enabled provider gets dedicated virtual channels that can be tuned via ADB 
 <tr>
 <th style="min-width: 140px;">Provider Code</th>
 <th style="min-width: 200px;">Provider Name</th>
-<th style="min-width: 100px; text-align: right;">Event Count</th>
+<th style="min-width: 120px; text-align: right;">Events Available</th>
 <th style="min-width: 120px; text-align: center;">ADB Enabled</th>
 <th style="min-width: 140px;">Lane Count</th>
 </tr>
@@ -250,17 +250,12 @@ loading.style.display = 'block';
 empty.style.display = 'none';
 wrapper.style.display = 'none';
 
-// Fetch both provider lanes config AND filter data (for event counts)
-const [lanesRes, filtersRes] = await Promise.all([
-fetch('/api/provider_lanes'),
-fetch('/api/filters')
-]);
+// Fetch provider lanes config (now includes event counts!)
+const lanesRes = await fetch('/api/provider_lanes');
 
 if (!lanesRes.ok) throw new Error('Failed to load provider lanes');
-if (!filtersRes.ok) throw new Error('Failed to load filters data');
 
 const lanesData = await lanesRes.json();
-const filtersData = await filtersRes.json();
 
 loading.style.display = 'none';
 
@@ -270,26 +265,23 @@ wrapper.style.display = 'none';
 return;
 }
 
-// Create a map of provider schemes to event counts
-const eventCounts = {};
-if (filtersData.filters && filtersData.filters.providers) {
-filtersData.filters.providers.forEach(p => {
-eventCounts[p.scheme] = p.count || 0;
-});
-}
-
-providerLanes = lanesData.providers.map(p => ({
-...p,
-event_count: eventCounts[p.provider_code] || 0
-}));
+providerLanes = lanesData.providers;
 
 wrapper.style.display = 'block';
 
-tbody.innerHTML = providerLanes.map(p => `
+tbody.innerHTML = providerLanes.map(p => {
+// Format event counts with future events in parentheses
+const eventCount = p.event_count || 0;
+const futureCount = p.future_event_count || 0;
+const eventDisplay = futureCount < eventCount 
+? `${eventCount} <span style="color: #94a3b8; font-size: 11px;">(${futureCount} upcoming)</span>`
+: `${eventCount}`;
+
+return `
 <tr>
 <td><code>${p.provider_code}</code></td>
 <td>${p.name || p.provider_code}</td>
-<td style="text-align: right;">${p.event_count || 0}</td>
+<td style="text-align: right;">${eventDisplay}</td>
 <td style="text-align: center;">
 <input type="checkbox" 
 data-provider="${p.provider_code}" 
@@ -304,7 +296,8 @@ class="adb-lane-count-input"
 value="${p.adb_lane_count || 0}">
 </td>
 </tr>
-`).join('');
+`;
+}).join('');
 
 } catch (err) {
 console.error('Failed to load provider lanes:', err);
