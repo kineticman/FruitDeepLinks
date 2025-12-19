@@ -48,6 +48,11 @@ SERVICE_DISPLAY_NAMES = {
     'watchtru': 'truTV',
     'watchtnt': 'TNT',
     
+    # League-specific services
+    'nba': 'NBA League Pass',
+    'mlb': 'MLB.TV',
+    'nhl': 'NHL.TV',
+    
     # Web-based (new logical services)
     'peacock_web': 'Peacock (Web)',
     'max': 'Max',
@@ -264,6 +269,11 @@ def get_logical_service_priority(service_code: str) -> int:
         'nflctv': 20,
         'watchtru': 21,
         'watchtnt': 22,
+        
+        # League-specific services (direct subscriptions)
+        'nba': 23,        # NBA League Pass
+        'mlb': 23,        # MLB.TV
+        'nhl': 23,        # NHL.TV / NHL Power Play
         
         # Amazon aggregator services (deprioritized - often redirect to other services)
         # These should only be used when no direct service deeplink is available
