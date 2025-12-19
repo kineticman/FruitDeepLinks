@@ -2160,6 +2160,83 @@ def api_lane_deeplink(lane_number):
             return Response(deeplink, mimetype="text/plain")
 
 
+@app.route("/api/lane/<int:lane_number>/launch")
+def api_lane_launch(lane_number):
+    """
+    Redirect (302) to the best deeplink for a lane.
+
+    Intended for Chrome Capture (and other clients) that want a single URL which
+    behaves like a "tune" action: hit this endpoint and you'll be redirected to
+    the resolved deeplink target (typically an https:// URL).
+
+    Query Parameters:
+    - deeplink_format: 'http' (default) or 'scheme' (not recommended for redirects)
+    - at: ISO timestamp (default: now)
+
+    Behavior:
+    - If a deeplink is resolved, returns 302 with Location: <deeplink>
+    - If no deeplink is available for this lane/time, returns 404 with empty body
+    """
+    from flask import url_for, redirect
+    import urllib.parse
+
+    deeplink_format = request.args.get("deeplink_format", "http").lower()
+    at_time = request.args.get("at")
+
+    # Build query params for whatson endpoint (always request JSON internally)
+    params = {
+        "format": "json",
+        "include": "deeplink",
+                "deeplink_format": deeplink_format,
+    }
+    if at_time:
+        params["at"] = at_time
+
+    # Construct internal URL and call whatson_lane directly
+    whatson_url = url_for('whatson_lane', lane_id=lane_number, _external=False)
+    query_string = urllib.parse.urlencode(params)
+
+    with app.test_request_context(f"{whatson_url}?{query_string}"):
+        result = whatson_lane(lane_number)
+
+        # Handle response from whatson_lane
+        if isinstance(result, tuple):
+            data, status_code = result[0], result[1]
+        else:
+            data = result
+            status_code = 200
+
+        # Parse JSON response
+        if hasattr(data, 'get_json'):
+            whatson_data = data.get_json()
+        elif isinstance(data, dict):
+            whatson_data = data
+        else:
+            import json as json_lib
+            whatson_data = json_lib.loads(data.get_data(as_text=True))
+
+        deeplink = whatson_data.get("deeplink_url") or whatson_data.get("deeplink")
+
+        # Mirror /api/lane/<n>/deeplink semantics for empty lanes
+        if not deeplink:
+            # Keep body empty for callers that treat text as URL
+            return Response("", mimetype="text/plain"), 404
+
+        # Safety: only redirect to http(s) URLs (browsers may block custom schemes)
+        if not (deeplink.startswith("http://") or deeplink.startswith("https://")):
+            log(f"LANE_LAUNCH lane={lane_number} rejected_non_http_deeplink={deeplink}", "WARNING")
+            return Response("", mimetype="text/plain"), 404
+
+        resp = redirect(deeplink, code=302)
+        # Avoid caching stale redirects
+        resp.headers["Cache-Control"] = "no-store"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+
+        log(f"LANE_LAUNCH lane={lane_number} -> {deeplink}", "INFO")
+        return resp
+
+
 @app.route("/api/adb/lanes/<provider_code>/<int:lane_number>/deeplink")
 def api_adb_lane_deeplink(provider_code, lane_number):
     """
