@@ -209,6 +209,11 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
             # Description
             desc = event.get("synopsis") or title
             
+            # Strip any existing "Available on X" text from the synopsis
+            # (it was added during import with channel_name, but we want to use chosen_provider instead)
+            import re
+            desc = re.sub(r'\s*-\s*Available on [^-]+$', '', desc)
+            
             # Use the same provider logic as categories for consistency
             chosen_provider = event.get("chosen_provider")
             chosen_logical_service = event.get("chosen_logical_service")
