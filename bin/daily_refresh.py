@@ -53,7 +53,7 @@ def main():
     print("=" * 60)
 
     # Total steps in this pipeline
-    total_steps = 12
+    total_steps = 13
 
     # Check for --skip-scrape flag
     skip_scrape = "--skip-scrape" in sys.argv
@@ -160,41 +160,48 @@ def main():
     else:
         print(f"\n[7/{total_steps}] Kayo data not found at {kayo_json}, skipping ingest")
 
-    # Step 8: Build virtual lanes (Channels-style direct lanes)
+        # Step 8: Prefill HTTP deeplinks for any newly-imported playables
+    if not run_step("8", total_steps, "Prefilling HTTP deeplinks (http_deeplink_url)", [
+        "python3", "migrate_add_adb_lanes.py",
+        "--db", str(DB_PATH),
+    ]):
+        return 1
+
+# Step 9: Build virtual lanes (Channels-style direct lanes)
     lanes = os.getenv("FRUIT_LANES", os.getenv("PEACOCK_LANES", "40"))
-    if not run_step(8, total_steps, f"Building {lanes} virtual lanes", [
+    if not run_step(9, total_steps, f"Building {lanes} virtual lanes", [
         "python3", "fruit_build_lanes.py",
         "--db", str(DB_PATH),
         "--lanes", lanes,
     ]):
         return 1
 
-    # Step 9: Export direct channels (primary XML/M3U)
-    if not run_step(9, total_steps, "Exporting Direct channels", [
+    # Step 10: Export direct channels (primary XML/M3U)
+    if not run_step(10, total_steps, "Exporting Direct channels", [
         "python3", "fruit_export_hybrid.py",
         "--db", str(DB_PATH),
     ]):
         return 1
 
-    # Step 10: Export virtual lanes (existing hybrid lane view)
+    # Step 11: Export virtual lanes (existing hybrid lane view)
     server_url = os.getenv("SERVER_URL", "http://192.168.86.80:6655")
-    if not run_step(10, total_steps, "Exporting Virtual Lanes", [
+    if not run_step(11, total_steps, "Exporting Virtual Lanes", [
         "python3", "fruit_export_lanes.py",
         "--db", str(DB_PATH),
         "--server-url", server_url,
     ]):
         return 1
 
-    # Step 11: Build ADB lanes per provider (adb_lanes table)
-    if not run_step(11, total_steps, "Building ADB lanes per provider", [
+    # Step 12: Build ADB lanes per provider (adb_lanes table)
+    if not run_step(12, total_steps, "Building ADB lanes per provider", [
         "python3", "fruit_build_adb_lanes.py",
         "--db", str(DB_PATH),
     ]):
         return 1
 
-    # Step 12: Export ADB XMLTV + M3U playlists
+    # Step 13: Export ADB XMLTV + M3U playlists
     server_url = os.getenv("SERVER_URL", "http://192.168.86.80:6655")
-    if not run_step(12, total_steps, "Exporting ADB lanes XMLTV and M3U", [
+    if not run_step(13, total_steps, "Exporting ADB lanes XMLTV and M3U", [
         "python3", "fruit_export_adb_lanes.py",
         "--db", str(DB_PATH),
         "--out-dir", str(OUT_DIR),

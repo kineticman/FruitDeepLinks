@@ -2068,6 +2068,98 @@ def api_provider_lanes():
         conn.close()
 
 
+@app.route("/api/lane/<int:lane_number>/deeplink")
+def api_lane_deeplink(lane_number):
+    """
+    Get the current deeplink for a specific lane (multisource or single-source).
+    
+    This endpoint wraps the /whatson/lane/<id> endpoint to provide deeplink-only responses.
+    
+    Query Parameters:
+    - format: 'text' (default), 'json', or 'html'
+    - deeplink_format: 'scheme' (default) or 'http' (for Android/Fire TV best guess)
+    - at: ISO timestamp (default: now)
+    
+    Examples:
+    - /api/lane/9/deeplink?format=text
+    - /api/lane/9/deeplink?format=html&deeplink_format=http
+    - /api/lane/9/deeplink?format=json&deeplink_format=scheme
+    
+    Returns:
+    - Text format: Just the deeplink URL (e.g., "sportscenter://...")
+    - HTML format: Clickable HTML link (for Chrome Capture integration)
+    - JSON format: {"deeplink": "...", "title": "...", "event_id": "..."}
+    """
+    format_type = request.args.get("format", "text").lower()
+    deeplink_format = request.args.get("deeplink_format", "scheme").lower()
+    at_time = request.args.get("at")
+    
+    # Build query params for whatson endpoint
+    params = {
+        "format": "json",  # Always get JSON from whatson
+        "include": "deeplink",
+        "deeplink_format": deeplink_format
+    }
+    if at_time:
+        params["at"] = at_time
+    
+    # Call the whatson_lane function directly or make internal request
+    # We'll pass through the request context
+    from flask import url_for
+    import urllib.parse
+    
+    # Construct internal URL
+    whatson_url = url_for('whatson_lane', lane_id=lane_number, _external=False)
+    query_string = urllib.parse.urlencode(params)
+    
+    # Make internal request by calling whatson_lane directly with modified request args
+    original_args = request.args
+    with app.test_request_context(f"{whatson_url}?{query_string}"):
+        result = whatson_lane(lane_number)
+        
+        # Handle response from whatson_lane
+        if isinstance(result, tuple):
+            data, status_code = result[0], result[1]
+        else:
+            data = result
+            status_code = 200
+        
+        # Parse JSON response
+        if hasattr(data, 'get_json'):
+            whatson_data = data.get_json()
+        elif isinstance(data, dict):
+            whatson_data = data
+        else:
+            # Fallback: parse as JSON string
+            import json as json_lib
+            whatson_data = json_lib.loads(data.get_data(as_text=True))
+        
+        # Extract deeplink
+        deeplink = whatson_data.get("deeplink_url") or whatson_data.get("deeplink")
+        title = whatson_data.get("title")
+        event_id = whatson_data.get("event_id")
+        
+        # Return in requested format
+        if format_type == "html":
+            if not deeplink:
+                return "<html><body>No event currently scheduled</body></html>", 404
+            html = f'<html><body><a href="{deeplink}">{deeplink}</a></body></html>'
+            return Response(html, mimetype="text/html")
+        
+        elif format_type == "json":
+            return jsonify({
+                "deeplink": deeplink,
+                "title": title,
+                "event_id": event_id,
+                "lane_number": lane_number
+            })
+        
+        else:  # text format (default)
+            if not deeplink:
+                return Response("", mimetype="text/plain"), 404
+            return Response(deeplink, mimetype="text/plain")
+
+
 @app.route("/api/adb/lanes/<provider_code>/<int:lane_number>/deeplink")
 def api_adb_lane_deeplink(provider_code, lane_number):
     """

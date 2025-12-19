@@ -343,8 +343,8 @@ def build_chrome_m3u(conn: sqlite3.Connection, m3u_path: str, server_url: str, e
             name = lane.get("name") or f"Sports Lane {lane_id}"
             chno = lane.get("logical_number") or lane_id
             
-            # Chrome Capture URL format
-            stream_url = f"chrome://{server_url}/api/lane/{lane_id}/deeplink?format=text"
+            # Chrome Capture URL format - use HTML format with HTTP deeplinks (best guess for Android/Fire TV)
+            stream_url = f"chrome://{server_url}/api/lane/{lane_id}/deeplink?format=html&deeplink_format=http"
             
             f.write(f'#EXTINF:-1 tvg-id="{chan_id}" tvg-name="{name}" tvg-chno="{chno}" group-title="Sports Lanes",{name}\n')
             f.write(f"{stream_url}\n\n")
