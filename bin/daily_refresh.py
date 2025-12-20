@@ -10,6 +10,7 @@ import sys
 import subprocess
 import sqlite3
 import time
+import json
 from pathlib import Path
 from datetime import datetime
 
@@ -19,13 +20,15 @@ ROOT_DIR = BIN_DIR.parent
 OUT_DIR = ROOT_DIR / "out"
 DATA_DIR = ROOT_DIR / "data"
 DB_PATH = DATA_DIR / "fruit_events.db"
+APPLE_DB_PATH = DATA_DIR / "apple_events.db"
+APPLE_AUTH_PATH = DATA_DIR / "apple_uts_auth.json"
 
 # Ensure directories exist
 OUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 
-def run_step(step_num, total_steps, description, command):
+def run_step(step_num, total_steps, description, command, allow_fail: bool = False):
     """Run a pipeline step and handle errors"""
     print(f"\n{'=' * 60}")
     print(f"[{step_num}/{total_steps}] {description}")
@@ -41,7 +44,22 @@ def run_step(step_num, total_steps, description, command):
         print(f"✔ Step {step_num} complete")
         return True
     except subprocess.CalledProcessError as e:
+        if allow_fail:
+            print(f"⚠ Step {step_num} FAILED (non-fatal) with exit code {e.returncode}")
+            return False
         print(f"✖ Step {step_num} FAILED with exit code {e.returncode}")
+        return False
+
+
+def _is_nonempty_json_object(path: Path) -> bool:
+    """Return True only if path exists and contains a non-empty JSON object."""
+    if not path.exists():
+        return False
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            obj = json.load(f)
+        return isinstance(obj, dict) and len(obj) > 0
+    except Exception:
         return False
 
 
@@ -58,13 +76,32 @@ def main():
     # Check for --skip-scrape flag
     skip_scrape = "--skip-scrape" in sys.argv
 
+    # Fresh-install defensive step: bootstrap Apple UTS auth tokens if missing/invalid.
+    # Prevents brand new installs from failing with:
+    #   ERROR: No cached auth tokens found ... /app/data/apple_uts_auth.json
+    skip_apple = False
+    apple_bootstrap_enabled = os.getenv("APPLE_AUTH_BOOTSTRAP", "true").lower() not in ("0", "false", "no")
+    if (not skip_scrape) and apple_bootstrap_enabled and (not _is_nonempty_json_object(APPLE_AUTH_PATH)):
+        print("\n" + "=" * 60)
+        print("Apple auth tokens not found (or invalid); bootstrapping via multi_scraper.py --headless")
+        print(f"Target: {APPLE_AUTH_PATH}")
+        print("=" * 60)
+        ok = run_step("0", total_steps, "Bootstrapping Apple UTS auth tokens", [
+            "python3", "multi_scraper.py", "--headless",
+        ], allow_fail=True)
+        if (not ok) or (not _is_nonempty_json_object(APPLE_AUTH_PATH)):
+            print("⚠ Apple auth bootstrap failed; Apple scrape will be skipped this run.")
+            print("   You can run: docker exec -it fruitdeeplinks python3 /app/bin/multi_scraper.py --headless")
+            skip_apple = True
+
+
     # Step 1: Scrape Apple TV Sports (into apple_events.db)
-    if skip_scrape:
+    if skip_scrape or skip_apple:
         print("\n" + "=" * 60)
         print(f"[1/{total_steps}] Scraping Apple TV Sports. SKIPPED")
         print("=" * 60)
         apple_db = DATA_DIR / "apple_events.db"
-        if not apple_db.exists():
+        if skip_scrape and (not apple_db.exists()):
             print(f"ERROR: --skip-scrape set but {apple_db} not found")
             return 1
     else:
