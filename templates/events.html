@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Event Inspector - FruitDeepLinks</title>
+  <style>
+  
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+background: #0f172a;
+color: #e2e8f0;
+padding: 20px;
+}
+.container { max-width: 1400px; margin: 0 auto; }
+h1 { color: #60a5fa; margin-bottom: 10px; }
+.subtitle { color: #94a3b8; margin-bottom: 30px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 30px; }
+.card {
+background: #1e293b;
+border: 1px solid #334155;
+border-radius: 8px;
+padding: 20px;
+}
+.card h2 { color: #60a5fa; font-size: 18px; margin-bottom: 15px; }
+.stat { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #334155; }
+.stat:last-child { border-bottom: none; }
+.stat-label { color: #94a3b8; }
+.stat-value { color: #e2e8f0; font-weight: 600; }
+.btn {
+background: #3b82f6;
+color: white;
+border: none;
+padding: 10px 20px;
+border-radius: 6px;
+cursor: pointer;
+font-size: 14px;
+margin-right: 10px;
+}
+.btn:hover { background: #2563eb; }
+.btn:disabled { background: #475569; cursor: not-allowed; }
+.btn-secondary { background: #64748b; }
+.btn-secondary:hover { background: #475569; }
+
+/* Action buttons in results table */
+.action-buttons{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-start;align-items:center;}
+.action-buttons .btn{margin-right:0;min-width:64px;padding:6px 10px;font-size:13px;line-height:1.1;text-align:center;white-space:nowrap;}
+.log-container {
+background: #0f172a;
+border: 1px solid #334155;
+border-radius: 8px;
+padding: 15px;
+height: 400px;
+overflow-y: auto;
+font-family: 'Courier New', monospace;
+font-size: 13px;
+}
+.log-line { padding: 2px 0; color: #cbd5e1; }
+.log-line:hover { background: #1e293b; }
+.status-running { color: #fbbf24; }
+.status-success { color: #34d399; }
+.status-failed { color: #f87171; }
+
+.provider-lanes-table {
+width: 100%;
+border-collapse: collapse;
+margin-top: 10px;
+font-size: 14px;
+}
+.provider-lanes-table th,
+.provider-lanes-table td {
+border-bottom: 1px solid #334155;
+padding: 8px 6px;
+text-align: left;
+}
+.provider-lanes-table th {
+font-weight: 600;
+color: #e2e8f0;
+background: #0f172a;
+}
+.provider-lanes-table tr:hover {
+background: #111827;
+}
+.provider-lanes-table input[type="number"] {
+width: 80px;
+padding: 4px 6px;
+border-radius: 4px;
+border: 1px solid #334155;
+background: #020617;
+color: #e2e8f0;
+}
+
+.file-list { list-style: none; }
+.file-item { padding: 8px 0; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; }
+.file-item:last-child { border-bottom: none; }
+.file-name { color: #60a5fa; }
+.file-size { color: #94a3b8; font-size: 12px; }
+.loading { color: #fbbf24; }
+
+  
+/* ---- Event Inspector extras ---- */
+.controls { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom: 16px; }
+.input, select { background:#0b1220; border:1px solid #334155; color:#e2e8f0; padding:10px 12px; border-radius:10px; outline:none; }
+.input::placeholder { color:#64748b; }
+.small { font-size: 12px; color:#94a3b8; }
+.kpi-row { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin: 18px 0 12px; }
+.kpi { background:#111c33; border:1px solid #334155; border-radius:14px; padding:12px; }
+.kpi .label { color:#94a3b8; font-size:12px; }
+.kpi .value { font-size:22px; font-weight:700; margin-top:4px; }
+.table { width:100%; border-collapse: collapse; }
+.table th, .table td { border-bottom:1px solid #334155; padding:10px 10px; vertical-align:top; }
+.table th { color:#93c5fd; font-weight:600; text-align:left; background: rgba(15, 23, 42, 0.6); position: sticky; top:0; }
+.chips { display:flex; flex-wrap:wrap; gap:6px; }
+.chip { display:inline-flex; align-items:center; padding:4px 10px; border:1px solid #334155; border-radius:999px; font-size:12px; color:#e2e8f0; background: rgba(30, 41, 59, 0.4); }
+.pager { display:flex; gap:10px; justify-content:flex-end; align-items:center; margin-top:14px; }
+.pager button { border:1px solid #334155; background:#0b1220; color:#e2e8f0; padding:8px 12px; border-radius:10px; cursor:pointer; }
+.pager button:disabled { opacity:0.4; cursor:not-allowed; }
+.filter-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap:10px; margin: 10px 0 0; }
+.filter-item { display:flex; justify-content:space-between; align-items:center; padding:12px; border-radius:12px; border:1px solid #334155; background: rgba(30,41,59,0.35); cursor:pointer; user-select:none; }
+.filter-item.enabled { border-color:#3b82f6; background: rgba(59,130,246,0.10); }
+.filter-item .name { font-weight:600; }
+.filter-item .desc { font-size:12px; color:#94a3b8; margin-top:2px; }
+.filter-item .state { font-size:12px; padding:3px 8px; border-radius:999px; border:1px solid #334155; color:#94a3b8; }
+.filter-item.enabled .state { border-color:#3b82f6; color:#93c5fd; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12px; }
+pre { background:#0b1220; border:1px solid #334155; border-radius:12px; padding:12px; overflow:auto; color:#e2e8f0; }
+.badge { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; border:1px solid #334155; background: rgba(2,6,23,0.35); font-size:12px; }
+.badge.good { border-color:#22c55e; color:#bbf7d0; }
+.badge.warn { border-color:#f59e0b; color:#fde68a; }
+.badge.bad { border-color:#ef4444; color:#fecaca; }
+.link { color:#93c5fd; text-decoration:none; }
+.link:hover { text-decoration:underline; }
+
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔎 Event Inspector</h1>
+    <div class="subtitle">Browse, search, and drill into raw event + playables data.</div>
+
+    <div class="nav-bar">
+      <a href="/" class="btn btn-secondary">← Back to Dashboard</a>
+      <a href="/events?live=1&has_playables=1" class="btn btn-primary">▶️ Now Playing</a>
+      <a href="/events?multi=1" class="btn btn-secondary">🧩 Multi‑Service</a>
+      <a href="/events?missing_http=1" class="btn btn-secondary">🕳️ Missing HTTP</a>
+    </div>
+
+    <div class="kpi-row">
+      <div class="kpi"><div class="label">Events in window</div><div class="value" id="kpiTotal">—</div></div>
+      <div class="kpi"><div class="label">Live now (has playables)</div><div class="value" id="kpiLive">—</div></div>
+      <div class="kpi"><div class="label">Multi‑service</div><div class="value" id="kpiMulti">—</div></div>
+      <div class="kpi"><div class="label">Missing HTTP fallback</div><div class="value" id="kpiMissingHttp">—</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Search & Filters</h2>
+      <div class="controls">
+        <input id="q" class="input" type="text" placeholder="Search title / id / pvid / slug / synopsis..." style="min-width:320px;">
+        <select id="provider" class="input">
+          <option value="">All providers</option>
+        </select>
+        <select id="sort" class="input">
+          <option value="start_desc">Start ↓</option>
+          <option value="start_asc">Start ↑</option>
+          <option value="seen_desc">Last seen ↓</option>
+          <option value="playables_desc">Playables ↓</option>
+        </select>
+        <label class="small">days_back <input id="days_back" class="input" type="number" min="0" max="90" value="2" style="width:90px;"></label>
+        <label class="small">days_forward <input id="days_forward" class="input" type="number" min="0" max="90" value="7" style="width:100px;"></label>
+        <select id="page_size" class="input">
+          <option>25</option><option selected>50</option><option>100</option><option>200</option>
+        </select>
+        <button class="btn btn-primary" onclick="applyFromUI()">Apply</button>
+        <button class="btn btn-secondary" onclick="resetFilters()">Reset</button>
+      </div>
+
+      <div class="filter-grid">
+        <div class="filter-item" id="f_live" onclick="toggleFlag('live')">
+          <div>
+            <div class="name">Live now</div>
+            <div class="desc">start ≤ now &lt; end</div>
+          </div>
+          <div class="state">OFF</div>
+        </div>
+        <div class="filter-item" id="f_has_playables" onclick="toggleFlag('has_playables')">
+          <div>
+            <div class="name">Has playables</div>
+            <div class="desc">events with at least one playable</div>
+          </div>
+          <div class="state">OFF</div>
+        </div>
+        <div class="filter-item" id="f_multi" onclick="toggleFlag('multi')">
+          <div>
+            <div class="name">Multi‑service</div>
+            <div class="desc">2+ distinct services available</div>
+          </div>
+          <div class="state">OFF</div>
+        </div>
+        <div class="filter-item" id="f_missing_http" onclick="toggleFlag('missing_http')">
+          <div>
+            <div class="name">Missing HTTP</div>
+            <div class="desc">scheme deeplink but no http_deeplink_url</div>
+          </div>
+          <div class="state">OFF</div>
+        </div>
+        <div class="filter-item" id="f_premium" onclick="toggleFlag('premium')">
+          <div>
+            <div class="name">Premium only</div>
+            <div class="desc">is_premium = 1</div>
+          </div>
+          <div class="state">OFF</div>
+        </div>
+        <div class="filter-item" id="f_free" onclick="toggleFlag('free')">
+          <div>
+            <div class="name">Free only</div>
+            <div class="desc">is_free = 1</div>
+          </div>
+          <div class="state">OFF</div>
+        </div>
+      </div>
+
+      <div style="margin-top:10px;" class="small" id="status">Loading…</div>
+    </div>
+
+    <div class="card">
+      <h2>Results</h2>
+      <div style="max-height: 70vh; overflow:auto;">
+        <table class="table" id="tbl">
+          <thead>
+            <tr>
+              <th style="min-width:160px;">Start / End</th>
+              <th>Title</th>
+              <th style="min-width:220px;">Providers</th>
+              <th style="width:90px;">Playables</th>
+              <th style="min-width:160px;">Channel</th>
+              <th style="min-width:160px;">Last Seen</th>
+              <th style="width:120px;"></th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+
+      <div class="pager">
+        <div class="small" id="pageInfo">—</div>
+        <button id="prevBtn" onclick="pageBy(-1)">Prev</button>
+        <button id="nextBtn" onclick="pageBy(1)">Next</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+let state = {
+  q: "",
+  provider: "",
+  sort: "start_desc",
+  days_back: 2,
+  days_forward: 7,
+  page: 1,
+  page_size: 50,
+  live: 0,
+  has_playables: 0,
+  multi: 0,
+  missing_http: 0,
+  premium: 0,
+  free: 0
+};
+
+function qsGet() {
+  const p = new URLSearchParams(window.location.search);
+  for (const k of Object.keys(state)) {
+    if (p.has(k)) {
+      const v = p.get(k);
+      if (["page","page_size","days_back","days_forward","live","has_playables","multi","missing_http","premium","free"].includes(k)) {
+        state[k] = parseInt(v || "0", 10) || 0;
+      } else {
+        state[k] = v;
+      }
+    }
+  }
+}
+
+function qsSet() {
+  const p = new URLSearchParams();
+  for (const [k,v] of Object.entries(state)) {
+    if (v === "" || v === 0) continue;
+    p.set(k, String(v));
+  }
+  const url = window.location.pathname + "?" + p.toString();
+  window.history.replaceState({}, "", url);
+}
+
+function syncUI() {
+  document.getElementById("q").value = state.q || "";
+  document.getElementById("provider").value = state.provider || "";
+  document.getElementById("sort").value = state.sort || "start_desc";
+  document.getElementById("days_back").value = state.days_back;
+  document.getElementById("days_forward").value = state.days_forward;
+  document.getElementById("page_size").value = String(state.page_size);
+
+  setToggle("live", state.live);
+  setToggle("has_playables", state.has_playables);
+  setToggle("multi", state.multi);
+  setToggle("missing_http", state.missing_http);
+  setToggle("premium", state.premium);
+  setToggle("free", state.free);
+}
+
+function setToggle(key, on) {
+  const id = "f_" + key;
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle("enabled", !!on);
+  el.querySelector(".state").textContent = on ? "ON" : "OFF";
+}
+
+function toggleFlag(key) {
+  state[key] = state[key] ? 0 : 1;
+  // mutually exclusive premium/free toggles (you can turn both off)
+  if (key === "premium" && state.premium) state.free = 0;
+  if (key === "free" && state.free) state.premium = 0;
+  state.page = 1;
+  qsSet();
+  syncUI();
+  loadEvents();
+}
+
+function applyFromUI() {
+  state.q = document.getElementById("q").value.trim();
+  state.provider = document.getElementById("provider").value;
+  state.sort = document.getElementById("sort").value;
+  state.days_back = parseInt(document.getElementById("days_back").value || "2", 10);
+  state.days_forward = parseInt(document.getElementById("days_forward").value || "7", 10);
+  state.page_size = parseInt(document.getElementById("page_size").value || "50", 10);
+  state.page = 1;
+  qsSet();
+  loadEvents();
+}
+
+function resetFilters() {
+  state = {
+    q: "",
+    provider: "",
+    sort: "start_desc",
+    days_back: 2,
+    days_forward: 7,
+    page: 1,
+    page_size: 50,
+    live: 0,
+    has_playables: 0,
+    multi: 0,
+    missing_http: 0,
+    premium: 0,
+    free: 0
+  };
+  qsSet();
+  syncUI();
+  loadEvents();
+}
+
+function pageBy(delta) {
+  state.page = Math.max(1, (state.page || 1) + delta);
+  qsSet();
+  loadEvents();
+}
+
+async function loadProviders() {
+  try {
+    const r = await fetch("/api/filters");
+    const data = await r.json();
+    const providers = (data.filters && data.filters.providers) ? data.filters.providers : [];
+    const sel = document.getElementById("provider");
+    const keep = sel.value;
+    sel.innerHTML = '<option value="">All providers</option>';
+    for (const p of providers) {
+      const opt = document.createElement("option");
+      opt.value = p.scheme;
+      opt.textContent = `${p.name} (${p.count})`;
+      sel.appendChild(opt);
+    }
+    sel.value = keep;
+  } catch (e) {
+    console.warn("provider load failed", e);
+  }
+}
+
+function escapeHtml(s) {
+  return String(s || "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
+}
+
+async function loadKPIs() {
+  try {
+    const r = await fetch("/api/events/stats");
+    const data = await r.json();
+    if (!data || !data.ok) return;
+    document.getElementById("kpiTotal").textContent = data.window_total ?? "—";
+    document.getElementById("kpiLive").textContent = data.live_now ?? "—";
+    document.getElementById("kpiMulti").textContent = data.multi_service ?? "—";
+    document.getElementById("kpiMissingHttp").textContent = data.missing_http ?? "—";
+  } catch (e) {
+  }
+}
+
+async function loadEvents() {
+  const status = document.getElementById("status");
+  status.textContent = "Loading…";
+  const p = new URLSearchParams();
+  for (const [k,v] of Object.entries(state)) {
+    if (v === "" || v === 0) continue;
+    p.set(k, String(v));
+  }
+  const url = "/api/events?" + p.toString();
+
+  try {
+    const r = await fetch(url);
+    const data = await r.json();
+    if (!data || !data.ok) {
+      status.textContent = "Error loading events";
+      return;
+    }
+
+    const rows = document.getElementById("rows");
+    rows.innerHTML = "";
+    for (const e of data.items) {
+      const tr = document.createElement("tr");
+
+      const startEnd = `<div class="mono">${escapeHtml(e.start_utc)}</div><div class="mono small">${escapeHtml(e.end_utc)}</div>`;
+      const title = `<div><b>${escapeHtml(e.title)}</b></div><div class="mono small">${escapeHtml(e.id)}</div>`;
+      const providers = (e.providers || []).map(x => `<span class="chip">${escapeHtml(x)}</span>`).join("");
+      const providersHtml = `<div class="chips">${providers || '<span class="small">—</span>'}</div>`;
+      const playables = `<span class="mono">${e.playables_count}</span>`;
+      const channel = `<span class="small">${escapeHtml(e.channel_name || "")}</span>`;
+      const lastSeen = `<span class="mono small">${escapeHtml(e.last_seen_utc || "")}</span>`;
+      const actions = `<div class="action-buttons"><a class="btn btn-secondary" href="/events/${encodeURIComponent(e.id)}">View</a><a class="btn btn-secondary" target="_blank" rel="noopener" href="/api/events/${encodeURIComponent(e.id)}">JSON</a></div>`;
+
+      tr.innerHTML = `
+        <td>${startEnd}</td>
+        <td>${title}</td>
+        <td>${providersHtml}</td>
+        <td>${playables}</td>
+        <td>${channel}</td>
+        <td>${lastSeen}</td>
+        <td>${actions}</td>
+      `;
+      rows.appendChild(tr);
+    }
+
+    status.textContent = `Loaded ${data.items.length} events (page ${data.page} of ${Math.max(1, Math.ceil(data.total / data.page_size))})`;
+    document.getElementById("pageInfo").textContent = `Total: ${data.total} | Page: ${data.page}`;
+    document.getElementById("prevBtn").disabled = data.page <= 1;
+    document.getElementById("nextBtn").disabled = (data.page * data.page_size) >= data.total;
+
+    loadKPIs();
+
+  } catch (e) {
+    status.textContent = "Error loading events (network)";
+  }
+}
+
+document.getElementById("q").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") {
+    applyFromUI();
+  }
+});
+
+qsGet();
+syncUI();
+loadProviders().then(() => {
+  syncUI();
+});
+loadEvents();
+loadKPIs();
+</script>
+</body>
+</html>

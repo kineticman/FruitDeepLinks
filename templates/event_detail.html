@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Event Detail - FruitDeepLinks</title>
+  <style>
+  
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+background: #0f172a;
+color: #e2e8f0;
+padding: 20px;
+}
+.container { max-width: 1400px; margin: 0 auto; }
+h1 { color: #60a5fa; margin-bottom: 10px; }
+.subtitle { color: #94a3b8; margin-bottom: 30px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 30px; }
+.card {
+background: #1e293b;
+border: 1px solid #334155;
+border-radius: 8px;
+padding: 20px;
+}
+.card h2 { color: #60a5fa; font-size: 18px; margin-bottom: 15px; }
+.stat { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #334155; }
+.stat:last-child { border-bottom: none; }
+.stat-label { color: #94a3b8; }
+.stat-value { color: #e2e8f0; font-weight: 600; }
+.btn {
+background: #3b82f6;
+color: white;
+border: none;
+padding: 10px 20px;
+border-radius: 6px;
+cursor: pointer;
+font-size: 14px;
+margin-right: 10px;
+}
+.btn:hover { background: #2563eb; }
+.btn:disabled { background: #475569; cursor: not-allowed; }
+.btn-secondary { background: #64748b; }
+.btn-secondary:hover { background: #475569; }
+.log-container {
+background: #0f172a;
+border: 1px solid #334155;
+border-radius: 8px;
+padding: 15px;
+height: 400px;
+overflow-y: auto;
+font-family: 'Courier New', monospace;
+font-size: 13px;
+}
+.log-line { padding: 2px 0; color: #cbd5e1; }
+.log-line:hover { background: #1e293b; }
+.status-running { color: #fbbf24; }
+.status-success { color: #34d399; }
+.status-failed { color: #f87171; }
+
+.provider-lanes-table {
+width: 100%;
+border-collapse: collapse;
+margin-top: 10px;
+font-size: 14px;
+}
+.provider-lanes-table th,
+.provider-lanes-table td {
+border-bottom: 1px solid #334155;
+padding: 8px 6px;
+text-align: left;
+}
+.provider-lanes-table th {
+font-weight: 600;
+color: #e2e8f0;
+background: #0f172a;
+}
+.provider-lanes-table tr:hover {
+background: #111827;
+}
+.provider-lanes-table input[type="number"] {
+width: 80px;
+padding: 4px 6px;
+border-radius: 4px;
+border: 1px solid #334155;
+background: #020617;
+color: #e2e8f0;
+}
+
+.file-list { list-style: none; }
+.file-item { padding: 8px 0; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; }
+.file-item:last-child { border-bottom: none; }
+.file-name { color: #60a5fa; }
+.file-size { color: #94a3b8; font-size: 12px; }
+.loading { color: #fbbf24; }
+
+  
+/* ---- Event Inspector extras ---- */
+.controls { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom: 16px; }
+.input, select { background:#0b1220; border:1px solid #334155; color:#e2e8f0; padding:10px 12px; border-radius:10px; outline:none; }
+.input::placeholder { color:#64748b; }
+.small { font-size: 12px; color:#94a3b8; }
+.kpi-row { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin: 18px 0 12px; }
+.kpi { background:#111c33; border:1px solid #334155; border-radius:14px; padding:12px; }
+.kpi .label { color:#94a3b8; font-size:12px; }
+.kpi .value { font-size:22px; font-weight:700; margin-top:4px; }
+.table { width:100%; border-collapse: collapse; }
+.table th, .table td { border-bottom:1px solid #334155; padding:10px 10px; vertical-align:top; }
+.table th { color:#93c5fd; font-weight:600; text-align:left; background: rgba(15, 23, 42, 0.6); position: sticky; top:0; }
+.chips { display:flex; flex-wrap:wrap; gap:6px; }
+.chip { display:inline-flex; align-items:center; padding:4px 10px; border:1px solid #334155; border-radius:999px; font-size:12px; color:#e2e8f0; background: rgba(30, 41, 59, 0.4); }
+.pager { display:flex; gap:10px; justify-content:flex-end; align-items:center; margin-top:14px; }
+.pager button { border:1px solid #334155; background:#0b1220; color:#e2e8f0; padding:8px 12px; border-radius:10px; cursor:pointer; }
+.pager button:disabled { opacity:0.4; cursor:not-allowed; }
+.filter-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap:10px; margin: 10px 0 0; }
+.filter-item { display:flex; justify-content:space-between; align-items:center; padding:12px; border-radius:12px; border:1px solid #334155; background: rgba(30,41,59,0.35); cursor:pointer; user-select:none; }
+.filter-item.enabled { border-color:#3b82f6; background: rgba(59,130,246,0.10); }
+.filter-item .name { font-weight:600; }
+.filter-item .desc { font-size:12px; color:#94a3b8; margin-top:2px; }
+.filter-item .state { font-size:12px; padding:3px 8px; border-radius:999px; border:1px solid #334155; color:#94a3b8; }
+.filter-item.enabled .state { border-color:#3b82f6; color:#93c5fd; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12px; }
+pre { background:#0b1220; border:1px solid #334155; border-radius:12px; padding:12px; overflow:auto; color:#e2e8f0; }
+.badge { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; border:1px solid #334155; background: rgba(2,6,23,0.35); font-size:12px; }
+.badge.good { border-color:#22c55e; color:#bbf7d0; }
+.badge.warn { border-color:#f59e0b; color:#fde68a; }
+.badge.bad { border-color:#ef4444; color:#fecaca; }
+.link { color:#93c5fd; text-decoration:none; }
+.link:hover { text-decoration:underline; }
+
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🧾 Event Detail</h1>
+    <div class="subtitle">Raw DB row + all playables for a single event.</div>
+
+    <div class="nav-bar">
+      <a href="/events" class="btn btn-secondary">← Back to Event Inspector</a>
+      <a href="/" class="btn btn-secondary">🏠 Dashboard</a>
+      <a href="#" id="jsonLink" class="btn btn-secondary" target="_blank">View JSON</a>
+      <button class="btn btn-primary" onclick="copyJson()">Copy JSON</button>
+    </div>
+
+    <div class="card">
+      <h2>Summary</h2>
+      <div id="summary">Loading…</div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Playables</h2>
+        <div style="max-height: 50vh; overflow:auto;">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Service</th>
+                <th>Provider</th>
+                <th>Priority</th>
+                <th>deeplink_play</th>
+                <th>http_deeplink_url</th>
+              </tr>
+            </thead>
+            <tbody id="playables"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Computed “Best” (debug)</h2>
+        <div id="bestBox" class="small">Loading…</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Raw JSON fields</h2>
+      <div id="jsonFields"></div>
+    </div>
+
+    <div class="card">
+      <h2>Raw DB row (events.*)</h2>
+      <div style="max-height: 60vh; overflow:auto;">
+        <table class="table">
+          <thead><tr><th style="width:260px;">Column</th><th>Value</th></tr></thead>
+          <tbody id="eventRow"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+function escapeHtml(s) {
+  return String(s || "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
+}
+function getEventId() {
+  const path = window.location.pathname;
+  const parts = path.split("/events/");
+  return decodeURIComponent(parts[1] || "");
+}
+
+let lastJson = null;
+
+async function loadDetail() {
+  const eventId = getEventId();
+  document.getElementById("jsonLink").href = "/api/events/" + encodeURIComponent(eventId);
+
+  const r = await fetch("/api/events/" + encodeURIComponent(eventId));
+  const data = await r.json();
+  lastJson = data;
+
+  if (!data || !data.ok) {
+    document.getElementById("summary").innerHTML = '<span class="badge bad">Not found</span>';
+    return;
+  }
+
+  const e = data.event || {};
+  const playables = data.playables || [];
+
+  // summary
+  const badges = [];
+  if (data.is_live_now) badges.push('<span class="badge good">LIVE NOW</span>');
+  if ((e.is_premium ?? 0) == 1) badges.push('<span class="badge warn">PREMIUM</span>');
+  if ((e.is_free ?? 0) == 1) badges.push('<span class="badge good">FREE</span>');
+  const providers = (data.providers || []).map(x => `<span class="chip">${escapeHtml(x)}</span>`).join("");
+
+  document.getElementById("summary").innerHTML = `
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom: 8px;">
+      ${badges.join(" ") || '<span class="badge">EVENT</span>'}
+      <span class="badge">${escapeHtml(e.id)}</span>
+    </div>
+    <div style="font-size:20px; font-weight:700;">${escapeHtml(e.title)}</div>
+    <div class="small mono" style="margin-top:6px;">${escapeHtml(e.start_utc)} → ${escapeHtml(e.end_utc)}</div>
+    <div class="small" style="margin-top:6px;">Channel: <b>${escapeHtml(e.channel_name || "")}</b></div>
+    <div class="small" style="margin-top:8px;">Providers: <div class="chips" style="margin-top:6px;">${providers || '<span class="small">—</span>'}</div></div>
+  `;
+
+  // playables table
+  const tbody = document.getElementById("playables");
+  tbody.innerHTML = "";
+  for (const p of playables) {
+    const tr = document.createElement("tr");
+    const http = p.http_deeplink_url ? `<a class="link mono" href="${escapeHtml(p.http_deeplink_url)}" target="_blank">${escapeHtml(p.http_deeplink_url)}</a>` : '<span class="small">—</span>';
+    tr.innerHTML = `
+      <td class="mono">${escapeHtml(p.logical_service || "")}</td>
+      <td class="mono">${escapeHtml(p.provider || "")}</td>
+      <td class="mono">${escapeHtml(p.priority)}</td>
+      <td class="mono">${escapeHtml(p.deeplink_play || p.deeplink_open || "")}</td>
+      <td>${http}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  // best box
+  const best = data.best || null;
+  if (best && best.deeplink) {
+    const httpLine = best.http_deeplink_url ? `<div class="small mono" style="margin-top:8px;">HTTP: ${escapeHtml(best.http_deeplink_url)}</div>` : ``;
+    document.getElementById("bestBox").innerHTML = `
+      <div><span class="badge good">Selected</span> <b>${escapeHtml(best.logical_service || best.provider || "")}</b></div>
+      <div class="small" style="margin-top:8px;">Reason: ${escapeHtml(best.reason || "—")}</div>
+      <div class="small mono" style="margin-top:8px;">Deeplink: ${escapeHtml(best.deeplink)}</div>
+      ${httpLine}
+    `;
+  } else {
+    document.getElementById("bestBox").innerHTML = '<span class="badge warn">No selection</span> <div class="small" style="margin-top:8px;">No filter_integration result (or no playables).</div>';
+  }
+
+  // raw json fields
+  const jf = document.getElementById("jsonFields");
+  jf.innerHTML = "";
+  for (const item of (data.pretty_json_fields || [])) {
+    const div = document.createElement("div");
+    div.style.marginBottom = "14px";
+    div.innerHTML = `<div class="small" style="margin-bottom:6px;"><b>${escapeHtml(item.key)}</b></div>` +
+                    (item.value ? `<pre>${escapeHtml(item.value)}</pre>` : `<div class="small">—</div>`);
+    jf.appendChild(div);
+  }
+
+  // raw db row
+  const er = document.getElementById("eventRow");
+  er.innerHTML = "";
+  for (const [k,v] of Object.entries(e)) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="mono">${escapeHtml(k)}</td><td class="mono">${escapeHtml(v)}</td>`;
+    er.appendChild(tr);
+  }
+}
+
+async function copyJson() {
+  try {
+    if (!lastJson) return;
+    await navigator.clipboard.writeText(JSON.stringify(lastJson, null, 2));
+    alert("Copied JSON to clipboard");
+  } catch (e) {
+    alert("Copy failed (browser permissions)");
+  }
+}
+
+loadDetail().catch(err => {
+  document.getElementById("summary").textContent = "Error loading event";
+});
+</script>
+</body>
+</html>
