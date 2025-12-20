@@ -23,6 +23,33 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://api.kayosports.com.au/v3/content/types/landing/names/fixtures"
 
 
+
+class KayoForbidden(Exception):
+    """Raised when Kayo API denies access (HTTP 403)."""
+
+    def __init__(self, message: str, status_code: int = 403, body_snippet: str | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.body_snippet = body_snippet
+
+
+# Use a single session so headers + TLS settings remain consistent across requests.
+_SESSION = requests.Session()
+
+KAYO_HEADERS = {
+    # Keep this intentionally "browser-ish" to avoid edge/bot blocking.
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/142.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-AU,en;q=0.9",
+    "Origin": "https://kayosports.com.au",
+    "Referer": "https://kayosports.com.au/fixtures",
+}
+_SESSION.headers.update(KAYO_HEADERS)
+
 def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Kayo Sports scraper")
     parser.add_argument(
@@ -90,19 +117,16 @@ def fetch_fixtures_json(
     if sport:
         params["sport"] = sport
 
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/142.0.0.0 Safari/537.36"
-        ),
-        "Referer": "https://kayosports.com.au/",
-        "Origin": "https://kayosports.com.au",
-        "Accept": "application/json,text/plain,*/*",
-    }
-
     logger.debug("Fetching Kayo fixtures: params=%s", params)
-    resp = requests.get(BASE_URL, params=params, headers=headers, timeout=timeout)
+    resp = _SESSION.get(BASE_URL, params=params, timeout=timeout)
+    if resp.status_code == 403:
+        snippet = (resp.text or "")[:300]
+        raise KayoForbidden(
+            "Kayo fixtures request blocked (403). Likely edge/bot blocking; ensure browser-like headers.",
+            status_code=403,
+            body_snippet=snippet,
+        )
+
     resp.raise_for_status()
 
     data = resp.json()
@@ -358,6 +382,17 @@ def fetch_kayo_schedule(
             
             logger.info(f"  Found {fixtures_found} fixtures for {day.date().isoformat()}")
                     
+        except KayoForbidden as e:
+            # If Kayo blocks us for one day, it will almost always block the whole range.
+            msg = (
+                f"Error fetching fixtures for {day.date().isoformat()}: {e} "
+                f"(status={getattr(e, 'status_code', None)})"
+            )
+            logger.error(msg)
+            if getattr(e, "body_snippet", None):
+                logger.debug("Kayo 403 body (first 300 chars): %s", e.body_snippet)
+            logger.error("Stopping Kayo scrape for this run to avoid 403 spam.")
+            break
         except Exception as e:
             logger.error(f"Error fetching fixtures for {day.date().isoformat()}: {e}")
             continue
