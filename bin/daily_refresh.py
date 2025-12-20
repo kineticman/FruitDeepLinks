@@ -76,62 +76,55 @@ def main():
     # Check for --skip-scrape flag
     skip_scrape = "--skip-scrape" in sys.argv
 
-    # Fresh-install safety: bootstrap Apple UTS auth tokens if missing/invalid.
-    # This prevents new installs from failing with: "ERROR: No cached auth tokens found"
-    apple_enabled = os.getenv("APPLE_ENABLED", "true").lower() not in ("0", "false", "no")
+    # Fresh-install defensive step: bootstrap Apple UTS auth tokens if missing/invalid.
+    # Prevents brand new installs from failing with:
+    #   ERROR: No cached auth tokens found ... /app/data/apple_uts_auth.json
+    skip_apple = False
     apple_bootstrap_enabled = os.getenv("APPLE_AUTH_BOOTSTRAP", "true").lower() not in ("0", "false", "no")
-
-    if apple_enabled and not skip_scrape and apple_bootstrap_enabled:
-        if not _is_nonempty_json_object(APPLE_AUTH_PATH):
-            print("\n" + "=" * 60)
-            print("Apple auth tokens not found (or invalid); bootstrapping via multi_scraper.py --headless")
-            print(f"Target: {APPLE_AUTH_PATH}")
-            print("=" * 60)
-
-            ok = run_step("0", total_steps, "Bootstrapping Apple UTS auth tokens", [
-                "python3", "multi_scraper.py", "--headless",
-            ], allow_fail=True)
-
-            if (not ok) or (not _is_nonempty_json_object(APPLE_AUTH_PATH)):
-                print("⚠ Apple auth bootstrap failed; Apple will be skipped for this run.")
-                apple_enabled = False
+    if (not skip_scrape) and apple_bootstrap_enabled and (not _is_nonempty_json_object(APPLE_AUTH_PATH)):
+        print("\n" + "=" * 60)
+        print("Apple auth tokens not found (or invalid); bootstrapping via multi_scraper.py --headless")
+        print(f"Target: {APPLE_AUTH_PATH}")
+        print("=" * 60)
+        ok = run_step("0", total_steps, "Bootstrapping Apple UTS auth tokens", [
+            "python3", "multi_scraper.py", "--headless",
+        ], allow_fail=True)
+        if (not ok) or (not _is_nonempty_json_object(APPLE_AUTH_PATH)):
+            print("⚠ Apple auth bootstrap failed; Apple scrape will be skipped this run.")
+            print("   You can run: docker exec -it fruitdeeplinks python3 /app/bin/multi_scraper.py --headless")
+            skip_apple = True
 
 
     # Step 1: Scrape Apple TV Sports (into apple_events.db)
-    if skip_scrape or not apple_enabled:
+    if skip_scrape or skip_apple:
         print("\n" + "=" * 60)
         print(f"[1/{total_steps}] Scraping Apple TV Sports. SKIPPED")
         print("=" * 60)
-
-        if skip_scrape and not APPLE_DB_PATH.exists():
-            print(f"ERROR: --skip-scrape set but {APPLE_DB_PATH} not found")
+        apple_db = DATA_DIR / "apple_events.db"
+        if skip_scrape and (not apple_db.exists()):
+            print(f"ERROR: --skip-scrape set but {apple_db} not found")
             return 1
     else:
         # Step 1a: Scrape all search terms
-        ok = run_step(1, total_steps, "Scraping Apple TV Sports (all terms)", [
+        if not run_step(1, total_steps, "Scraping Apple TV Sports (all terms)", [
             "python3", "apple_scraper_db.py",
             "--headless",
-            "--db", str(APPLE_DB_PATH),
-        ], allow_fail=True)
-
-        if not ok:
-            print("⚠ Apple scrape failed; Apple will be skipped for this run.")
-            apple_enabled = False
-        else:
-            # Step 1b: Upgrade all shelf events to full
-            print("\n" + "=" * 60)
-            print(f"[1b/{total_steps}] Upgrading shelf events to full")
-            print("=" * 60)
-            ok2 = run_step("1b", total_steps, "Upgrading all shelf events", [
-                "python3", "apple_scraper_db.py",
-                "--headless",
-                "--skip-seeds",
-                "--upgrade-shelf-limit", "9999",
-                "--db", str(APPLE_DB_PATH),
-            ], allow_fail=True)
-
-            if not ok2:
-                print("⚠ Apple shelf-upgrade failed; continuing anyway (partial Apple data may exist).")
+            "--db", str(DATA_DIR / "apple_events.db"),
+        ]):
+            return 1
+        
+        # Step 1b: Upgrade all shelf events to full
+        print("\n" + "=" * 60)
+        print(f"[1b/{total_steps}] Upgrading shelf events to full")
+        print("=" * 60)
+        if not run_step("1b", total_steps, "Upgrading all shelf events", [
+            "python3", "apple_scraper_db.py",
+            "--headless",
+            "--skip-seeds",
+            "--upgrade-shelf-limit", "9999",
+            "--db", str(DATA_DIR / "apple_events.db"),
+        ]):
+            return 1
 
     # Step 2: Scrape Kayo Sports
     kayo_days = os.getenv("KAYO_DAYS", "7")
@@ -182,18 +175,15 @@ def main():
     if not run_step(5, total_steps, "Ensuring database schema (adb_lanes table)", [
         "python3", "migrate_add_adb_lanes.py",
     ]):
-        return 1    # Step 6: Import Apple TV events (DB-to-DB from apple_events.db)
-    if apple_enabled and APPLE_DB_PATH.exists():
-        ok = run_step(6, total_steps, "Importing Apple TV events to master database", [
-            "python3", "fruit_import_appletv.py",
-            "--apple-db", str(APPLE_DB_PATH),
-            "--fruit-db", str(DB_PATH),
-        ], allow_fail=True)
-        if not ok:
-            print("⚠ Apple import failed; continuing without Apple updates.")
-    else:
-        print(f"\n[6/{total_steps}] Apple import skipped (enabled={apple_enabled}, db_exists={APPLE_DB_PATH.exists()})")
+        return 1
 
+    # Step 6: Import Apple TV events (DB-to-DB from apple_events.db)
+    if not run_step(6, total_steps, "Importing Apple TV events to master database", [
+        "python3", "fruit_import_appletv.py",
+        "--apple-db", str(DATA_DIR / "apple_events.db"),
+        "--fruit-db", str(DB_PATH),
+    ]):
+        return 1
 
     # Step 7: Import Kayo events
     kayo_json = OUT_DIR / "kayo_raw.json"
@@ -214,7 +204,7 @@ def main():
     ]):
         return 1
 
-    # Step 9: Build virtual lanes (Channels-style direct lanes)
+# Step 9: Build virtual lanes (Channels-style direct lanes)
     lanes = os.getenv("FRUIT_LANES", os.getenv("PEACOCK_LANES", "40"))
     if not run_step(9, total_steps, f"Building {lanes} virtual lanes", [
         "python3", "fruit_build_lanes.py",
