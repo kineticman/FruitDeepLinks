@@ -348,7 +348,7 @@ def build_chrome_m3u(conn: sqlite3.Connection, m3u_path: str, server_url: str, e
             chno = lane.get("logical_number") or lane_id
             
             # Build the deeplink API URL (returns text format)
-            deeplink_api_url = f"{server_url}/api/lane/{lane_id}/deeplink?format=txt&deeplink_format=http"
+            deeplink_api_url = f"{server_url}/api/lane/{lane_id}/launch?deeplink_format=http"
             
             # URL-encode the deeplink API URL for Chrome Capture stream proxy
             encoded_url = urllib.parse.quote(deeplink_api_url, safe='')

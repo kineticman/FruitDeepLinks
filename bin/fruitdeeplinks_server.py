@@ -2160,81 +2160,90 @@ def api_lane_deeplink(lane_number):
             return Response(deeplink, mimetype="text/plain")
 
 
+
 @app.route("/api/lane/<int:lane_number>/launch")
 def api_lane_launch(lane_number):
     """
-    Redirect (302) to the best deeplink for a lane.
+    Redirect (302) to the best resolved deeplink for a lane.
 
-    Intended for Chrome Capture (and other clients) that want a single URL which
-    behaves like a "tune" action: hit this endpoint and you'll be redirected to
-    the resolved deeplink target (typically an https:// URL).
+    Intended for Chrome Capture (and similar clients) that want a single URL
+    which behaves like "tune lane" and forwards to the provider HTTP URL.
 
     Query Parameters:
-    - deeplink_format: 'http' (default) or 'scheme' (not recommended for redirects)
-    - at: ISO timestamp (default: now)
+      - deeplink_format: 'http' (default) or 'scheme'
+      - allow_fallback: '1' to allow redirecting to fallback events (default: off)
+      - at: ISO timestamp to evaluate the lane at (optional)
 
     Behavior:
-    - If a deeplink is resolved, returns 302 with Location: <deeplink>
-    - If no deeplink is available for this lane/time, returns 404 with empty body
+      - If a real scheduled event exists (ok=true and event_uid present), returns 302
+        with Location: <deeplink_url_full or deeplink_url>.
+      - If lane is empty (or only has fallback and allow_fallback is not set),
+        returns 404 with empty body (text/plain).
     """
-    from flask import url_for, redirect
+    from flask import redirect
     import urllib.parse
 
-    deeplink_format = request.args.get("deeplink_format", "http").lower()
+    deeplink_format = (request.args.get("deeplink_format") or "http").lower()
+    allow_fallback = (request.args.get("allow_fallback") or "").lower() in ("1", "true", "yes", "y")
     at_time = request.args.get("at")
 
-    # Build query params for whatson endpoint (always request JSON internally)
     params = {
         "format": "json",
         "include": "deeplink",
-                "deeplink_format": deeplink_format,
+        "deeplink_format": deeplink_format,
     }
     if at_time:
         params["at"] = at_time
 
-    # Construct internal URL and call whatson_lane directly
-    whatson_url = url_for('whatson_lane', lane_id=lane_number, _external=False)
     query_string = urllib.parse.urlencode(params)
 
-    with app.test_request_context(f"{whatson_url}?{query_string}"):
+    # Reuse existing lane resolver logic by calling whatson_lane internally.
+    with app.test_request_context(f"/whatson/{lane_number}?{query_string}"):
         result = whatson_lane(lane_number)
 
-        # Handle response from whatson_lane
+        # Flask handlers may return (response, status)
         if isinstance(result, tuple):
-            data, status_code = result[0], result[1]
+            resp_obj = result[0]
         else:
-            data = result
-            status_code = 200
+            resp_obj = result
 
-        # Parse JSON response
-        if hasattr(data, 'get_json'):
-            whatson_data = data.get_json()
-        elif isinstance(data, dict):
-            whatson_data = data
-        else:
-            import json as json_lib
-            whatson_data = json_lib.loads(data.get_data(as_text=True))
+        try:
+            data = resp_obj.get_json()
+        except Exception:
+            data = None
 
-        deeplink = whatson_data.get("deeplink_url") or whatson_data.get("deeplink")
+    if not isinstance(data, dict):
+        return Response("", mimetype="text/plain"), 404
 
-        # Mirror /api/lane/<n>/deeplink semantics for empty lanes
-        if not deeplink:
-            # Keep body empty for callers that treat text as URL
-            return Response("", mimetype="text/plain"), 404
+    ok = bool(data.get("ok"))
+    event_uid = data.get("event_uid")
+    is_fallback = bool(data.get("is_fallback", False))
 
-        # Safety: only redirect to http(s) URLs (browsers may block custom schemes)
-        if not (deeplink.startswith("http://") or deeplink.startswith("https://")):
-            log(f"LANE_LAUNCH lane={lane_number} rejected_non_http_deeplink={deeplink}", "WARNING")
-            return Response("", mimetype="text/plain"), 404
+    # Strict: require a real event_uid, and reject fallback unless explicitly allowed.
+    if (not ok) or (not event_uid):
+        return Response("", mimetype="text/plain"), 404
+    if is_fallback and not allow_fallback:
+        return Response("", mimetype="text/plain"), 404
 
-        resp = redirect(deeplink, code=302)
-        # Avoid caching stale redirects
-        resp.headers["Cache-Control"] = "no-store"
-        resp.headers["Pragma"] = "no-cache"
-        resp.headers["Expires"] = "0"
+    deeplink = (data.get("deeplink_url_full") or data.get("deeplink_url") or data.get("deeplink") or "").strip()
 
-        log(f"LANE_LAUNCH lane={lane_number} -> {deeplink}", "INFO")
-        return resp
+    if not deeplink:
+        return Response("", mimetype="text/plain"), 404
+
+    # Only redirect to http(s) URLs; custom schemes are typically not desirable for redirects.
+    if not (deeplink.startswith("http://") or deeplink.startswith("https://")):
+        log(f"LANE_LAUNCH lane={lane_number} rejected_non_http_deeplink={deeplink}", "WARNING")
+        return Response("", mimetype="text/plain"), 404
+
+    r = redirect(deeplink, code=302)
+
+    # Avoid caching stale redirects.
+    r.headers["Cache-Control"] = "no-store"
+    r.headers["Pragma"] = "no-cache"
+    r.headers["Expires"] = "0"
+
+    log(f"LANE_LAUNCH lane={lane_number} -> {deeplink}", "INFO")
+    return r
 
 
 @app.route("/api/adb/lanes/<provider_code>/<int:lane_number>/deeplink")
