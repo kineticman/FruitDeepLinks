@@ -772,6 +772,77 @@ def get_event_link_info(conn, event_id, uid_col, primary_deeplink_col, full_deep
 
 
 
+def get_provider_playable_link(conn, event_id: str, provider_code: str) -> dict:
+    """Return provider-specific deeplink info for an event from playables.
+
+    Used by provider-based ADB lanes. This intentionally bypasses enabled_services
+    selection; the provider lane should return *its provider's* deeplink when possible.
+    """
+    if not event_id or not provider_code:
+        return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+
+    try:
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(playables)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        provider_col = "provider" if "provider" in cols else ("provider_code" if "provider_code" in cols else None)
+        if not provider_col:
+            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+
+        event_fk = "event_id" if "event_id" in cols else ("id" if "id" in cols else None)
+        if not event_fk:
+            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+
+        logical_col = "logical_service" if "logical_service" in cols else None
+        playable_id_col = "playable_id" if "playable_id" in cols else None
+        http_col = "http_deeplink_url" if "http_deeplink_url" in cols else None
+        priority_col = "priority" if "priority" in cols else None
+
+        deeplink_cols = [c for c in ["deeplink_play", "deeplink_open", "playable_url"] if c in cols]
+        if not deeplink_cols:
+            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+
+        select_cols = deeplink_cols[:]
+        if http_col:
+            select_cols.append(http_col)
+        if playable_id_col:
+            select_cols.append(playable_id_col)
+
+        params = [event_id]
+        if logical_col:
+            where = f"{event_fk} = ? AND ({logical_col} = ? OR {provider_col} = ?)"
+            params.extend([provider_code, provider_code])
+        else:
+            where = f"{event_fk} = ? AND {provider_col} = ?"
+            params.append(provider_code)
+
+        order = f"ORDER BY {priority_col} ASC" if priority_col else ""
+        sql = f"SELECT {', '.join(select_cols)} FROM playables WHERE {where} {order} LIMIT 1"
+
+        cur.execute(sql, tuple(params))
+        row = cur.fetchone()
+        if not row:
+            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+
+        if isinstance(row, sqlite3.Row):
+            r = dict(row)
+            deeplink = None
+            for c in ["deeplink_play", "deeplink_open", "playable_url"]:
+                if r.get(c):
+                    deeplink = r.get(c)
+                    break
+            return {
+                "deeplink": deeplink,
+                "http_deeplink_url": r.get(http_col) if http_col else None,
+                "playable_id": r.get(playable_id_col) if playable_id_col else None,
+            }
+
+        return {"deeplink": row[0], "http_deeplink_url": None, "playable_id": None}
+    except Exception:
+        return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+
+
 def get_playable_id_for_event(conn, event_id: str, provider_code: str = None) -> str:
     """Best-effort lookup of playables.playable_id for an event (+ optional provider).
 
@@ -2070,6 +2141,16 @@ def api_apply_filters():
                         str(DB_PATH),
                     ],
                 ),
+                    (
+                        "fruit_build_adb_lanes.py",
+                        [
+                            "python3",
+                            "-u",
+                            str(BIN_DIR / "fruit_build_adb_lanes.py"),
+                            "--db",
+                            str(DB_PATH),
+                        ],
+                    ),
                 (
                     "fruit_export_lanes.py",
                     [
@@ -2759,6 +2840,27 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         deeplink_format = request.args.get("deeplink_format", "scheme").lower()
         
         cur = conn.cursor()
+
+        # Enforce user filters for provider-specific ADB lanes.
+        # If enabled_services is set (non-empty), provider_code must be allowed.
+        try:
+            from filter_integration import load_user_preferences
+            prefs = load_user_preferences(conn)
+            enabled_services = prefs.get('enabled_services') or []
+            if enabled_services and provider_code not in enabled_services:
+                # Provider filtered out -> behave like 'no event' for ADBTuner.
+                if (request.args.get("format") or "text").lower() == "text":
+                    return Response('', mimetype='text/plain')
+                return jsonify({
+                    'status': 'success',
+                    'deeplink': None,
+                    'title': None,
+                    'provider_code': provider_code,
+                    'lane_number': lane_number,
+                    'message': f'Provider {provider_code} filtered out'
+                })
+        except Exception as e:
+            log(f"ADB provider filter check failed: {e}", 'WARNING')
         
         # Query adb_lanes table for current event on this provider+lane
         cur.execute(
@@ -2854,14 +2956,36 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         
         # Get deeplink for this event
         db_event_id = event_row["id"]
-        link_info = get_event_link_info(conn, db_event_id, uid_col, primary_col, full_col)
-        deeplink_url = link_info.get("deeplink_url") or link_info.get("deeplink_url_full") or event_id_str
-        
+        # Resolve deeplink *for this provider lane* (do not use enabled_services selection).
+        provider_link = get_provider_playable_link(conn, db_event_id, provider_code)
+        deeplink_url = provider_link.get('deeplink')
+
+        # Provider lanes must remain provider-specific: do NOT fall back to generic best-link
+        # selection across other providers.
+        if not deeplink_url:
+            if (request.args.get("format") or "text").lower() == "text":
+                return Response('', mimetype='text/plain')
+            return jsonify({
+                'status': 'success',
+                'channel_id': channel_id,
+                'provider_code': provider_code,
+                'lane_number': lane_number,
+                'title': event_row['title'] if event_row else None,
+                'channel_name': event_row['channel_name'] if event_row else None,
+                'event_start_utc': start_utc,
+                'event_end_utc': stop_utc,
+                'start_utc': start_utc,
+                'stop_utc': stop_utc,
+                'deeplink': None,
+                'deeplink_format': deeplink_format,
+                'message': f'No playable for provider {provider_code}'
+            })
+
         # Convert to HTTP format if requested (for Android/Fire TV)
         if deeplink_format == "http" and deeplink_url:
             try:
                 from deeplink_converter import generate_http_deeplink
-                playable_uuid = get_playable_id_for_event(conn, db_event_id, provider_code)
+                playable_uuid = (provider_link.get("playable_id") if isinstance(provider_link, dict) else None) or get_playable_id_for_event(conn, db_event_id, provider_code)
                 try:
                     http_version = generate_http_deeplink(
                         deeplink_url,
