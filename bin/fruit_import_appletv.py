@@ -10,6 +10,7 @@ Usage:
 import argparse
 import json
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -20,6 +21,59 @@ PROVIDER_CHANNEL_RANGES = {
     "paramount-plus": 4000, "max": 5000, "dazn": 6000, "cbs-sports": 7000,
     "fox-sports": 8000, "nbc-sports": 8100, "fubo": 8200, "mlb-tv": 8300, "nba-league-pass": 8400,
 }
+
+PROGRESS_EVERY = 250
+
+
+def _log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+_SCHEMA_ENSURED = False
+
+
+def count_apple_events_in_db(db_path: str) -> int:
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        total = cur.execute("SELECT COUNT(*) FROM apple_events").fetchone()[0]
+        conn.close()
+        return int(total or 0)
+    except Exception:
+        return 0
+
+
+def iter_apple_events_from_db(db_path: str):
+    """Stream events from apple_events.db (GZIP decompress + JSON parse) without materializing a huge list.
+
+    This keeps memory stable and avoids GC / swapping slowdowns on long runs.
+    """
+    import gzip
+
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    try:
+        for event_id, source, compressed in cur.execute(
+            "SELECT event_id, source, raw_json_gzip FROM apple_events"
+        ):
+            try:
+                json_str = gzip.decompress(compressed).decode("utf-8")
+                raw_data = json.loads(json_str)
+            except Exception as e:
+                _log(f"Warning: Failed to decompress/parse event {event_id}: {e}")
+                continue
+
+            yield {
+                "id": event_id,
+                "status": 200,
+                "raw_data": raw_data,
+                "source": source,
+            }
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def normalize_provider(channel_name: Optional[str]) -> str:
     if not channel_name:
@@ -315,30 +369,51 @@ def load_apple_events(json_path: str) -> List[Dict[str, Any]]:
     raise ValueError(f"Unexpected JSON format in {json_path}")
 
 def load_apple_events_from_db(db_path: str) -> List[Dict[str, Any]]:
-    """Load events from apple_events.db (with GZIP decompression)"""
+    """Load events from apple_events.db (with GZIP decompression)
+
+    This can be slow (GZIP + JSON parse), so we log periodic progress.
+    """
     import gzip
-    
+
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
-    
-    cur.execute("SELECT event_id, source, raw_json_gzip FROM apple_events")
-    
-    events = []
-    for event_id, source, compressed in cur.fetchall():
+
+    try:
+        total = cur.execute("SELECT COUNT(*) FROM apple_events").fetchone()[0]
+    except Exception:
+        total = 0
+
+    _log(f"Loading Apple events from DB (rows={total}) ...")
+
+    events: List[Dict[str, Any]] = []
+    t0 = time.perf_counter()
+
+    # Stream rows (avoid fetchall) so we can report progress as we go.
+    for event_id, source, compressed in cur.execute(
+        "SELECT event_id, source, raw_json_gzip FROM apple_events"
+    ):
         try:
-            # Decompress GZIP
-            json_str = gzip.decompress(compressed).decode('utf-8')
+            json_str = gzip.decompress(compressed).decode("utf-8")
             raw_data = json.loads(json_str)
-            
-            events.append({
-                "id": event_id,
-                "status": 200,
-                "raw_data": raw_data,
-                "source": source
-            })
+
+            events.append(
+                {
+                    "id": event_id,
+                    "status": 200,
+                    "raw_data": raw_data,
+                    "source": source,
+                }
+            )
         except Exception as e:
-            print(f"Warning: Failed to decompress event {event_id}: {e}")
-    
+            _log(f"Warning: Failed to decompress event {event_id}: {e}")
+
+        n = len(events)
+        if total and (n == 1 or n % PROGRESS_EVERY == 0 or n == total):
+            dt = time.perf_counter() - t0
+            rps = (n / dt) if dt > 0 else 0.0
+            pct = (n / total) * 100.0
+            _log(f"  load progress: {n}/{total} ({pct:.1f}%)  rate={rps:.0f} rows/s")
+
     conn.close()
     return events
 
@@ -348,6 +423,7 @@ def ensure_events_schema(conn: sqlite3.Connection):
     This importer historically relied on an external ingester to create tables.
     We now make the importer self-sufficient and idempotent.
     """
+    global _SCHEMA_ENSURED
     cur = conn.cursor()
 
     # Core events table (existing schema)
@@ -406,6 +482,7 @@ def ensure_events_schema(conn: sqlite3.Connection):
 
     conn.commit()
 
+    _SCHEMA_ENSURED = True
 def upsert_event(conn: sqlite3.Connection, event: Dict[str, Any], dry: bool = False):
     if dry:
         print(f"[DRY] event {event['id']} :: {event['title']}")
@@ -570,12 +647,14 @@ def upsert_playables(conn: sqlite3.Connection, playables: List[Tuple], dry: bool
         return
     
     if dry:
-        print(f"[DRY] playables x{len(playables)}")
+        _log(f"[DRY] playables x{len(playables)}")
         return
     
     cur = conn.cursor()
     # Ensure playables table exists (idempotent)
-    ensure_events_schema(conn)
+    global _SCHEMA_ENSURED
+    if not _SCHEMA_ENSURED:
+        ensure_events_schema(conn)
     # Delete existing playables for this event (refresh)
     if playables:
         event_id = playables[0][0]
@@ -599,15 +678,18 @@ def main():
     args = ap.parse_args()
 
     # Determine source: DB or JSON
+    total = 0
     if args.apple_db:
-        events = load_apple_events_from_db(args.apple_db)
-        print(f"Loaded {len(events)} Apple TV events from database")
+        total = count_apple_events_in_db(args.apple_db)
+        events = iter_apple_events_from_db(args.apple_db)
+        _log(f"Streaming {total} Apple TV events from database")
     elif args.apple_json:
         events = load_apple_events(args.apple_json)
-        print(f"Loaded {len(events)} Apple TV events from JSON")
+        total = len(events)
+        _log(f"Loaded {total} Apple TV events from JSON")
     else:
         ap.error("You must provide either --apple-db (recommended) or --apple-json (legacy)")
-    
+
     db_path_str = args.fruit_db or args.peacock_db
     if not db_path_str:
         ap.error("You must provide --fruit-db (preferred) or --peacock-db")
@@ -620,7 +702,11 @@ def main():
     inserted = 0
     playables_extracted = 0
     
-    for e in events:
+    t0 = time.perf_counter()
+    last_t = t0
+    last_i = 0
+
+    for i, e in enumerate(events, 1):
         # Normalize ONCE - use for everything
         normalized = normalize_event_structure(e)
         
@@ -640,12 +726,24 @@ def main():
         
         inserted += 1
 
+        if total and (i == 1 or i % PROGRESS_EVERY == 0 or i == total):
+            now = time.perf_counter()
+            chunk_dt = now - last_t
+            chunk_n = i - last_i
+            chunk_rate = (chunk_n / chunk_dt) if chunk_dt > 0 else 0.0
+            avg_dt = now - t0
+            avg_rate = (i / avg_dt) if avg_dt > 0 else 0.0
+            pct = (i / total) * 100.0
+            _log(f"Import progress: {i}/{total} ({pct:.1f}%)  rate={chunk_rate:.1f} ev/s (avg {avg_rate:.1f})  playables={playables_extracted}")
+            last_t = now
+            last_i = i
+
     if not args.dry_run:
         conn.commit()
     conn.close()
     
-    print(f"âœ… Imported/updated {inserted} events into {db_path}")
-    print(f"âœ… Extracted {playables_extracted} playables total")
+    _log(f"OK: Imported/updated {inserted} events into {db_path}")
+    _log(f"OK: Extracted {playables_extracted} playables total")
 
 if __name__ == "__main__":
     main()

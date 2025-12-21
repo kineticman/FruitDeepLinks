@@ -37,6 +37,7 @@ Recent work focused on capturing **more deeplinks per event** and making provide
 - **Improved ADB compatibility** for Android/Fire workflows.
 - **Improved HTTP fallback generation** (best‑guess web URLs) for cases where native schemes aren’t usable.
 - **Metadata/labeling fixes** so Category/Description match the chosen provider (e.g., CBS Sports → Paramount+), and duplicate “Available on …” strings are avoided.
+- **Chrome Capture support (BETA)**: exports a Chrome‑Capture friendly lanes playlist and adds `/api/lane/<n>/launch` (302 redirect) so capture/launcher tools can follow an HTTP URL. **This is heavily dependent on FruitDeepLinks being able to derive a reliable HTTP deeplink** for the chosen provider — expect occasional misses and ongoing tuning.
 
 ---
 
@@ -61,12 +62,13 @@ Portainer will clone the repo and use `docker-compose.yml` plus the included `Do
 
 Scroll down to the **Environment variables** section for the stack.
 
-Most people only need to set these three values:
+Most people only need to set these four values:
 
 ```env
-# REQUIRED (almost everyone should set these)
+# REQUIRED (typical setup for Channels DVR)
 SERVER_URL=http://192.168.86.80:6655
 FRUIT_HOST_PORT=6655
+CHANNELS_DVR_IP=192.168.86.80
 TZ=America/New_York
 ```
 
@@ -74,9 +76,13 @@ If you want extra automation / features, you can add these as well:
 
 ```env
 # OPTIONAL (only if you want extra automation/features)
+
 # Auto Channels DVR guide refresh
-CHANNELS_DVR_IP=192.168.86.72
 CHANNELS_SOURCE_NAME=fruitdeeplinks-direct  # must match your Channels "Custom Channels" source name
+
+# Chrome Capture (BETA) – only if you use CC4C/AH4C
+CC_SERVER=192.168.86.80
+CC_PORT=8020  # example: set to your Chrome Capture port
 
 # Lanes (BETA) – only needed if you experiment with lane channels
 FRUIT_LANES=50
@@ -86,8 +92,10 @@ FRUIT_LANE_START_CH=9000
 Notes:
 
 - If you **omit** an env var, Docker uses the default from `docker-compose.yml` (the part after `:-`).
-- Most users only need to set the three **REQUIRED** values.
-- `CHANNELS_DVR_IP` / `CHANNELS_SOURCE_NAME` are only needed if you want FruitDeepLinks to auto-refresh your Channels DVR XMLTV source.
+- Most users only need to set the four **REQUIRED** values.
+- `CHANNELS_DVR_IP` should be the IP/hostname of your Channels DVR server.
+- `CHANNELS_SOURCE_NAME` is only needed if you want FruitDeepLinks to auto-refresh a specific Channels “Custom Channels” source.
+- `CC_SERVER` / `CC_PORT` are only needed if you’re using **Chrome Capture (BETA)**.
 - `SERVER_URL` is the base URL embedded in generated links (it should be reachable by your playback devices).
 - `FRUIT_HOST_PORT` is the host port Docker exposes; it should match the port in `SERVER_URL`.
 - Scheduling/refresh runs via **APScheduler** inside the container (no cron).
@@ -112,7 +120,7 @@ You should see the FruitDeepLinks web UI.
 
 If you prefer bare Docker Compose on the host:
 
-```bash
+```powershell
 git clone https://github.com/kineticman/FruitDeepLinks.git
 cd FruitDeepLinks
 
@@ -142,7 +150,7 @@ Direct channels expose **one channel per event** (great for browsing specific ga
    This is required so Channels passes the deeplink URL through to your device.
 4. Refresh guide data.
 
-If you want the daily refresh script to auto-refresh this source, make sure the **XMLTV source name in Channels DVR** matches `CHANNELS_SOURCE_NAME` (default `fruitdeeplinks`).
+To enable automatic guide refresh, make sure the **Custom Channels source name in Channels DVR** exactly matches `CHANNELS_SOURCE_NAME` (default: `fruitdeeplinks-direct`).
 
 ### Lanes & ADB Provider Lanes (BETA)
 
@@ -242,6 +250,12 @@ Configure what you see in the web dashboard:
 - Uses `adb_lanes` and `provider_lanes` tables under the hood.
 - Consider this experimental for now.
 
+**4. Chrome Capture Lanes (BETA)** (`multisource_lanes_chrome.m3u`)
+
+- For users running **Chrome Capture (CC4C/AH4C)** as an external launcher/capture layer.
+- The playlist points Chrome Capture at FruitDeepLinks’ lane “launch” endpoint (`/api/lane/<n>/launch`), which responds with a **302 redirect** to the best HTTP deeplink FruitDeepLinks can derive for the event.
+- **Important (beta):** this is **only as good as the HTTP fallback mapping**. Some providers are scheme‑only, geo/entitlement gated, or change web URLs frequently — expect occasional broken launches until mappings are refined.
+
 ### Web Dashboard
 
 Access at `http://your-server-ip:6655`:
@@ -281,14 +295,22 @@ Access at `http://your-server-ip:6655`:
 These key env vars cover 90% of setups (whether in Portainer or `.env`):
 
 ```env
-# Network & URLs
+# REQUIRED (typical setup)
 SERVER_URL=http://192.168.86.80:6655
 FRUIT_HOST_PORT=6655
+CHANNELS_DVR_IP=192.168.86.80
 TZ=America/New_York
 
-# Channels DVR integration (optional, but recommended)
-CHANNELS_DVR_IP=192.168.86.72
+# Channels DVR integration (recommended)
 CHANNELS_SOURCE_NAME=fruitdeeplinks-direct
+
+# Auto-refresh (recommended)
+AUTO_REFRESH_ENABLED=true
+AUTO_REFRESH_TIME=02:30
+
+# Chrome Capture (BETA) – only if you use CC4C/AH4C
+CC_SERVER=192.168.86.80
+CC_PORT=8020  # example: set to your Chrome Capture port
 
 # Virtual lanes (BETA)
 FRUIT_LANES=50
@@ -303,9 +325,6 @@ CDVR_DVR_PATH=/mnt/storage/DVR
 CDVR_SERVER_PORT=8089
 CDVR_API_PORT=57000
 
-# Auto-refresh
-AUTO_REFRESH_ENABLED=true
-AUTO_REFRESH_TIME=02:30
 ```
 
 All other values have sensible defaults and can be adjusted later via Portainer or `.env` if needed. Lane-related settings only matter if you turn on the **BETA lanes** feature.
@@ -334,6 +353,25 @@ docker exec fruitdeeplinks python3 /app/bin/fruit_export_lanes.py
 
 # ADB provider lanes (optional, for ADBTuner/ChromeCapture) - BETA
 docker exec fruitdeeplinks python3 /app/bin/fruit_export_adb_lanes.py
+```
+
+### Chrome Capture (BETA)
+
+FruitDeepLinks can generate a Chrome‑Capture friendly lanes playlist (`out/multisource_lanes_chrome.m3u`) for **CC4C/AH4C**-style launcher/capture workflows.
+
+How it works:
+
+1. The M3U entry calls Chrome Capture’s `/stream?url=...`
+2. The `url` points at FruitDeepLinks: `http://<FRUIT_HOST>:<PORT>/api/lane/<n>/launch`
+3. FruitDeepLinks responds with a **302 redirect** to the best **HTTP** deeplink it can derive for the lane’s current event
+
+**Beta warning:** This is **heavily reliant on FruitDeepLinks being able to find/derive a reliable HTTP deeplink**. Some providers are scheme‑only, geo/entitlement gated, or change web URLs frequently — expect occasional broken launches until mappings are refined.
+
+Enable/configure Chrome Capture with these env vars (only needed if you use it):
+
+```env
+CC_SERVER=192.168.86.80
+CC_PORT=8020  # example: set to your Chrome Capture port
 ```
 
 ### Event-Level Deeplinks (tvOS reliable; Android testing in progress)
@@ -416,6 +454,7 @@ FruitDeepLinks/
 │   ├── direct.m3u                # Direct M3U
 │   ├── multisource_lanes.xml     # Lanes XMLTV [BETA]
 │   ├── multisource_lanes.m3u     # Lanes M3U [BETA]
+│   ├── multisource_lanes_chrome.m3u  # Lanes M3U for Chrome Capture [BETA]
 │   └── ...                       # ADB provider lane outputs (XMLTV + M3U) [BETA]
 ├── logs/                         # Application logs
 ├── docker-compose.yml            # Docker configuration
@@ -589,7 +628,7 @@ Database size: ~15MB
 
 ### Coming Soon
 
-- [ ] Chrome Capture / AH4C integration.
+- [ ] Stabilize Chrome Capture (HTTP deeplink mapping + docs).
 - [ ] Team-based filtering.
 - [ ] Time-of-day filters.
 - [ ] Multi-user profiles.

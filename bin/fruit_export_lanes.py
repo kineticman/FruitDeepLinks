@@ -334,6 +334,10 @@ def build_chrome_m3u(conn: sqlite3.Connection, m3u_path: str, server_url: str, e
     
     print(f"Chrome M3U: {len(lanes)} virtual channels")
     
+    # Get Chrome Capture server settings from environment
+    cc_server = os.getenv("CC_SERVER", "localhost")
+    cc_port = os.getenv("CC_PORT", "8080")
+    
     with open(m3u_path, "w", encoding="utf-8") as f:
         f.write("#EXTM3U\n\n")
         
@@ -343,8 +347,14 @@ def build_chrome_m3u(conn: sqlite3.Connection, m3u_path: str, server_url: str, e
             name = lane.get("name") or f"Sports Lane {lane_id}"
             chno = lane.get("logical_number") or lane_id
             
-            # Chrome Capture URL format - use HTML format with HTTP deeplinks (best guess for Android/Fire TV)
-            stream_url = f"chrome://{server_url}/api/lane/{lane_id}/deeplink?format=html&deeplink_format=http"
+            # Build the deeplink API URL (returns text format)
+            deeplink_api_url = f"{server_url}/api/lane/{lane_id}/launch?deeplink_format=http"
+            
+            # URL-encode the deeplink API URL for Chrome Capture stream proxy
+            encoded_url = urllib.parse.quote(deeplink_api_url, safe='')
+            
+            # Chrome Capture stream proxy format
+            stream_url = f"chrome://{cc_server}:{cc_port}/stream?url={encoded_url}"
             
             f.write(f'#EXTINF:-1 tvg-id="{chan_id}" tvg-name="{name}" tvg-chno="{chno}" group-title="Sports Lanes",{name}\n')
             f.write(f"{stream_url}\n\n")
@@ -373,7 +383,8 @@ def main():
     
     print(f"Using DB: {args.db}")
     print(f"Lanes outputs: {args.xml}, {args.m3u}, {args.chrome_m3u}")
-    print(f"Server URL: {args.server_url}\n")
+    print(f"Server URL: {args.server_url}")
+    print(f"Chrome Capture: {os.getenv('CC_SERVER', 'localhost')}:{os.getenv('CC_PORT', '8080')}\n")
     
     conn = get_conn(args.db)
     

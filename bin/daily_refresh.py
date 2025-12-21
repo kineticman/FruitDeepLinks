@@ -27,6 +27,54 @@ APPLE_AUTH_PATH = DATA_DIR / "apple_uts_auth.json"
 OUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
+# Apple import stamping (lets --skip-scrape be fast by skipping Step 6 when Apple DB unchanged)
+APPLE_IMPORT_STAMP_PATH = DATA_DIR / ".apple_import_stamp.json"
+
+def _load_json(path: Path):
+    try:
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+def _apple_db_signature(path: Path):
+    try:
+        st = path.stat()
+        return {"mtime_ns": getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)), "size": st.st_size}
+    except Exception:
+        return None
+
+def _apple_import_is_fresh(apple_db_path: Path) -> bool:
+    """Return True if Step 6 has already imported the current apple_events.db content."""
+    sig = _apple_db_signature(apple_db_path)
+    if not sig:
+        return False
+    stamp = _load_json(APPLE_IMPORT_STAMP_PATH)
+    if not isinstance(stamp, dict):
+        return False
+    return (
+        stamp.get("apple_db_size") == sig["size"]
+        and stamp.get("apple_db_mtime_ns") == sig["mtime_ns"]
+    )
+
+def _write_apple_import_stamp(apple_db_path: Path):
+    sig = _apple_db_signature(apple_db_path)
+    if not sig:
+        return
+    stamp = {
+        "written_utc": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "apple_db_path": str(apple_db_path),
+        "apple_db_size": sig["size"],
+        "apple_db_mtime_ns": sig["mtime_ns"],
+    }
+    try:
+        APPLE_IMPORT_STAMP_PATH.write_text(json.dumps(stamp, indent=2), encoding="utf-8")
+    except Exception:
+        # Non-fatal
+        pass
+
+
 
 def run_step(step_num, total_steps, description, command, allow_fail: bool = False):
     """Run a pipeline step and handle errors"""
@@ -178,12 +226,23 @@ def main():
         return 1
 
     # Step 6: Import Apple TV events (DB-to-DB from apple_events.db)
-    if not run_step(6, total_steps, "Importing Apple TV events to master database", [
-        "python3", "fruit_import_appletv.py",
-        "--apple-db", str(DATA_DIR / "apple_events.db"),
-        "--fruit-db", str(DB_PATH),
-    ]):
-        return 1
+    # NOTE: Step 6 can be slow (GZIP + JSON parse). If --skip-scrape was used and the Apple DB
+    # hasn't changed since the last successful import, we skip this step to keep "Skip Scrape" fast.
+    force_apple_import = "--force-apple-import" in sys.argv
+
+    if (skip_scrape or skip_apple) and (not force_apple_import) and _apple_import_is_fresh(APPLE_DB_PATH):
+        print("\n" + "=" * 60)
+        print(f"[6/{total_steps}] Importing Apple TV events to master database. SKIPPED (apple_events.db unchanged)")
+        print("=" * 60)
+        print("✔ Step 6 complete (skipped)")
+    else:
+        if not run_step(6, total_steps, "Importing Apple TV events to master database", [
+            "python3", "-u", "fruit_import_appletv.py",
+            "--apple-db", str(APPLE_DB_PATH),
+            "--fruit-db", str(DB_PATH),
+        ]):
+            return 1
+        _write_apple_import_stamp(APPLE_DB_PATH)
 
     # Step 7: Import Kayo events
     kayo_json = OUT_DIR / "kayo_raw.json"

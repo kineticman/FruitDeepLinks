@@ -46,6 +46,16 @@ from typing import Dict, List, Tuple, Optional
 DEFAULT_DB_PATH = Path(__file__).resolve().parents[1] / "data" / "fruit_events.db"
 
 
+
+# Optional: integrate user filter preferences (user_preferences table)
+try:
+    from filter_integration import load_user_preferences, should_include_event
+    FILTERS_AVAILABLE = True
+except Exception:
+    load_user_preferences = None
+    should_include_event = None
+    FILTERS_AVAILABLE = False
+
 def get_logger() -> logging.Logger:
     logging.basicConfig(
         level=logging.INFO,
@@ -208,6 +218,7 @@ def build_lanes_for_provider(
     provider_code: str,
     lane_count: int,
     log: logging.Logger,
+    prefs: Optional[dict] = None,
 ) -> int:
     """Build ADB lanes for a single provider with *non-overlapping* lanes.
 
@@ -297,6 +308,56 @@ def build_lanes_for_provider(
         return dt
 
     # Attach parsed datetimes and sort.
+    # Apply user content filters (disabled sports/leagues) for ADB lanes, if available.
+    if prefs and FILTERS_AVAILABLE and should_include_event:
+        disabled_sports = prefs.get("disabled_sports") or []
+        disabled_leagues = prefs.get("disabled_leagues") or []
+        if disabled_sports or disabled_leagues:
+            # Figure out events PK column for lookups (usually 'id')
+            cur = conn.cursor()
+            cur.execute("PRAGMA table_info(events)")
+            ev_cols = cur.fetchall()
+            pk_col = None
+            for col in ev_cols:
+                # PRAGMA table_info: cid, name, type, notnull, dflt_value, pk
+                if len(col) >= 6 and col[5] == 1:
+                    pk_col = col[1]
+                    break
+            if not pk_col:
+                pk_col = "id"
+    
+            col_names = {c[1] for c in ev_cols}
+            can_filter = ("genres_json" in col_names) or ("classification_json" in col_names)
+    
+            if can_filter:
+                before_n = len(valid_events)
+                filtered = []
+                for (eid, s, t) in valid_events:
+                    try:
+                        cur.execute(
+                            f"SELECT genres_json, classification_json FROM events WHERE {pk_col} = ? LIMIT 1",
+                            (eid,),
+                        )
+                        row = cur.fetchone()
+                        ev = {"genres_json": None, "classification_json": None}
+                        if row:
+                            ev["genres_json"] = row[0]
+                            ev["classification_json"] = row[1]
+                        if should_include_event(ev, prefs):
+                            filtered.append((eid, s, t))
+                    except Exception:
+                        # Fail-open for any parsing/lookup issues
+                        filtered.append((eid, s, t))
+    
+                valid_events = filtered
+                removed = before_n - len(valid_events)
+                if removed:
+                    log.info(
+                        "Provider %s: filtered out %d events due to disabled_sports/leagues.",
+                        provider_code,
+                        removed,
+                    )
+
     events_with_dt = [
         (event_id, start_utc, stop_utc, _parse_iso(start_utc), _parse_iso(stop_utc))
         for (event_id, start_utc, stop_utc) in valid_events
@@ -371,6 +432,27 @@ def build_adb_lanes(db_path: Path, provider_filter: Optional[str] = None) -> Non
     conn = sqlite3.connect(str(db_path))
     try:
         conn.row_factory = sqlite3.Row
+        # Load user preferences (filters) if available.
+        prefs = None
+        enabled_services = []
+        if FILTERS_AVAILABLE and load_user_preferences:
+            try:
+                prefs = load_user_preferences(conn)
+                enabled_services = prefs.get("enabled_services") or []
+                log.info(
+                    "ADB filters loaded: enabled_services=%d disabled_sports=%d disabled_leagues=%d",
+                    len(enabled_services),
+                    len(prefs.get("disabled_sports") or []),
+                    len(prefs.get("disabled_leagues") or []),
+                )
+            except Exception as e:
+                log.warning(
+                    "Could not load user preferences for ADB lanes; proceeding without filters: %s",
+                    e,
+                )
+                prefs = None
+                enabled_services = []
+
 
         # Sanity-check adb_lanes table exists
         cur = conn.cursor()
@@ -406,8 +488,21 @@ def build_adb_lanes(db_path: Path, provider_filter: Optional[str] = None) -> Non
 
         total_inserted = 0
         for code, lane_count in providers.items():
-            inserted = build_lanes_for_provider(conn, code, lane_count, log)
+            # Always clear existing rows for this provider so config/filter changes take effect.
+            clear_adb_lanes(conn, log, provider_code=code)
+        
+            # If the user has explicitly limited enabled_services, respect it for ADB lanes too:
+            # providers not in enabled_services are treated as "disabled" for ADB outputs.
+            if enabled_services and code not in enabled_services:
+                log.info(
+                    "Skipping provider %s because it is not in enabled_services filters.",
+                    code,
+                )
+                continue
+        
+            inserted = build_lanes_for_provider(conn, code, lane_count, log, prefs=prefs)
             total_inserted += inserted
+
 
         log.info(
             "ADB lane build complete. Total adb_lanes rows inserted: %d",

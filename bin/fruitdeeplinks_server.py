@@ -15,7 +15,7 @@ import time
 import tempfile
 import requests
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import deque
 
 from flask import (
@@ -25,6 +25,7 @@ from flask import (
     send_file,
     Response,
     stream_with_context,
+    redirect,
 )
 from flask_cors import CORS
 import urllib.parse
@@ -94,7 +95,22 @@ app = Flask(__name__)
 CORS(app)
 
 # Global state
-log_buffer = deque(maxlen=1000)  # Keep last 1000 log lines
+log_lock = threading.Lock()
+log_seq = 0
+# Keep last 1000 log lines as (seq, line). seq is monotonic so streaming works even when deque is full.
+log_buffer = deque(maxlen=1000)
+
+def append_log_line(line: str) -> int:
+    """Append a log line to the in-memory buffer and return its sequence number."""
+    global log_seq
+    if line is None:
+        return log_seq
+    line = str(line).rstrip("\n")
+    with log_lock:
+        log_seq += 1
+        log_buffer.append((log_seq, line))
+        return log_seq
+
 refresh_status = {
     "running": False,
     "last_run": None,
@@ -125,7 +141,7 @@ class LogCapture:
     def write(self, message):
         if self.enabled and message.strip():
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            log_buffer.append(f"[{timestamp}] {message.strip()}")
+            append_log_line(f"[{timestamp}] {message.strip()}")
 
     def flush(self):
         pass
@@ -138,7 +154,7 @@ def log(message, level="INFO"):
     """Add a log message"""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_line = f"[{timestamp}] [{level}] {message}"
-    log_buffer.append(log_line)
+    append_log_line(log_line)
     print(log_line)
 
 
@@ -756,6 +772,77 @@ def get_event_link_info(conn, event_id, uid_col, primary_deeplink_col, full_deep
 
 
 
+def get_provider_playable_link(conn, event_id: str, provider_code: str) -> dict:
+    """Return provider-specific deeplink info for an event from playables.
+
+    Used by provider-based ADB lanes. This intentionally bypasses enabled_services
+    selection; the provider lane should return *its provider's* deeplink when possible.
+    """
+    if not event_id or not provider_code:
+        return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+
+    try:
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(playables)")
+        cols = {row[1] for row in cur.fetchall()}
+
+        provider_col = "provider" if "provider" in cols else ("provider_code" if "provider_code" in cols else None)
+        if not provider_col:
+            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+
+        event_fk = "event_id" if "event_id" in cols else ("id" if "id" in cols else None)
+        if not event_fk:
+            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+
+        logical_col = "logical_service" if "logical_service" in cols else None
+        playable_id_col = "playable_id" if "playable_id" in cols else None
+        http_col = "http_deeplink_url" if "http_deeplink_url" in cols else None
+        priority_col = "priority" if "priority" in cols else None
+
+        deeplink_cols = [c for c in ["deeplink_play", "deeplink_open", "playable_url"] if c in cols]
+        if not deeplink_cols:
+            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+
+        select_cols = deeplink_cols[:]
+        if http_col:
+            select_cols.append(http_col)
+        if playable_id_col:
+            select_cols.append(playable_id_col)
+
+        params = [event_id]
+        if logical_col:
+            where = f"{event_fk} = ? AND ({logical_col} = ? OR {provider_col} = ?)"
+            params.extend([provider_code, provider_code])
+        else:
+            where = f"{event_fk} = ? AND {provider_col} = ?"
+            params.append(provider_code)
+
+        order = f"ORDER BY {priority_col} ASC" if priority_col else ""
+        sql = f"SELECT {', '.join(select_cols)} FROM playables WHERE {where} {order} LIMIT 1"
+
+        cur.execute(sql, tuple(params))
+        row = cur.fetchone()
+        if not row:
+            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+
+        if isinstance(row, sqlite3.Row):
+            r = dict(row)
+            deeplink = None
+            for c in ["deeplink_play", "deeplink_open", "playable_url"]:
+                if r.get(c):
+                    deeplink = r.get(c)
+                    break
+            return {
+                "deeplink": deeplink,
+                "http_deeplink_url": r.get(http_col) if http_col else None,
+                "playable_id": r.get(playable_id_col) if playable_id_col else None,
+            }
+
+        return {"deeplink": row[0], "http_deeplink_url": None, "playable_id": None}
+    except Exception:
+        return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+
+
 def get_playable_id_for_event(conn, event_id: str, provider_code: str = None) -> str:
     """Best-effort lookup of playables.playable_id for an event (+ optional provider).
 
@@ -1036,7 +1123,7 @@ def run_refresh(skip_scrape=False, source="manual"):
             line = line.rstrip("\n")
             if not line:
                 continue
-            log_buffer.append(line)
+            append_log_line(line)
             # Try to surface step info like "[1/5] ..."
             if "[" in line and "/" in line and "]" in line:
                 refresh_status["current_step"] = line.strip()
@@ -1403,6 +1490,413 @@ def adb_config_page():
     """ADB configuration page"""
     return load_template("adb_config.html")
 
+# ==================== Event Inspector ====================
+@app.route("/events")
+def events_page():
+    """Event Inspector UI"""
+    return load_template("events.html")
+
+
+@app.route("/events/now")
+def events_now_redirect():
+    """Shortcut to "Now Playing" preset in Event Inspector"""
+    return redirect("/events?live=1&has_playables=1")
+
+
+@app.route("/events/<path:event_id>")
+def event_detail_page(event_id):
+    """Event detail UI"""
+    return load_template("event_detail.html")
+
+
+def _db_has_column(conn, table_name, col_name):
+    try:
+        cur = conn.cursor()
+        cur.execute(f"PRAGMA table_info({table_name})")
+        cols = [r[1] for r in cur.fetchall()]
+        return col_name in cols
+    except Exception:
+        return False
+
+
+def _row_to_dict(row):
+    if row is None:
+        return None
+    return {k: row[k] for k in row.keys()}
+
+
+def _pretty_json(val):
+    if val is None:
+        return None
+    if isinstance(val, (dict, list)):
+        try:
+            return json.dumps(val, indent=2, ensure_ascii=False, sort_keys=False)
+        except Exception:
+            return str(val)
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return None
+        try:
+            return json.dumps(json.loads(s), indent=2, ensure_ascii=False, sort_keys=False)
+        except Exception:
+            return val
+    try:
+        return json.dumps(val, indent=2, ensure_ascii=False, sort_keys=False)
+    except Exception:
+        return str(val)
+
+
+def _parse_int(name, default, min_v=None, max_v=None):
+    try:
+        v = int(request.args.get(name, default))
+    except Exception:
+        v = default
+    if min_v is not None:
+        v = max(min_v, v)
+    if max_v is not None:
+        v = min(max_v, v)
+    return v
+
+
+@app.route("/api/events")
+def api_events():
+    """List events in the DB with search + filters + pagination."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"ok": False, "error": "Database not found"}), 404
+
+    conn.row_factory = sqlite3.Row
+
+    q = (request.args.get("q") or "").strip()
+    provider = (request.args.get("provider") or "").strip()
+
+    sort = (request.args.get("sort") or "start_desc").strip()
+    page = _parse_int("page", 1, 1, 99999)
+    page_size = _parse_int("page_size", 50, 1, 500)
+
+    days_back = _parse_int("days_back", 2, 0, 90)
+    days_forward = _parse_int("days_forward", 7, 0, 90)
+
+    live = _parse_int("live", 0, 0, 1)
+    has_playables = _parse_int("has_playables", 0, 0, 1)
+    multi = _parse_int("multi", 0, 0, 1)
+    missing_http = _parse_int("missing_http", 0, 0, 1)
+    premium = _parse_int("premium", 0, 0, 1)
+    free = _parse_int("free", 0, 0, 1)
+
+    has_logical = _db_has_column(conn, "playables", "logical_service")
+    service_expr = "COALESCE(p.logical_service, p.provider)" if has_logical else "p.provider"
+
+    where = []
+    params = []
+
+    # Window: include recently-ended + upcoming by default
+    where.append("datetime(e.end_utc) >= datetime('now', ?)")
+    params.append(f"-{days_back} days")
+    where.append("datetime(e.start_utc) <= datetime('now', ?)")
+    params.append(f"+{days_forward} days")
+
+    if q:
+        like = f"%{q}%"
+        where.append("(" + " OR ".join([
+            "e.title LIKE ?",
+            "e.id LIKE ?",
+            "e.pvid LIKE ?",
+            "e.slug LIKE ?",
+            "e.synopsis LIKE ?",
+            "e.synopsis_brief LIKE ?",
+        ]) + ")")
+        params.extend([like, like, like, like, like, like])
+
+    if provider:
+        where.append(f"EXISTS (SELECT 1 FROM playables p WHERE p.event_id = e.id AND {service_expr} = ?)")
+        params.append(provider)
+
+    if has_playables:
+        where.append("(SELECT COUNT(*) FROM playables p WHERE p.event_id = e.id) > 0")
+
+    if multi:
+        where.append(f"(SELECT COUNT(DISTINCT {service_expr}) FROM playables p WHERE p.event_id = e.id) >= 2")
+
+    if missing_http:
+        if _db_has_column(conn, "playables", "http_deeplink_url"):
+            where.append(
+                "EXISTS (SELECT 1 FROM playables p WHERE p.event_id = e.id "
+                "AND (p.http_deeplink_url IS NULL OR p.http_deeplink_url = '') "
+                "AND (p.deeplink_play IS NOT NULL OR p.deeplink_open IS NOT NULL))"
+            )
+        else:
+            where.append("0")
+
+    if live:
+        where.append("datetime(e.start_utc) <= datetime('now') AND datetime(e.end_utc) > datetime('now')")
+
+    if premium:
+        where.append("COALESCE(e.is_premium, 0) = 1")
+    if free:
+        where.append("COALESCE(e.is_free, 0) = 1")
+
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    order_sql = "ORDER BY datetime(e.start_utc) DESC"
+    if sort == "start_asc":
+        order_sql = "ORDER BY datetime(e.start_utc) ASC"
+    elif sort == "seen_desc":
+        order_sql = "ORDER BY COALESCE(datetime(e.last_seen_utc), datetime(e.created_utc)) DESC"
+    elif sort == "playables_desc":
+        order_sql = "ORDER BY playables_count DESC, datetime(e.start_utc) DESC"
+
+    # Count
+    try:
+        cur = conn.cursor()
+        cur.execute(f"SELECT COUNT(*) FROM events e {where_sql}", params)
+        total = int(cur.fetchone()[0] or 0)
+    except Exception as e:
+        conn.close()
+        return jsonify({"ok": False, "error": f"Count query failed: {e}"}), 500
+
+    offset = (page - 1) * page_size
+
+    query_sql = f"""
+        SELECT
+          e.id,
+          e.title,
+          e.start_utc,
+          e.end_utc,
+          e.channel_name,
+          e.last_seen_utc,
+          COALESCE(e.is_free, 0) AS is_free,
+          COALESCE(e.is_premium, 0) AS is_premium,
+          (SELECT COUNT(*) FROM playables p WHERE p.event_id = e.id) AS playables_count,
+          (SELECT GROUP_CONCAT(DISTINCT {service_expr}) FROM playables p WHERE p.event_id = e.id) AS providers_csv,
+          CASE WHEN datetime(e.start_utc) <= datetime('now') AND datetime(e.end_utc) > datetime('now') THEN 1 ELSE 0 END AS is_live_now
+        FROM events e
+        {where_sql}
+        {order_sql}
+        LIMIT ? OFFSET ?
+    """
+
+    items = []
+    try:
+        cur = conn.cursor()
+        cur.execute(query_sql, params + [page_size, offset])
+        for row in cur.fetchall():
+            d = _row_to_dict(row)
+            providers_csv = d.get("providers_csv") or ""
+            providers = [p for p in providers_csv.split(",") if p] if providers_csv else []
+            d["providers"] = providers
+            d.pop("providers_csv", None)
+            items.append(d)
+    except Exception as e:
+        conn.close()
+        return jsonify({"ok": False, "error": f"List query failed: {e}"}), 500
+
+    conn.close()
+    return jsonify({
+        "ok": True,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "items": items,
+    })
+
+
+@app.route("/api/events/stats")
+def api_events_stats():
+    """Simple KPIs for the Event Inspector window."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"ok": False, "error": "Database not found"}), 404
+
+    conn.row_factory = sqlite3.Row
+
+    days_back = _parse_int("days_back", 2, 0, 90)
+    days_forward = _parse_int("days_forward", 7, 0, 90)
+
+    has_logical = _db_has_column(conn, "playables", "logical_service")
+    service_expr = "COALESCE(p.logical_service, p.provider)" if has_logical else "p.provider"
+
+    window_where = "WHERE datetime(e.end_utc) >= datetime('now', ?) AND datetime(e.start_utc) <= datetime('now', ?)"
+    window_params = [f"-{days_back} days", f"+{days_forward} days"]
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(f"SELECT COUNT(*) FROM events e {window_where}", window_params)
+        window_total = int(cur.fetchone()[0] or 0)
+
+        cur.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM events e
+            {window_where}
+            AND datetime(e.start_utc) <= datetime('now') AND datetime(e.end_utc) > datetime('now')
+            AND (SELECT COUNT(*) FROM playables p WHERE p.event_id = e.id) > 0
+            """,
+            window_params,
+        )
+        live_now = int(cur.fetchone()[0] or 0)
+
+        cur.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM events e
+            {window_where}
+            AND (SELECT COUNT(DISTINCT {service_expr}) FROM playables p WHERE p.event_id = e.id) >= 2
+            """,
+            window_params,
+        )
+        multi_service = int(cur.fetchone()[0] or 0)
+
+        if _db_has_column(conn, "playables", "http_deeplink_url"):
+            cur.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM events e
+                {window_where}
+                AND EXISTS (SELECT 1 FROM playables p WHERE p.event_id = e.id
+                           AND (p.http_deeplink_url IS NULL OR p.http_deeplink_url = '')
+                           AND (p.deeplink_play IS NOT NULL OR p.deeplink_open IS NOT NULL))
+                """,
+                window_params,
+            )
+            missing_http = int(cur.fetchone()[0] or 0)
+        else:
+            missing_http = 0
+
+    except Exception as e:
+        conn.close()
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+    conn.close()
+    return jsonify({
+        "ok": True,
+        "window_total": window_total,
+        "live_now": live_now,
+        "multi_service": multi_service,
+        "missing_http": missing_http,
+    })
+
+
+@app.route("/api/events/<path:event_id>")
+def api_event_detail(event_id):
+    """Return one event row + all playables (raw DB) + parsed json fields."""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"ok": False, "error": "Database not found"}), 404
+    conn.row_factory = sqlite3.Row
+
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM events WHERE id = ?", (event_id,))
+        event_row = cur.fetchone()
+        if not event_row:
+            conn.close()
+            return jsonify({"ok": False, "error": "Event not found"}), 404
+
+        event = _row_to_dict(event_row)
+
+        # Pull playables
+        cur.execute("PRAGMA table_info(playables)")
+        playable_cols = [r[1] for r in cur.fetchall()]
+
+        order_bits = []
+        if "priority" in playable_cols:
+            order_bits.append("COALESCE(priority, -999999) DESC")
+        if "created_utc" in playable_cols:
+            order_bits.append("COALESCE(datetime(created_utc), datetime('now')) DESC")
+        if not order_bits:
+            order_bits.append("rowid DESC")
+        order_sql = " ORDER BY " + ", ".join(order_bits)
+
+        cur.execute(f"SELECT * FROM playables WHERE event_id = ? {order_sql}", (event_id,))
+        playables = [_row_to_dict(r) for r in cur.fetchall()]
+
+        # providers list
+        providers = []
+        if playables:
+            if "logical_service" in playables[0]:
+                providers = sorted({(p.get("logical_service") or p.get("provider") or "") for p in playables if (p.get("logical_service") or p.get("provider"))})
+            else:
+                providers = sorted({(p.get("provider") or "") for p in playables if p.get("provider")})
+
+        # is live now?
+        is_live_now = False
+        try:
+            cur.execute("SELECT CASE WHEN datetime(?) <= datetime('now') AND datetime(?) > datetime('now') THEN 1 ELSE 0 END", (event.get("start_utc"), event.get("end_utc")))
+            is_live_now = bool(cur.fetchone()[0])
+        except Exception:
+            pass
+
+        # parsed json fields from events table
+        json_keys = ["classification_json", "genres_json", "content_segments_json", "raw_attributes_json"]
+        pretty_json_fields = []
+        for k in json_keys:
+            if k in event:
+                pretty_json_fields.append({"key": k, "value": _pretty_json(event.get(k))})
+
+        # best selection (optional)
+        best = None
+        if FILTERING_AVAILABLE:
+            try:
+                prefs = load_user_preferences(conn)
+                enabled_services = prefs.get("enabled_services", [])
+
+                deeplink = None
+                try:
+                    deeplink = get_best_deeplink_for_event(conn, event_id, enabled_services)
+                except Exception:
+                    deeplink = None
+
+                top_playable = None
+                try:
+                    from filter_integration import get_filtered_playables
+                    filtered = get_filtered_playables(conn, event_id, enabled_services)
+                    if filtered:
+                        top_playable = filtered[0]
+                except Exception:
+                    top_playable = None
+
+                if top_playable:
+                    best = {
+                        "provider": top_playable.get("provider"),
+                        "logical_service": top_playable.get("logical_service"),
+                        "deeplink": top_playable.get("deeplink_play") or top_playable.get("deeplink_open") or deeplink,
+                        "http_deeplink_url": top_playable.get("http_deeplink_url"),
+                        "reason": "Top of filtered playables order",
+                    }
+                elif deeplink:
+                    match = None
+                    for p in playables:
+                        if deeplink and (p.get("deeplink_play") == deeplink or p.get("deeplink_open") == deeplink):
+                            match = p
+                            break
+                    best = {
+                        "provider": match.get("provider") if match else None,
+                        "logical_service": match.get("logical_service") if match else None,
+                        "deeplink": deeplink,
+                        "http_deeplink_url": match.get("http_deeplink_url") if match else None,
+                        "reason": "get_best_deeplink_for_event()",
+                    }
+            except Exception:
+                best = None
+
+    except Exception as e:
+        conn.close()
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+    conn.close()
+    return jsonify({
+        "ok": True,
+        "event": event,
+        "playables": playables,
+        "providers": providers,
+        "is_live_now": is_live_now,
+        "pretty_json_fields": pretty_json_fields,
+        "best": best,
+    })
+
 @app.route("/api/status")
 def api_status():
     """Get system status"""
@@ -1468,25 +1962,73 @@ def api_status():
 def api_logs():
     """Get recent logs"""
     count = request.args.get("count", 100, type=int)
-    return jsonify({"logs": list(log_buffer)[-count:], "count": len(log_buffer)})
+    return jsonify({"logs": [l for (_, l) in list(log_buffer)[-count:]], "count": len(log_buffer)})
 
 
 @app.route("/api/logs/stream")
 def api_logs_stream():
-    """Stream logs in real-time (SSE)"""
+    """
+    Stream logs via Server-Sent Events (SSE).
 
+    IMPORTANT: log_buffer is a fixed-size deque, so we track a monotonic seq per line.
+    The client stays connected and receives heartbeats even if no logs are produced.
+    """
     def generate():
-        last_index = len(log_buffer)
+        # Optional query params:
+        #  - tail: send last N lines immediately on connect
+        #  - since: start streaming after a specific seq
+        tail = 0
+        since = 0
+        try:
+            tail = int(request.args.get("tail", "0") or "0")
+            since = int(request.args.get("since", "0") or "0")
+        except Exception:
+            tail = 0
+            since = 0
+
+        last_seq = since
+        heartbeat_ts = time.time()
+
+        # initial comment so proxies flush headers quickly
+        yield ": connected\n\n"
+
+        # Optional tail send
+        if tail and tail > 0:
+            with log_lock:
+                snapshot = list(log_buffer)[-tail:]
+            for seq, line in snapshot:
+                payload = {"seq": seq, "log": line}
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                last_seq = max(last_seq, seq)
+
         while True:
-            current_index = len(log_buffer)
-            if current_index > last_index:
-                for log_line in list(log_buffer)[last_index:]:
-                    yield f"data: {json.dumps({'log': log_line})}\n\n"
-                last_index = current_index
+            out = []
+            with log_lock:
+                snapshot = list(log_buffer)
+
+            for seq, line in snapshot:
+                if seq > last_seq:
+                    out.append((seq, line))
+                    last_seq = seq
+
+            if out:
+                for seq, line in out:
+                    payload = {"seq": seq, "log": line}
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+            # Heartbeat to prevent idle timeouts
+            if (time.time() - heartbeat_ts) >= 15:
+                yield "event: ping\ndata: {}\n\n"
+                heartbeat_ts = time.time()
+
             time.sleep(0.5)
 
-    return Response(generate(), mimetype="text/event-stream")
-
+    headers = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    }
+    return Response(stream_with_context(generate()), mimetype="text/event-stream", headers=headers)
 
 @app.route("/api/refresh", methods=["POST"])
 def api_refresh():
@@ -1599,6 +2141,16 @@ def api_apply_filters():
                         str(DB_PATH),
                     ],
                 ),
+                    (
+                        "fruit_build_adb_lanes.py",
+                        [
+                            "python3",
+                            "-u",
+                            str(BIN_DIR / "fruit_build_adb_lanes.py"),
+                            "--db",
+                            str(DB_PATH),
+                        ],
+                    ),
                 (
                     "fruit_export_lanes.py",
                     [
@@ -1626,7 +2178,7 @@ def api_apply_filters():
                 )
 
                 for line in process.stdout:
-                    log_buffer.append(line.strip())
+                    append_log_line(line.strip())
 
                 process.wait()
 
@@ -2160,6 +2712,92 @@ def api_lane_deeplink(lane_number):
             return Response(deeplink, mimetype="text/plain")
 
 
+
+@app.route("/api/lane/<int:lane_number>/launch")
+def api_lane_launch(lane_number):
+    """
+    Redirect (302) to the best resolved deeplink for a lane.
+
+    Intended for Chrome Capture (and similar clients) that want a single URL
+    which behaves like "tune lane" and forwards to the provider HTTP URL.
+
+    Query Parameters:
+      - deeplink_format: 'http' (default) or 'scheme'
+      - allow_fallback: '1' to allow redirecting to fallback events (default: off)
+      - at: ISO timestamp to evaluate the lane at (optional)
+
+    Behavior:
+      - If a real scheduled event exists (ok=true and event_uid present), returns 302
+        with Location: <deeplink_url_full or deeplink_url>.
+      - If lane is empty (or only has fallback and allow_fallback is not set),
+        returns 404 with empty body (text/plain).
+    """
+    from flask import redirect
+    import urllib.parse
+
+    deeplink_format = (request.args.get("deeplink_format") or "http").lower()
+    allow_fallback = (request.args.get("allow_fallback") or "").lower() in ("1", "true", "yes", "y")
+    at_time = request.args.get("at")
+
+    params = {
+        "format": "json",
+        "include": "deeplink",
+        "deeplink_format": deeplink_format,
+    }
+    if at_time:
+        params["at"] = at_time
+
+    query_string = urllib.parse.urlencode(params)
+
+    # Reuse existing lane resolver logic by calling whatson_lane internally.
+    with app.test_request_context(f"/whatson/{lane_number}?{query_string}"):
+        result = whatson_lane(lane_number)
+
+        # Flask handlers may return (response, status)
+        if isinstance(result, tuple):
+            resp_obj = result[0]
+        else:
+            resp_obj = result
+
+        try:
+            data = resp_obj.get_json()
+        except Exception:
+            data = None
+
+    if not isinstance(data, dict):
+        return Response("", mimetype="text/plain"), 404
+
+    ok = bool(data.get("ok"))
+    event_uid = data.get("event_uid")
+    is_fallback = bool(data.get("is_fallback", False))
+
+    # Strict: require a real event_uid, and reject fallback unless explicitly allowed.
+    if (not ok) or (not event_uid):
+        return Response("", mimetype="text/plain"), 404
+    if is_fallback and not allow_fallback:
+        return Response("", mimetype="text/plain"), 404
+
+    deeplink = (data.get("deeplink_url_full") or data.get("deeplink_url") or data.get("deeplink") or "").strip()
+
+    if not deeplink:
+        return Response("", mimetype="text/plain"), 404
+
+    # Only redirect to http(s) URLs; custom schemes are typically not desirable for redirects.
+    if not (deeplink.startswith("http://") or deeplink.startswith("https://")):
+        log(f"LANE_LAUNCH lane={lane_number} rejected_non_http_deeplink={deeplink}", "WARNING")
+        return Response("", mimetype="text/plain"), 404
+
+    r = redirect(deeplink, code=302)
+
+    # Avoid caching stale redirects.
+    r.headers["Cache-Control"] = "no-store"
+    r.headers["Pragma"] = "no-cache"
+    r.headers["Expires"] = "0"
+
+    log(f"LANE_LAUNCH lane={lane_number} -> {deeplink}", "INFO")
+    return r
+
+
 @app.route("/api/adb/lanes/<provider_code>/<int:lane_number>/deeplink")
 def api_adb_lane_deeplink(provider_code, lane_number):
     """
@@ -2202,6 +2840,27 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         deeplink_format = request.args.get("deeplink_format", "scheme").lower()
         
         cur = conn.cursor()
+
+        # Enforce user filters for provider-specific ADB lanes.
+        # If enabled_services is set (non-empty), provider_code must be allowed.
+        try:
+            from filter_integration import load_user_preferences
+            prefs = load_user_preferences(conn)
+            enabled_services = prefs.get('enabled_services') or []
+            if enabled_services and provider_code not in enabled_services:
+                # Provider filtered out -> behave like 'no event' for ADBTuner.
+                if (request.args.get("format") or "text").lower() == "text":
+                    return Response('', mimetype='text/plain')
+                return jsonify({
+                    'status': 'success',
+                    'deeplink': None,
+                    'title': None,
+                    'provider_code': provider_code,
+                    'lane_number': lane_number,
+                    'message': f'Provider {provider_code} filtered out'
+                })
+        except Exception as e:
+            log(f"ADB provider filter check failed: {e}", 'WARNING')
         
         # Query adb_lanes table for current event on this provider+lane
         cur.execute(
@@ -2297,14 +2956,36 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         
         # Get deeplink for this event
         db_event_id = event_row["id"]
-        link_info = get_event_link_info(conn, db_event_id, uid_col, primary_col, full_col)
-        deeplink_url = link_info.get("deeplink_url") or link_info.get("deeplink_url_full") or event_id_str
-        
+        # Resolve deeplink *for this provider lane* (do not use enabled_services selection).
+        provider_link = get_provider_playable_link(conn, db_event_id, provider_code)
+        deeplink_url = provider_link.get('deeplink')
+
+        # Provider lanes must remain provider-specific: do NOT fall back to generic best-link
+        # selection across other providers.
+        if not deeplink_url:
+            if (request.args.get("format") or "text").lower() == "text":
+                return Response('', mimetype='text/plain')
+            return jsonify({
+                'status': 'success',
+                'channel_id': channel_id,
+                'provider_code': provider_code,
+                'lane_number': lane_number,
+                'title': event_row['title'] if event_row else None,
+                'channel_name': event_row['channel_name'] if event_row else None,
+                'event_start_utc': start_utc,
+                'event_end_utc': stop_utc,
+                'start_utc': start_utc,
+                'stop_utc': stop_utc,
+                'deeplink': None,
+                'deeplink_format': deeplink_format,
+                'message': f'No playable for provider {provider_code}'
+            })
+
         # Convert to HTTP format if requested (for Android/Fire TV)
         if deeplink_format == "http" and deeplink_url:
             try:
                 from deeplink_converter import generate_http_deeplink
-                playable_uuid = get_playable_id_for_event(conn, db_event_id, provider_code)
+                playable_uuid = (provider_link.get("playable_id") if isinstance(provider_link, dict) else None) or get_playable_id_for_event(conn, db_event_id, provider_code)
                 try:
                     http_version = generate_http_deeplink(
                         deeplink_url,
@@ -2782,7 +3463,50 @@ def load_template(template_name):
     for template_path in template_paths:
         if template_path.exists():
             try:
-                return template_path.read_text(encoding="utf-8")
+                html = template_path.read_text(encoding="utf-8")
+
+                # Auto-inject Event Inspector button into existing templates so upgrades don't require manual edits
+                if template_name in ("admin_dashboard.html", "filters.html") and "/events" not in html:
+                    try:
+                        if template_name == "admin_dashboard.html":
+                            html2 = re.sub(
+                                r'(<a\s+href="/filters"[^>]*>.*?</a>)',
+                                r'\1\n      <a href="/events" class="btn btn-secondary">🔎 Event Inspector</a>',
+                                html,
+                                count=1,
+                                flags=re.S,
+                            )
+                            if html2 == html:
+                                html2 = re.sub(
+                                    r'(<div\s+class="nav-bar"[^>]*>)',
+                                    r'\1\n      <a href="/events" class="btn btn-secondary">🔎 Event Inspector</a>',
+                                    html,
+                                    count=1,
+                                    flags=re.S,
+                                )
+                            html = html2
+
+                        elif template_name == "filters.html":
+                            html2 = re.sub(
+                                r'(<a\s+href="/adb"[^>]*>.*?</a>)',
+                                r'\1\n      <a href="/events" class="btn btn-secondary">🔎 Event Inspector</a>',
+                                html,
+                                count=1,
+                                flags=re.S,
+                            )
+                            if html2 == html:
+                                html2 = re.sub(
+                                    r'(<div\s+class="nav-bar"[^>]*>)',
+                                    r'\1\n      <a href="/events" class="btn btn-secondary">🔎 Event Inspector</a>',
+                                    html,
+                                    count=1,
+                                    flags=re.S,
+                                )
+                            html = html2
+                    except Exception:
+                        pass
+
+                return html
             except Exception as e:
                 log(f"Error loading template {template_name}: {e}", "ERROR")
                 continue

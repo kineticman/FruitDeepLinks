@@ -101,6 +101,7 @@ color: #e2e8f0;
 
 <div class="nav-bar">
 <a href="/filters" class="btn btn-secondary">🎛️ Filters & Settings</a>
+<a href="/events" class="btn btn-secondary">🔎 Event Inspector</a>
 <a href="/adb" class="btn btn-secondary">📺 ADB Configuration</a>
 <a href="/api" class="btn btn-secondary">📡 API Helper</a>
 </div>
@@ -350,18 +351,34 @@ logEventSource = new EventSource('/api/logs/stream');
 const container = document.getElementById('log-container');
 
 logEventSource.onmessage = (event) => {
-const data = JSON.parse(event.data);
-const line = document.createElement('div');
-line.className = 'log-line';
-line.textContent = data.log;
-container.appendChild(line);
-container.scrollTop = container.scrollHeight;
+  let lineText = '';
+  try {
+    const obj = JSON.parse(event.data);
+    lineText = (obj && (obj.log ?? obj.line)) ? (obj.log ?? obj.line) : String(event.data || '');
+  } catch (e) {
+    // Backwards-compatible: server may stream plain-text lines
+    lineText = String(event.data || '');
+  }
 
-// Keep only last 500 lines
-while (container.children.length > 500) {
-container.removeChild(container.firstChild);
-}
+  if (!lineText) return;
+
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  line.textContent = lineText;
+  container.appendChild(line);
+  container.scrollTop = container.scrollHeight;
+
+  // Keep only last 500 lines
+  while (container.children.length > 500) {
+    container.removeChild(container.firstChild);
+  }
 };
+
+
+logEventSource.addEventListener('ping', () => {
+  // Keep-alive heartbeat
+  // (No UI update needed; connection staying open is the goal)
+});
 
 logEventSource.onerror = () => {
 document.getElementById('log-status').textContent = ' Reconnecting...';
