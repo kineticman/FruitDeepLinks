@@ -844,7 +844,7 @@ def get_current_events_by_lane(conn, at_ts=None):
     Uses lane_events + events to find the event where:
       datetime(start_utc) <= datetime(at_ts) < datetime(end_utc)
     """
-    from datetime import datetime, timedelta as _dt
+    from datetime import datetime as _dt
 
     if at_ts is None:
         at_ts = _dt.utcnow().isoformat(timespec="seconds")
@@ -891,7 +891,7 @@ def get_fallback_event_for_lane(conn, lane_id, at_ts):
     
     Returns dict with event info or None if no recent event found.
     """
-    from datetime import datetime, timedelta as _dt, timedelta, timezone
+    from datetime import datetime as _dt, timedelta, timezone
     
     padding_minutes = int(os.getenv('FRUIT_PADDING_MINUTES', '45'))
     
@@ -1926,7 +1926,8 @@ def api_logs_stream():
             with log_lock:
                 snapshot = list(log_buffer)[-tail:]
             for seq, line in snapshot:
-                yield f"data: {line}\n\n"
+                payload = {"seq": seq, "log": line}
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 last_seq = max(last_seq, seq)
 
         while True:
@@ -1936,12 +1937,13 @@ def api_logs_stream():
 
             for seq, line in snapshot:
                 if seq > last_seq:
-                    out.append(line)
+                    out.append((seq, line))
                     last_seq = seq
 
             if out:
-                for line in out:
-                    yield f"data: {line}\n\n"
+                for seq, line in out:
+                    payload = {"seq": seq, "log": line}
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
             # Heartbeat to prevent idle timeouts
             if (time.time() - heartbeat_ts) >= 15:
@@ -2746,7 +2748,7 @@ def api_adb_lane_deeplink(provider_code, lane_number):
     conn.row_factory = sqlite3.Row
     
     try:
-        from datetime import datetime, timedelta as _dt
+        from datetime import datetime as _dt
         
         # Get timestamp to query
         at_ts = request.args.get("at")
@@ -3023,7 +3025,7 @@ def whatson_lane(lane_id):
             return Response("", mimetype="text/plain")
         return jsonify({"ok": False, "error": "Database not found"}), 500
 
-    from datetime import datetime, timedelta as _dt
+    from datetime import datetime as _dt
 
     at_ts = request.args.get("at")
     if not at_ts:
@@ -3219,7 +3221,7 @@ def whatson_all():
     if not DB_PATH.exists():
         return jsonify({"ok": False, "error": "Database not found"}), 500
 
-    from datetime import datetime, timedelta as _dt
+    from datetime import datetime as _dt
 
     at_ts = request.args.get("at")
     if not at_ts:

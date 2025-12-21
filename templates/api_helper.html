@@ -151,9 +151,11 @@ color: #38bdf8;
 <a href="#core">Core Endpoints (Health, Status, Files)</a>
 <a href="#adb">ADB Lanes API (ADBTuner Integration)</a>
 <a href="#lanes">Virtual Lanes (Multi-Source Channels)</a>
+<a href="#chromecapture">Chrome Capture (Redirect Tuning)</a>
 <a href="#detector">CDVR Detector (Auto-Launch)</a>
 <a href="#filters">Content Filtering</a>
 <a href="#refresh">Refresh & Admin</a>
+<a href="#events">Event Inspector (Browse Events & Raw Data)</a>
 </div>
 
 <!-- CORE ENDPOINTS -->
@@ -380,6 +382,88 @@ curl "$BASE/whatson/all?include=deeplink" | jq
 curl "$BASE/whatson/all?at=2025-12-09T20:00:00" | jq</pre>
 </div>
 
+
+<!-- CHROME CAPTURE -->
+<h2 class="section-header" id="chromecapture">Chrome Capture (Redirect Tuning)</h2>
+
+<div class="note">
+<div class="note-title">What is Chrome Capture?</div>
+Chrome Capture is an optional companion service (CC_SERVER/CC_PORT) that opens a URL in a controlled Chrome instance.
+FruitDeepLinks can generate a dedicated Chrome playlist (<code>multisource_lanes_chrome.m3u</code>) where each channel points to Chrome Capture,
+which then fetches a FruitDeepLinks endpoint that <strong>302-redirects</strong> to the final provider URL (ESPN/Prime Video/Paramount+, etc.).
+</div>
+
+<div class="card">
+<h2>Lane Deeplink (Virtual Lanes)</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/api/lane/&lt;lane_number&gt;/deeplink</code>
+</div>
+<p class="description">
+Returns the current best deeplink for a virtual lane. Use this for debugging, UI links, or when you want the deeplink value directly.
+</p>
+<div class="params">
+<div><span class="param-name">lane_number</span>: Lane number (1, 2, 3, ...)</div>
+<div><span class="param-name">format</span> (query): <code>json</code>, <code>txt</code>, or <code>html</code> (default: <code>json</code>)</div>
+<div><span class="param-name">deeplink_format</span> (query): <code>http</code> or <code>scheme</code> (default: <code>http</code> for this endpoint)</div>
+</div>
+<pre># Plain text URL (HTTP format)
+curl "$BASE/api/lane/2/deeplink?format=txt&amp;deeplink_format=http"
+
+# JSON
+curl "$BASE/api/lane/2/deeplink?format=json&amp;deeplink_format=http" | jq
+
+# Clickable HTML (handy for quick browser testing)
+curl "$BASE/api/lane/2/deeplink?format=html&amp;deeplink_format=http"</pre>
+</div>
+
+<div class="card">
+<h2>Lane Launch (HTTP Redirect)</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/api/lane/&lt;lane_number&gt;/launch</code>
+</div>
+<p class="description">
+Redirect tuning endpoint. Returns <strong>302 Found</strong> with a <code>Location:</code> header set to the resolved provider URL.
+This is the recommended endpoint for Chrome Capture because Chrome follows redirects automatically.
+</p>
+<div class="params">
+<div><span class="param-name">lane_number</span>: Lane number (1, 2, 3, ...)</div>
+<div><span class="param-name">deeplink_format</span> (query): <code>http</code> (recommended) or <code>scheme</code></div>
+<div><span class="param-name">allow_fallback</span> (query): <code>1</code> to allow redirecting even if the lane is in fallback content (default: strict)</div>
+</div>
+<pre># Returns 302 + Location: https://...
+curl -i "$BASE/api/lane/2/launch?deeplink_format=http"
+
+# Strict mode (default): if lane has no real scheduled event, returns 404 with empty body
+curl -i "$BASE/api/lane/999/launch?deeplink_format=http"
+
+# Allow fallback redirect (debug/testing)
+curl -i "$BASE/api/lane/4/launch?deeplink_format=http&amp;allow_fallback=1"</pre>
+<div class="note">
+<div class="note-title">Redirect notes</div>
+This endpoint only redirects to <code>http://</code> or <code>https://</code> URLs and sets <code>Cache-Control: no-store</code>
+to prevent stale redirects.
+</div>
+</div>
+
+<div class="card">
+<h2>Chrome Capture Playlist Output</h2>
+<p class="description">
+When <code>CC_SERVER</code> and <code>CC_PORT</code> are configured, FruitDeepLinks writes a Chrome-friendly playlist:
+</p>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/out/multisource_lanes_chrome.m3u</code>
+</div>
+<div class="params">
+<div><span class="param-name">CC_SERVER</span>: Host/IP where Chrome Capture is running</div>
+<div><span class="param-name">CC_PORT</span>: Port where Chrome Capture listens (e.g. <code>5589</code>)</div>
+</div>
+<pre># Example chrome:// entry generated in the playlist:
+chrome://CC_SERVER:CC_PORT/stream?url=http%3A%2F%2FYOUR_FRUIT_SERVER%2Fapi%2Flane%2F1%2Flaunch%3Fdeeplink_format%3Dhttp</pre>
+</div>
+
 <!-- CDVR DETECTOR -->
 <h2 class="section-header" id="detector">CDVR Detector (Auto-Launch)</h2>
 
@@ -469,6 +553,87 @@ curl -X POST "$BASE/api/filters/preferences" \
 <div class="note">
 <div class="note-title"> Quick Apply</div>
 Use this after changing filter preferences to immediately regenerate playlists without waiting for a full refresh (~10 seconds vs. ~5 minutes).
+</div>
+</div>
+
+
+<!-- EVENT INSPECTOR -->
+<h2 class="section-header" id="events">Event Inspector (Events & Playables Debug)</h2>
+
+<div class="note">
+<div class="note-title">What is Event Inspector?</div>
+These endpoints power the <code>/events</code> admin page and provide read-only access to the raw event row plus all related playables.
+Use them to search the DB, inspect raw JSON columns, and debug service selection / deeplink fallbacks.
+</div>
+
+<div class="card">
+<h2>List Events (Search / Filters / Paging)</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/api/events</code>
+</div>
+<p class="description">
+Returns a paginated list of events with summary fields (title, times, providers, playables count).
+Supports search + common admin filters.
+</p>
+<div class="params">
+<div><span class="param-name">q</span> (query): Search text (matches id, pvid, slug, title, synopsis)</div>
+<div><span class="param-name">live</span> (query): <code>1</code> to restrict to events live right now</div>
+<div><span class="param-name">has_playables</span> (query): <code>1</code> to restrict to events with at least one playable</div>
+<div><span class="param-name">provider</span> (query): Restrict to events having at least one playable with this provider</div>
+<div><span class="param-name">days_back</span> / <span class="param-name">days_forward</span> (query): Time window filter around now (defaults are set in UI)</div>
+<div><span class="param-name">sort</span> (query): <code>start_desc</code> (default), <code>start_asc</code>, <code>seen_desc</code></div>
+<div><span class="param-name">page</span> / <span class="param-name">page_size</span> (query): Paging controls</div>
+</div>
+<pre># Search by title
+curl "$BASE/api/events?q=Kings"
+
+# Live now with playables
+curl "$BASE/api/events?live=1&amp;has_playables=1"
+
+# Filter to provider (example: sportscenter)
+curl "$BASE/api/events?provider=sportscenter&amp;days_forward=14" | jq</pre>
+</div>
+
+<div class="card">
+<h2>Event Detail (Raw Event + All Playables)</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/api/events/&lt;event_id&gt;</code>
+</div>
+<p class="description">
+Returns the full event row (all DB columns) plus an array of all playables for that event.
+This is the fastest way to inspect raw JSON fields like <code>raw_attributes_json</code> and see every playable/deeplink.
+</p>
+<pre># Dump one event
+curl "$BASE/api/events/appletv-umc.cse.12345" | jq
+
+# Quick look at just playables
+curl "$BASE/api/events/appletv-umc.cse.12345" | jq '.playables[] | {provider, service_name, priority, deeplink_play, http_deeplink_url}'</pre>
+</div>
+
+<div class="card">
+<h2>Event Inspector Stats (Badges / Counts)</h2>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/api/events/stats</code>
+</div>
+<p class="description">
+Returns quick counts used by the Event Inspector UI (e.g., live now, in window, multi-service, missing HTTP fallback).
+</p>
+<pre>curl "$BASE/api/events/stats" | jq</pre>
+</div>
+
+<div class="card">
+<h2>Admin Pages (HTML)</h2>
+<p class="description">Human-friendly pages that use the endpoints above.</p>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/events</code> Search + browse events
+</div>
+<div class="endpoint-line">
+<span class="tag tag-get">GET</span>
+<code>/events/&lt;event_id&gt;</code> Full drill-down detail page
 </div>
 </div>
 

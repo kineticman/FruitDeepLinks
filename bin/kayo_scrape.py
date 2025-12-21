@@ -170,13 +170,23 @@ def normalize_kayo_event(content: Dict[str, Any], sport_from_panel: str) -> Dict
     
     # Extract clickthrough data for more details
     clickthrough = data.get("clickthrough", {})
+
+    # Kayo sometimes provides a linear channel/provider code (e.g., "fsa505")
+    channel_code = clickthrough.get("channel") or content_display.get("linearProvider")
     
     # Sport and league
     sport_name = clickthrough.get("sportName", sport_from_panel)
     # Normalize capitalization: "football" -> "Football"
     if sport_name:
         sport_name = sport_name.title()
-    league_name = clickthrough.get("seriesName") or clickthrough.get("roundName") or sport_name
+    league_name = (
+        clickthrough.get("seriesName")
+        or clickthrough.get("roundName")
+        or next((i.get("value") for i in (content_display.get("infoLine") or [])
+                 if isinstance(i, dict) and i.get("type") == "series"), None)
+        or content_display.get("header")
+        or sport_name
+    )
     
     # Extract times - transmissionTime is the start time
     start_time = clickthrough.get("transmissionTime")
@@ -318,6 +328,7 @@ def normalize_kayo_event(content: Dict[str, Any], sport_from_panel: str) -> Dict
         "title": title,
         "sport": sport_name,
         "league": league_name,
+        "channel_code": channel_code,
         "start_utc": start_time,
         "end_utc": end_time,
         "venue": venue_name,

@@ -74,9 +74,10 @@ def normalize_kayo_event(raw_event: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
     """Convert one Kayo event JSON dict into (event_row, playable_rows).
     
     Maps to existing FruitDeepLinks schema:
-    - channel_provider_id = "kayo"
-    - genres_json = ["Sport Name"]
-    - channel_name = league name
+- channel_name = "Kayo Sports" (human-friendly network label)
+- channel_provider_id = Kayo linear provider code when available (e.g., "fsa505")
+- genres_json = ["Sport Name"]
+- classification_json includes sport + league for quick inspection
     """
     external_id = raw_event.get("external_id")
     if not external_id:
@@ -86,6 +87,30 @@ def normalize_kayo_event(raw_event: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
     title = raw_event.get("title") or external_id
     sport = raw_event.get("sport") or "Sports"
     league = raw_event.get("league") or sport
+
+    # Pull additional metadata from the stored raw Kayo content payload (if present)
+    raw_payload = raw_event.get("raw") or {}
+    raw_data = raw_payload.get("data") or {}
+    clickthrough = raw_data.get("clickthrough") or {}
+    content_display = raw_data.get("contentDisplay") or {}
+
+    # Kayo often has a "linear provider" / channel code like "fsa505"
+    channel_code = raw_event.get("channel_code") or clickthrough.get("channel") or content_display.get("linearProvider")
+
+    # Prefer a league/competition label when available (e.g., "Super Smash")
+    # NOTE: This is NOT used as channel_name; it is stored in classification_json for debugging.
+    info_line = content_display.get("infoLine") or []
+    series_name = None
+    for item in info_line:
+        if isinstance(item, dict) and item.get("type") == "series":
+            series_name = item.get("value")
+            break
+    league_best = league
+    if series_name:
+        league_best = series_name
+    elif content_display.get("header"):
+        league_best = str(content_display.get("header"))
+
     start_utc = raw_event.get("start_utc")
     end_utc = raw_event.get("end_utc")
     venue = raw_event.get("venue")
@@ -112,12 +137,12 @@ def normalize_kayo_event(raw_event: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
         "slug": None,
         "title": title,
         "title_brief": None,
-        "synopsis": None,
+        "synopsis": (content_display.get("synopsis") if isinstance(content_display, dict) else None),
         "synopsis_brief": None,
-        "channel_name": league,  # Use league name as channel name
-        "channel_provider_id": "kayo",  # Provider identifier
+        "channel_name": "Kayo Sports",  # Human-friendly network label (avoid sport/league here)
+        "channel_provider_id": (channel_code or "kayo"),  # Kayo linear provider code when available
         "airing_type": None,
-        "classification_json": None,
+        "classification_json": json.dumps({"sport": sport, "league": league_best}, ensure_ascii=False),
         "genres_json": json.dumps([sport], ensure_ascii=False),  # Sport as genre array
         "content_segments_json": None,
         "is_free": 0,
