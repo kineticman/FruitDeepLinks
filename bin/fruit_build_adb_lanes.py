@@ -106,6 +106,10 @@ def load_events_for_provider(
 ) -> List[Tuple[str, str, str]]:
     """
     Load events (event_id, start_utc, stop_utc) for a given provider_code.
+    
+    IMPORTANT: provider_code is a LOGICAL SERVICE (e.g., 'max', 'peacock_web', 'apple_mls')
+    which may not match the raw 'provider' field in playables. We need to use
+    logical_service_mapper to identify matching playables.
 
     We try to be flexible about actual column names. For events we will look for:
       - primary key: one of ["id", "event_id"]
@@ -118,6 +122,13 @@ def load_events_for_provider(
 
     If we cannot resolve an unambiguous mapping, we raise a RuntimeError with details.
     """
+    # Try to import logical service mapper
+    try:
+        from logical_service_mapper import get_logical_service_for_playable
+        HAS_LOGICAL_MAPPER = True
+    except ImportError:
+        HAS_LOGICAL_MAPPER = False
+    
     # Introspect events schema
     cur = conn.cursor()
     cur.execute("PRAGMA table_info(events);")
@@ -153,16 +164,6 @@ def load_events_for_provider(
     if not playable_cols:
         raise RuntimeError("Table 'playables' not found; adjust load_events_for_provider() to your schema.")
 
-    # Provider column on playables
-    if "provider_code" in playable_cols:
-        provider_col = "provider_code"
-    elif "provider" in playable_cols:
-        provider_col = "provider"
-    else:
-        raise RuntimeError(
-            f"Expected 'provider_code' or 'provider' column on playables table; have columns {sorted(playable_cols)}"
-        )
-
     # Event FK column on playables
     if "event_id" in playable_cols:
         playable_event_fk = "event_id"
@@ -174,29 +175,83 @@ def load_events_for_provider(
             f"Expected 'event_id' or '{event_pk_col}' in columns {sorted(playable_cols)}"
         )
 
-    # Build and execute query dynamically
-    sql = f"""
-        SELECT e.{event_pk_col} AS event_id, e.{start_col} AS start_utc, e.{stop_col} AS stop_utc
-          FROM events e
-          JOIN playables p
-            ON p.{playable_event_fk} = e.{event_pk_col}
-         WHERE p.{provider_col} = ?
-         GROUP BY e.{event_pk_col}, e.{start_col}, e.{stop_col}
-         ORDER BY e.{start_col};
-    """
-    cur.execute(sql, (provider_code,))
-    rows = [(r[0], r[1], r[2]) for r in cur.fetchall()]
-    log.info(
-        "Provider %s: loaded %d events from events/playables "
-        "(events.%s, events.%s, events.%s, playables.%s, playables.%s).",
-        provider_code,
-        len(rows),
-        event_pk_col,
-        start_col,
-        stop_col,
-        playable_event_fk,
-        provider_col,
-    )
+    # Strategy: Query all playables and filter using logical service mapper
+    if HAS_LOGICAL_MAPPER:
+        # Get all playables with their URLs and use logical mapper to filter
+        sql = f"""
+            SELECT DISTINCT e.{event_pk_col} AS event_id, 
+                   e.{start_col} AS start_utc, 
+                   e.{stop_col} AS stop_utc,
+                   p.provider,
+                   p.deeplink_play,
+                   p.deeplink_open,
+                   p.playable_url
+              FROM events e
+              JOIN playables p
+                ON p.{playable_event_fk} = e.{event_pk_col}
+             ORDER BY e.{start_col};
+        """
+        cur.execute(sql)
+        all_rows = cur.fetchall()
+        
+        # Filter using logical service mapper
+        matching_events = {}
+        for row in all_rows:
+            event_id = row[0]
+            start_utc = row[1]
+            stop_utc = row[2]
+            provider = row[3]
+            deeplink_play = row[4]
+            deeplink_open = row[5]
+            playable_url = row[6]
+            
+            logical_service = get_logical_service_for_playable(
+                provider=provider,
+                deeplink_play=deeplink_play,
+                deeplink_open=deeplink_open,
+                playable_url=playable_url,
+                event_id=event_id,
+                conn=conn
+            )
+            
+            if logical_service == provider_code:
+                matching_events[event_id] = (event_id, start_utc, stop_utc)
+        
+        rows = list(matching_events.values())
+        log.info(
+            "Provider %s: loaded %d events using logical service mapping (scanned %d playables).",
+            provider_code,
+            len(rows),
+            len(all_rows)
+        )
+    else:
+        # Fallback: direct provider match (old behavior)
+        log.warning(
+            "logical_service_mapper not available; falling back to direct provider match. "
+            "This may not work for web-based services like 'max', 'peacock_web', etc."
+        )
+        
+        provider_col = "provider"
+        if "provider_code" in playable_cols:
+            provider_col = "provider_code"
+        
+        sql = f"""
+            SELECT e.{event_pk_col} AS event_id, e.{start_col} AS start_utc, e.{stop_col} AS stop_utc
+              FROM events e
+              JOIN playables p
+                ON p.{playable_event_fk} = e.{event_pk_col}
+             WHERE p.{provider_col} = ?
+             GROUP BY e.{event_pk_col}, e.{start_col}, e.{stop_col}
+             ORDER BY e.{start_col};
+        """
+        cur.execute(sql, (provider_code,))
+        rows = [(r[0], r[1], r[2]) for r in cur.fetchall()]
+        log.info(
+            "Provider %s: loaded %d events from events/playables (direct match).",
+            provider_code,
+            len(rows)
+        )
+    
     return rows
 
 
