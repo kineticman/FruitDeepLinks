@@ -449,6 +449,7 @@ def ensure_events_schema(conn: sqlite3.Connection):
         logical_service TEXT,
         deeplink_play TEXT,
         deeplink_open TEXT,
+        http_deeplink_url TEXT,
         playable_url TEXT,
         title TEXT,
         content_id TEXT,
@@ -469,6 +470,7 @@ def ensure_events_schema(conn: sqlite3.Connection):
         "service_name": "TEXT",
         "logical_service": "TEXT",
         "priority": "INTEGER DEFAULT 0",
+        "http_deeplink_url": "TEXT",
         "created_utc": "TEXT"
     })
 
@@ -479,6 +481,7 @@ def ensure_events_schema(conn: sqlite3.Connection):
     cur.execute("CREATE INDEX IF NOT EXISTS idx_playables_event ON playables(event_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_playables_event_priority ON playables(event_id, priority DESC)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_playables_logical_service ON playables(logical_service)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_playables_http_deeplink_url ON playables(http_deeplink_url)")
 
     conn.commit()
 
@@ -529,6 +532,28 @@ def upsert_images(conn: sqlite3.Connection, images: List[Tuple[str, str, str]], 
         "INSERT OR IGNORE INTO event_images (event_id, img_type, url) VALUES (?, ?, ?)",
         images,
     )
+
+
+def compute_http_deeplink_url(deeplink: str | None, provider_hint: str | None = None, playable_id: str | None = None) -> str | None:
+    """Best-effort HTTP deeplink resolver.
+
+    - If it's already http(s), return as-is (this fixes Max/HBO links like https://play.hbomax.com/...).
+    - Otherwise, try deeplink_converter.generate_http_deeplink() if available (scheme → http fallbacks).
+    """
+    if not deeplink:
+        return None
+    if deeplink.startswith("http://") or deeplink.startswith("https://"):
+        return deeplink
+
+    try:
+        from deeplink_converter import generate_http_deeplink  # type: ignore
+    except Exception:
+        return None
+
+    try:
+        return generate_http_deeplink(deeplink, provider=provider_hint, playable_id=playable_id)
+    except Exception:
+        return None
 
 def extract_playables(
     apple_event: Dict[str, Any],
@@ -621,6 +646,12 @@ def extract_playables(
                 logical_service = None
                 priority = 0
 
+        http_deeplink_url = compute_http_deeplink_url(
+            deeplink_play or deeplink_open,
+            provider_hint=(logical_service or provider),
+            playable_id=str(playable_id),
+        )
+
         result.append((
             event_id,
             str(playable_id),
@@ -633,6 +664,7 @@ def extract_playables(
             title,
             content_id,
             priority,
+            http_deeplink_url,
             now_utc
         ))
 
@@ -664,8 +696,8 @@ def upsert_playables(conn: sqlite3.Connection, playables: List[Tuple], dry: bool
     cur.executemany("""
         INSERT INTO playables (
             event_id, playable_id, provider, service_name, logical_service,
-            deeplink_play, deeplink_open, playable_url, title, content_id, priority, created_utc
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            deeplink_play, deeplink_open, playable_url, title, content_id, priority, http_deeplink_url, created_utc
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, playables)
 
 def main():

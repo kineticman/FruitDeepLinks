@@ -569,10 +569,101 @@ except ImportError:
         return True
 
     def get_best_deeplink_for_event(conn, event_id, enabled_services):
-        return None
+        """Return the best playable for an event (dict) based on enabled services + user priority prefs.
+        Falls back to numeric 'priority' (lower is better)."""
+        try:
+            prefs = get_user_preferences(conn)
+        except Exception:
+            prefs = {}
+
+        # Prefer explicit enabled_services argument; else use stored prefs; else allow all
+        enabled = enabled_services or prefs.get("enabled_services") or []
+        if not isinstance(enabled, (list, tuple)):
+            enabled = []
+
+        service_priorities = prefs.get("service_priorities") or {}
+        amazon_penalty = int(prefs.get("amazon_penalty") or 0)
+
+        # Build a rank map from user prefs (lower rank is better)
+        rank_map = {}
+        if isinstance(service_priorities, dict):
+            for k, v in service_priorities.items():
+                try:
+                    rank_map[str(k)] = int(v)
+                except Exception:
+                    continue
+        elif isinstance(service_priorities, (list, tuple)):
+            for i, svc in enumerate(service_priorities):
+                rank_map[str(svc)] = i + 1
+
+        def svc_rank(svc: str) -> int:
+            return rank_map.get(svc or "", 9999)
+
+        def is_amazon(svc: str, provider: str) -> bool:
+            svc = (svc or "").lower()
+            provider = (provider or "").lower()
+            return svc in ("aiv", "amazon", "primevideo", "prime_video") or provider == "aiv"
+
+        cur = conn.cursor()
+        cur.execute(
+            """SELECT playable_id, provider, logical_service, deeplink_play, deeplink_open, http_deeplink_url, priority
+               FROM playables
+               WHERE event_id = ?""",
+            (event_id,),
+        )
+        rows = cur.fetchall()
+
+        playables = []
+        for r in rows:
+            p = {
+                "playable_id": r["playable_id"],
+                "provider": r["provider"],
+                "logical_service": r["logical_service"],
+                "deeplink_play": r["deeplink_play"],
+                "deeplink_open": r["deeplink_open"],
+                "http_deeplink_url": r["http_deeplink_url"],
+                "priority": r["priority"],
+            }
+            # Filter to enabled services if configured
+            if enabled and p["logical_service"] not in enabled:
+                continue
+            # Must have at least some deeplink
+            if not (p["deeplink_play"] or p["deeplink_open"]):
+                continue
+            playables.append(p)
+
+        if not playables:
+            return None
+
+        def norm_priority(val):
+            try:
+                return int(val)
+            except Exception:
+                return 999999
+
+        def sort_key(p):
+            pr = norm_priority(p.get("priority"))
+            if is_amazon(p.get("logical_service"), p.get("provider")) and amazon_penalty:
+                pr += amazon_penalty
+            return (svc_rank(p.get("logical_service")), pr)
+
+        best = sorted(playables, key=sort_key)[0]
+        deeplink = best.get("deeplink_play") or best.get("deeplink_open")
+
+        return {
+            "playable_id": best.get("playable_id"),
+            "provider": best.get("provider"),
+            "logical_service": best.get("logical_service"),
+            "priority": best.get("priority"),
+            "deeplink": deeplink,
+            "http_deeplink_url": best.get("http_deeplink_url"),
+        }
+
 
     def get_fallback_deeplink(event):
+        # Placeholder: keep conservative behavior (no fallback deeplink).
         return None
+
 
 
 def get_event_link_columns(conn):
@@ -1877,11 +1968,24 @@ def api_event_detail(event_id):
                     top_playable = None
 
                 if top_playable:
+                    best_deeplink = (
+                        top_playable.get("deeplink_play")
+                        or top_playable.get("deeplink_open")
+                        or deeplink
+                    )
+                    best_http = top_playable.get("http_deeplink_url")
+                    # Some filter paths don't include http_deeplink_url in the returned dict.
+                    # If the chosen deeplink is already HTTP(S), it's a valid HTTP deeplink.
+                    if (not best_http) and isinstance(best_deeplink, str) and (
+                        best_deeplink.startswith("http://") or best_deeplink.startswith("https://")
+                    ):
+                        best_http = best_deeplink
+
                     best = {
                         "provider": top_playable.get("provider"),
                         "logical_service": top_playable.get("logical_service"),
-                        "deeplink": top_playable.get("deeplink_play") or top_playable.get("deeplink_open") or deeplink,
-                        "http_deeplink_url": top_playable.get("http_deeplink_url"),
+                        "deeplink": best_deeplink,
+                        "http_deeplink_url": best_http,
                         "reason": "Top of filtered playables order",
                     }
                 elif deeplink:
@@ -1894,7 +1998,15 @@ def api_event_detail(event_id):
                         "provider": match.get("provider") if match else None,
                         "logical_service": match.get("logical_service") if match else None,
                         "deeplink": deeplink,
-                        "http_deeplink_url": match.get("http_deeplink_url") if match else None,
+                        "http_deeplink_url": (
+                            (match.get("http_deeplink_url") if match else None)
+                            or (
+                                deeplink
+                                if isinstance(deeplink, str)
+                                and (deeplink.startswith("http://") or deeplink.startswith("https://"))
+                                else None
+                            )
+                        ),
                         "reason": "get_best_deeplink_for_event()",
                     }
             except Exception:
