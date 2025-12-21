@@ -838,7 +838,25 @@ def get_provider_playable_link(conn, event_id: str, provider_code: str) -> dict:
                 "playable_id": r.get(playable_id_col) if playable_id_col else None,
             }
 
-        return {"deeplink": row[0], "http_deeplink_url": None, "playable_id": None}
+        # Fallback when row_factory isn't sqlite3.Row: map columns by index
+        try:
+            r = {select_cols[i]: row[i] for i in range(min(len(select_cols), len(row)))}
+        except Exception:
+            r = {}
+
+        deeplink = None
+        for c in ["deeplink_play", "deeplink_open", "playable_url"]:
+            if r.get(c):
+                deeplink = r.get(c)
+                break
+        if deeplink is None and row:
+            deeplink = row[0]
+
+        return {
+            "deeplink": deeplink,
+            "http_deeplink_url": r.get(http_col) if http_col else None,
+            "playable_id": r.get(playable_id_col) if playable_id_col else None,
+        }
     except Exception:
         return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
 
@@ -913,7 +931,7 @@ def get_current_events_by_lane(conn, at_ts=None):
     """Return dict of lane_id -> minimal current event row at the given time.
 
     Uses lane_events + events to find the event where:
-      datetime(start_utc) <= datetime(at_ts) < datetime(end_utc)
+      datetime(replace(replace(replace(start_utc,'T',' '),'Z',''),'+00:00','')) <= datetime(at_ts) < datetime(replace(replace(replace(end_utc,'T',' '),'Z',''),'+00:00',''))
     """
     from datetime import datetime as _dt
 
@@ -936,8 +954,8 @@ def get_current_events_by_lane(conn, at_ts=None):
                 e.synopsis
             FROM lane_events le
             LEFT JOIN events e ON le.event_id = e.id
-            WHERE datetime(le.start_utc) <= datetime(?)
-              AND datetime(le.end_utc) > datetime(?)
+            WHERE datetime(replace(replace(replace(le.start_utc,'T',' '),'Z',''),'+00:00','')) <= datetime(replace(replace(replace(?,'T',' '),'Z',''),'+00:00',''))
+              AND datetime(replace(replace(replace(le.end_utc,'T',' '),'Z',''),'+00:00','')) > datetime(replace(replace(replace(?,'T',' '),'Z',''),'+00:00',''))
             ORDER BY le.lane_id, le.start_utc
             """,
             (at_ts, at_ts),
@@ -995,8 +1013,8 @@ def get_fallback_event_for_lane(conn, lane_id, at_ts):
             JOIN events e ON le.event_id = e.id
             WHERE le.lane_id = ?
               AND le.is_placeholder = 0
-              AND datetime(le.end_utc) >= datetime(?)
-              AND datetime(le.end_utc) <= datetime(?)
+              AND datetime(replace(replace(replace(le.end_utc,'T',' '),'Z',''),'+00:00','')) >= datetime(replace(replace(replace(?,'T',' '),'Z',''),'+00:00',''))
+              AND datetime(replace(replace(replace(le.end_utc,'T',' '),'Z',''),'+00:00','')) <= datetime(replace(replace(replace(?,'T',' '),'Z',''),'+00:00',''))
             ORDER BY le.end_utc DESC
             LIMIT 1
             """,
@@ -1592,9 +1610,9 @@ def api_events():
     params = []
 
     # Window: include recently-ended + upcoming by default
-    where.append("datetime(e.end_utc) >= datetime('now', ?)")
+    where.append("datetime(replace(replace(replace(e.end_utc,'T',' '),'Z',''),'+00:00','')) >= datetime('now', ?)")
     params.append(f"-{days_back} days")
-    where.append("datetime(e.start_utc) <= datetime('now', ?)")
+    where.append("datetime(replace(replace(replace(e.start_utc,'T',' '),'Z',''),'+00:00','')) <= datetime('now', ?)")
     params.append(f"+{days_forward} days")
 
     if q:
@@ -1630,7 +1648,7 @@ def api_events():
             where.append("0")
 
     if live:
-        where.append("datetime(e.start_utc) <= datetime('now') AND datetime(e.end_utc) > datetime('now')")
+        where.append("datetime(replace(replace(replace(e.start_utc,'T',' '),'Z',''),'+00:00','')) <= datetime('now') AND datetime(replace(replace(replace(e.end_utc,'T',' '),'Z',''),'+00:00','')) > datetime('now')")
 
     if premium:
         where.append("COALESCE(e.is_premium, 0) = 1")
@@ -1639,13 +1657,13 @@ def api_events():
 
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
-    order_sql = "ORDER BY datetime(e.start_utc) DESC"
+    order_sql = "ORDER BY datetime(replace(replace(replace(e.start_utc,'T',' '),'Z',''),'+00:00','')) DESC"
     if sort == "start_asc":
-        order_sql = "ORDER BY datetime(e.start_utc) ASC"
+        order_sql = "ORDER BY datetime(replace(replace(replace(e.start_utc,'T',' '),'Z',''),'+00:00','')) ASC"
     elif sort == "seen_desc":
-        order_sql = "ORDER BY COALESCE(datetime(e.last_seen_utc), datetime(e.created_utc)) DESC"
+        order_sql = "ORDER BY COALESCE(datetime(replace(replace(replace(e.last_seen_utc,'T',' '),'Z',''),'+00:00','')), datetime(replace(replace(replace(e.created_utc,'T',' '),'Z',''),'+00:00',''))) DESC"
     elif sort == "playables_desc":
-        order_sql = "ORDER BY playables_count DESC, datetime(e.start_utc) DESC"
+        order_sql = "ORDER BY playables_count DESC, datetime(replace(replace(replace(e.start_utc,'T',' '),'Z',''),'+00:00','')) DESC"
 
     # Count
     try:
@@ -1670,7 +1688,7 @@ def api_events():
           COALESCE(e.is_premium, 0) AS is_premium,
           (SELECT COUNT(*) FROM playables p WHERE p.event_id = e.id) AS playables_count,
           (SELECT GROUP_CONCAT(DISTINCT {service_expr}) FROM playables p WHERE p.event_id = e.id) AS providers_csv,
-          CASE WHEN datetime(e.start_utc) <= datetime('now') AND datetime(e.end_utc) > datetime('now') THEN 1 ELSE 0 END AS is_live_now
+          CASE WHEN datetime(replace(replace(replace(e.start_utc,'T',' '),'Z',''),'+00:00','')) <= datetime('now') AND datetime(replace(replace(replace(e.end_utc,'T',' '),'Z',''),'+00:00','')) > datetime('now') THEN 1 ELSE 0 END AS is_live_now
         FROM events e
         {where_sql}
         {order_sql}
@@ -1717,7 +1735,7 @@ def api_events_stats():
     has_logical = _db_has_column(conn, "playables", "logical_service")
     service_expr = "COALESCE(p.logical_service, p.provider)" if has_logical else "p.provider"
 
-    window_where = "WHERE datetime(e.end_utc) >= datetime('now', ?) AND datetime(e.start_utc) <= datetime('now', ?)"
+    window_where = "WHERE datetime(replace(replace(replace(e.end_utc,'T',' '),'Z',''),'+00:00','')) >= datetime('now', ?) AND datetime(replace(replace(replace(e.start_utc,'T',' '),'Z',''),'+00:00','')) <= datetime('now', ?)"
     window_params = [f"-{days_back} days", f"+{days_forward} days"]
 
     try:
@@ -1731,7 +1749,7 @@ def api_events_stats():
             SELECT COUNT(*)
             FROM events e
             {window_where}
-            AND datetime(e.start_utc) <= datetime('now') AND datetime(e.end_utc) > datetime('now')
+            AND datetime(replace(replace(replace(e.start_utc,'T',' '),'Z',''),'+00:00','')) <= datetime('now') AND datetime(replace(replace(replace(e.end_utc,'T',' '),'Z',''),'+00:00','')) > datetime('now')
             AND (SELECT COUNT(*) FROM playables p WHERE p.event_id = e.id) > 0
             """,
             window_params,
@@ -1805,7 +1823,7 @@ def api_event_detail(event_id):
         if "priority" in playable_cols:
             order_bits.append("COALESCE(priority, -999999) DESC")
         if "created_utc" in playable_cols:
-            order_bits.append("COALESCE(datetime(created_utc), datetime('now')) DESC")
+            order_bits.append("COALESCE(datetime(replace(replace(replace(created_utc,'T',' '),'Z',''),'+00:00','')), datetime('now')) DESC")
         if not order_bits:
             order_bits.append("rowid DESC")
         order_sql = " ORDER BY " + ", ".join(order_bits)
@@ -1824,7 +1842,7 @@ def api_event_detail(event_id):
         # is live now?
         is_live_now = False
         try:
-            cur.execute("SELECT CASE WHEN datetime(?) <= datetime('now') AND datetime(?) > datetime('now') THEN 1 ELSE 0 END", (event.get("start_utc"), event.get("end_utc")))
+            cur.execute("SELECT CASE WHEN datetime(replace(replace(replace(?,'T',' '),'Z',''),'+00:00','')) <= datetime('now') AND datetime(replace(replace(replace(?,'T',' '),'Z',''),'+00:00','')) > datetime('now') THEN 1 ELSE 0 END", (event.get("start_utc"), event.get("end_utc")))
             is_live_now = bool(cur.fetchone()[0])
         except Exception:
             pass
@@ -2274,7 +2292,7 @@ def api_selection_examples():
                    COUNT(DISTINCT p.logical_service) as service_count
             FROM events e
             JOIN playables p ON e.id = p.event_id
-            WHERE datetime(e.end_utc) > datetime('now')
+            WHERE datetime(replace(replace(replace(e.end_utc,'T',' '),'Z',''),'+00:00','')) > datetime('now')
               AND p.logical_service IS NOT NULL
             GROUP BY e.id
             HAVING service_count > 1
@@ -2434,7 +2452,7 @@ def get_provider_lane_stats(conn: sqlite3.Connection) -> list[dict]:
                 COUNT(DISTINCT p.event_id) as event_count,
                 COUNT(*) as playable_count,
                 COUNT(DISTINCT CASE 
-                    WHEN datetime(e.end_utc) > datetime('now') 
+                    WHEN datetime(replace(replace(replace(e.end_utc,'T',' '),'Z',''),'+00:00','')) > datetime('now') 
                     THEN p.event_id 
                 END) as future_event_count
             FROM playables p
@@ -2452,7 +2470,7 @@ def get_provider_lane_stats(conn: sqlite3.Connection) -> list[dict]:
                 COUNT(DISTINCT p.event_id) as event_count,
                 COUNT(*) as playable_count,
                 COUNT(DISTINCT CASE 
-                    WHEN datetime(e.end_utc) > datetime('now') 
+                    WHEN datetime(replace(replace(replace(e.end_utc,'T',' '),'Z',''),'+00:00','')) > datetime('now') 
                     THEN p.event_id 
                 END) as future_event_count
             FROM playables p
@@ -2687,9 +2705,19 @@ def api_lane_deeplink(lane_number):
             whatson_data = json_lib.loads(data.get_data(as_text=True))
         
         # Extract deeplink
-        deeplink = whatson_data.get("deeplink_url") or whatson_data.get("deeplink")
+        deeplink_format = (request.args.get("deeplink_format", "scheme") or "scheme").lower()
+        if deeplink_format == "http":
+            deeplink = (whatson_data.get("deeplink_url_full")
+                        or whatson_data.get("deeplink_url")
+                        or whatson_data.get("deeplink"))
+        else:
+            deeplink = (whatson_data.get("deeplink_url")
+                        or whatson_data.get("deeplink_url_full")
+                        or whatson_data.get("deeplink"))
         title = whatson_data.get("title")
-        event_id = whatson_data.get("event_id")
+        event_id = (whatson_data.get("event_id")
+                    or whatson_data.get("event_uid")
+                    or whatson_data.get("pvid"))
         
         # Return in requested format
         if format_type == "html":
@@ -2873,8 +2901,8 @@ def api_adb_lane_deeplink(provider_code, lane_number):
             FROM adb_lanes
             WHERE provider_code = ?
               AND lane_number = ?
-              AND datetime(start_utc) <= datetime(?)
-              AND datetime(stop_utc) > datetime(?)
+              AND datetime(replace(replace(replace(start_utc,'T',' '),'Z',''),'+00:00','')) <= datetime(replace(replace(replace(?,'T',' '),'Z',''),'+00:00',''))
+              AND datetime(replace(replace(replace(stop_utc,'T',' '),'Z',''),'+00:00','')) > datetime(replace(replace(replace(?,'T',' '),'Z',''),'+00:00',''))
             ORDER BY start_utc DESC
             LIMIT 1
             """,
@@ -3100,7 +3128,7 @@ def api_lanes():
             SELECT le.lane_id, COUNT(*) AS event_count
             FROM lane_events le
             JOIN events e ON le.event_id = e.id
-            WHERE datetime(e.end_utc) >= datetime('now')
+            WHERE datetime(replace(replace(replace(e.end_utc,'T',' '),'Z',''),'+00:00','')) >= datetime('now')
             GROUP BY le.lane_id
             ORDER BY le.lane_id
             """
@@ -3190,8 +3218,8 @@ def whatson_lane(lane_id):
             FROM lane_events le
             LEFT JOIN events e ON le.event_id = e.id
             WHERE le.lane_id = ?
-              AND datetime(le.start_utc) <= datetime(?)
-              AND datetime(le.end_utc) > datetime(?)
+              AND datetime(replace(replace(replace(le.start_utc,'T',' '),'Z',''),'+00:00','')) <= datetime(replace(replace(replace(?,'T',' '),'Z',''),'+00:00',''))
+              AND datetime(replace(replace(replace(le.end_utc,'T',' '),'Z',''),'+00:00','')) > datetime(replace(replace(replace(?,'T',' '),'Z',''),'+00:00',''))
             ORDER BY le.start_utc DESC
             LIMIT 1
             """,
@@ -3314,6 +3342,7 @@ def whatson_lane(lane_id):
         payload = {
             "ok": True,
             "lane": lane_id,
+            "event_id": event_id,
             "event_uid": event_uid,
             "at": at_ts,
         }
