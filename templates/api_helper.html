@@ -246,6 +246,13 @@ Returns the current deeplink for a specific provider lane. This is the primary e
 <div><span class="param-name">format</span> (query): <code>json</code> (default) or <code>text</code></div>
 <div><span class="param-name">deeplink_format</span> (query): <code>scheme</code> (default, for Apple TV) or <code>http</code> (for Android/Fire TV)</div>
 </div>
+<div class="note">
+<div class="note-title">Provider-locked + filter-aware</div>
+<ul style="margin: 8px 0 0 20px; padding: 0;">
+<li><strong>Provider-locked:</strong> a <code>sportscenter</code> lane returns a <code>sportscenter://...</code> (or ESPN HTTP) deeplink, not a different provider’s deeplink for the same event.</li>
+<li><strong>Filter-aware:</strong> if <code>enabled_services</code> is set and does not include the provider, the endpoint returns <code>deeplink=null</code> (JSON) / empty (text) with a message like <code>"Provider sportscenter filtered out"</code>.</li>
+</ul>
+</div>
 <pre># Plain text deeplink (for ADBTuner on Apple TV)
 curl "$BASE/api/adb/lanes/sportscenter/1/deeplink?format=text"
 # Returns: sportscenter://x-callback-url/showWatchStream?playID=...
@@ -523,7 +530,8 @@ docker logs -f fruitdeeplinks | grep DETECTOR
 <span class="tag tag-post">POST</span>
 <code>/api/filters/preferences</code>
 </div>
-<p class="description">View or update content filtering preferences. Control which services, sports, and leagues appear in generated playlists.</p>
+<p class="description">View or update content filtering preferences. Control which services, sports, and leagues appear in generated playlists.
+<br/><span class="muted">Tip: use exact names from <code>/api/filters</code> (apostrophes/spaces matter).</span></p>
 <div class="params">
 <div><span class="param-name">enabled_services</span>: Array of service codes to include (empty = all enabled)</div>
 <div><span class="param-name">disabled_sports</span>: Array of sports to exclude</div>
@@ -532,11 +540,11 @@ docker logs -f fruitdeeplinks | grep DETECTOR
 <pre># View current preferences
 curl "$BASE/api/filters/preferences" | jq
 
-# Update - enable only ESPN+ and Peacock
+# Update - enable only ESPN and Peacock (Web)
 curl -X POST "$BASE/api/filters/preferences" \
 -H "Content-Type: application/json" \
 -d '{
-"enabled_services": ["sportsonespn", "peacock", "peacock_web"],
+"enabled_services": ["sportscenter", "peacock_web"],
 "disabled_sports": ["Cricket"],
 "disabled_leagues": ["WNBA"]
 }'</pre>
@@ -548,8 +556,16 @@ curl -X POST "$BASE/api/filters/preferences" \
 <span class="tag tag-post">POST</span>
 <code>/api/apply-filters</code>
 </div>
-<p class="description">Regenerate exports with current filter settings (skips scraping, just rebuilds lanes and exports).</p>
+<p class="description">Regenerate exports with current filter settings (skips scraping; rebuilds multisource lanes and ADB provider lanes, then exports).</p>
 <pre>curl -X POST "$BASE/api/apply-filters"</pre>
+<div class="note">
+<div class="note-title">What gets rebuilt?</div>
+<ul style="margin: 8px 0 0 20px; padding: 0;">
+<li>Multisource virtual lanes (<code>/xmltv/lanes</code>, <code>/m3u/lanes</code>)</li>
+<li>ADB provider lanes (<code>/out/adb_lanes_&lt;provider&gt;.m3u</code>) and the <code>adb_lanes</code> table</li>
+</ul>
+<div style="margin-top:8px;">This endpoint returns <code>started</code> immediately. Watch logs for <code>Filters applied successfully!</code> to know it finished.</div>
+</div>
 <div class="note">
 <div class="note-title"> Quick Apply</div>
 Use this after changing filter preferences to immediately regenerate playlists without waiting for a full refresh (~10 seconds vs. ~5 minutes).
