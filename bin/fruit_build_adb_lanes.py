@@ -1,592 +1,395 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
 fruit_build_adb_lanes.py
 
-Builds provider-based ADB lanes using provider_lanes configuration.
+Builds per-provider ADB lanes into the `adb_lanes` table from `events` + `playables`,
+respecting:
+- provider_lanes.adb_enabled + provider_lanes.adb_lane_count
+- user_preferences: enabled_services, disabled_sports, disabled_leagues
 
-This script reads:
-  - provider_lanes: which providers are ADB-enabled and how many lanes they get
-  - events + playables: which events belong to which providers (via provider_code)
+Semantics:
+- enabled_services = [] (or missing) means "allow all services".
+  We do NOT auto-expand enabled_services to service_priorities keys, because that
+  breaks providers not present there (e.g., `kayo_web`).
 
-Then writes:
-  - adb_lanes: per-provider lane assignments with channel_id, event_id, and times
-
-ASSUMED SCHEMA (fail-fast with clear errors if mismatched):
-
-  provider_lanes(
-      provider_code   TEXT PRIMARY KEY,
-      adb_enabled     INTEGER NOT NULL,
-      adb_lane_count  INTEGER NOT NULL
-  )
-
-  events(
-      id         TEXT PRIMARY KEY,
-      start_utc  TEXT,
-      stop_utc   TEXT,
-      ... other columns ignored here ...
-  )
-
-  playables(
-      event_id      TEXT,
-      provider_code TEXT,
-      ... other columns ignored here ...
-  )
-
-If your events/playables schema differs, the script will log a clear error and exit;
-you can then adjust the SQL queries near the top of build_adb_lanes().
+This script is self-contained (does not import filter_integration) to avoid
+preference-default drift.
 """
 
+from __future__ import annotations
+
 import argparse
+import datetime as dt
+import json
 import logging
+import os
 import sqlite3
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional
-
-DEFAULT_DB_PATH = Path(__file__).resolve().parents[1] / "data" / "fruit_events.db"
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
+UTC = dt.timezone.utc
 
-# Optional: integrate user filter preferences (user_preferences table)
-try:
-    from filter_integration import load_user_preferences, should_include_event
-    FILTERS_AVAILABLE = True
-except Exception:
-    load_user_preferences = None
-    should_include_event = None
-    FILTERS_AVAILABLE = False
 
-def get_logger() -> logging.Logger:
+def setup_logging() -> logging.Logger:
     logging.basicConfig(
-        level=logging.INFO,
+        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
     return logging.getLogger("fruit_build_adb_lanes")
 
 
-def table_has_columns(conn: sqlite3.Connection, table: str, required: List[str]) -> bool:
+def table_exists(conn: sqlite3.Connection, name: str) -> bool:
     cur = conn.cursor()
-    cur.execute(f"PRAGMA table_info({table});")
-    cols = {row[1] for row in cur.fetchall()}
-    missing = [c for c in required if c not in cols]
-    return not missing
+    cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1;", (name,))
+    return cur.fetchone() is not None
 
 
-def load_enabled_providers(conn: sqlite3.Connection, log: logging.Logger) -> Dict[str, int]:
+def safe_json_loads(s: str) -> Any:
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        return json.loads(s)
+    except Exception:
+        return None
+
+
+def load_user_preferences(conn: sqlite3.Connection, log: logging.Logger) -> Dict[str, Any]:
     """
-    Return mapping provider_code -> adb_lane_count for enabled providers.
+    user_preferences schema:
+      user_preferences(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)
+
+    Values for list keys are stored as JSON arrays.
     """
+    prefs: Dict[str, Any] = {
+        "enabled_services": [],
+        "disabled_sports": [],
+        "disabled_leagues": [],
+    }
+
+    if not table_exists(conn, "user_preferences"):
+        log.info("No user_preferences table found; using defaults (allow all services).")
+        return prefs
+
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT key, value FROM user_preferences;")
+        rows = cur.fetchall()
+    except Exception as e:
+        log.warning("Failed reading user_preferences (using defaults): %s", e)
+        return prefs
+
+    raw: Dict[str, str] = {k: (v or "") for (k, v) in rows}
+
+    def get_list(key: str) -> List[str]:
+        v = raw.get(key)
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return [str(x).strip() for x in v if str(x).strip()]
+        if isinstance(v, str):
+            s = v.strip()
+            # If it's a JSON list, use it.
+            arr = safe_json_loads(s)
+            if isinstance(arr, list):
+                return [str(x).strip() for x in arr if str(x).strip()]
+            # Fall back to comma-separated, but guard against accidentally storing a JSON object string.
+            parts = [x.strip() for x in s.split(",") if x.strip()]
+            # Drop obvious JSON-object fragments like '{"a": 1' or '"a": 1}' so we don't
+            # accidentally treat a dict string as an enabled_services allowlist.
+            cleaned: List[str] = []
+            token_re = re.compile(r"^[A-Za-z0-9._-]+$")  # provider_code / logical_service-like
+            for p in parts:
+                if "{" in p or "}" in p or ":" in p:
+                    continue
+                if token_re.match(p):
+                    cleaned.append(p)
+            return cleaned
+        return []
+        return []
+
+    prefs["enabled_services"] = get_list("enabled_services")
+    prefs["disabled_sports"] = get_list("disabled_sports")
+    prefs["disabled_leagues"] = get_list("disabled_leagues")
+
+    log.info(
+        "ADB filters loaded: enabled_services=%s disabled_sports=%d disabled_leagues=%d",
+        ("ALL" if not prefs["enabled_services"] else str(len(prefs["enabled_services"]))),
+        len(prefs["disabled_sports"]),
+        len(prefs["disabled_leagues"]),
+    )
+    return prefs
+
+
+def parse_iso_utc(s: str) -> Optional[dt.datetime]:
+    if not s:
+        return None
+    s = s.strip()
+    if not s:
+        return None
+    try:
+        if s.endswith("Z"):
+            return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(UTC)
+        return dt.datetime.fromisoformat(s).astimezone(UTC)
+    except Exception:
+        return None
+
+
+def ms_to_dt(ms: Any) -> Optional[dt.datetime]:
+    try:
+        if ms is None:
+            return None
+        return dt.datetime.fromtimestamp(int(ms) / 1000.0, tz=UTC)
+    except Exception:
+        return None
+
+
+def dt_to_iso(d: dt.datetime) -> str:
+    d = d.astimezone(UTC).replace(microsecond=0)
+    return d.isoformat()  # ...+00:00
+
+
+def should_include_event(classification_json: str, disabled_sports: Sequence[str], disabled_leagues: Sequence[str]) -> bool:
+    if not disabled_sports and not disabled_leagues:
+        return True
+
+    cj = classification_json or ""
+    parsed = safe_json_loads(cj)
+
+    sport_vals: List[str] = []
+    league_vals: List[str] = []
+
+    if isinstance(parsed, list):
+        for obj in parsed:
+            if isinstance(obj, dict):
+                t = str(obj.get("type", "")).strip().lower()
+                v = str(obj.get("value", "")).strip()
+                if not v:
+                    continue
+                if t == "sport":
+                    sport_vals.append(v)
+                elif t == "league":
+                    league_vals.append(v)
+
+    def norm(x: str) -> str:
+        return (x or "").strip().lower()
+
+    ds = {norm(x) for x in disabled_sports if norm(x)}
+    dl = {norm(x) for x in disabled_leagues if norm(x)}
+
+    if sport_vals and any(norm(v) in ds for v in sport_vals):
+        return False
+    if league_vals and any(norm(v) in dl for v in league_vals):
+        return False
+
+    raw_low = cj.lower()
+    if any(x and x in raw_low for x in ds):
+        return False
+    if any(x and x in raw_low for x in dl):
+        return False
+
+    return True
+
+
+def load_adb_enabled_providers(conn: sqlite3.Connection) -> List[Tuple[str, int]]:
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT provider_code, adb_lane_count
-          FROM provider_lanes
-         WHERE adb_enabled = 1
-           AND adb_lane_count > 0
-         ORDER BY provider_code;
+        SELECT provider_code, COALESCE(adb_lane_count, 0) AS lanes
+        FROM provider_lanes
+        WHERE COALESCE(adb_enabled, 0) = 1
+          AND COALESCE(adb_lane_count, 0) > 0
+        ORDER BY provider_code
         """
     )
-    rows = cur.fetchall()
-    providers = {code: int(count) for (code, count) in rows}
-    if not providers:
-        log.warning("No ADB-enabled providers found in provider_lanes (adb_enabled=1, adb_lane_count>0).")
-    else:
-        log.info(
-            "Loaded %d ADB-enabled provider(s): %s",
-            len(providers),
-            ", ".join(f"{code} ({count} lanes)" for code, count in providers.items()),
-        )
-    return providers
-
-
-def load_events_for_provider(
-    conn: sqlite3.Connection,
-    provider_code: str,
-    log: logging.Logger,
-) -> List[Tuple[str, str, str]]:
-    """
-    Load events (event_id, start_utc, stop_utc) for a given provider_code.
-    
-    IMPORTANT: provider_code is a LOGICAL SERVICE (e.g., 'max', 'peacock_web', 'apple_mls')
-    which may not match the raw 'provider' field in playables. We need to use
-    logical_service_mapper to identify matching playables.
-
-    We try to be flexible about actual column names. For events we will look for:
-      - primary key: one of ["id", "event_id"]
-      - start time: one of ["start_utc", "start_time_utc", "start_time", "start"]
-      - stop  time: one of ["stop_utc", "end_utc", "end_time_utc", "end_time", "stop"]
-
-    For playables we will look for:
-      - event FK: "event_id" or the chosen events PK column
-      - provider: "provider_code" or "provider"
-
-    If we cannot resolve an unambiguous mapping, we raise a RuntimeError with details.
-    """
-    # Try to import logical service mapper
-    try:
-        from logical_service_mapper import get_logical_service_for_playable
-        HAS_LOGICAL_MAPPER = True
-    except ImportError:
-        HAS_LOGICAL_MAPPER = False
-    
-    # Introspect events schema
-    cur = conn.cursor()
-    cur.execute("PRAGMA table_info(events);")
-    event_cols = {row[1] for row in cur.fetchall()}
-    if not event_cols:
-        raise RuntimeError("Table 'events' not found; adjust load_events_for_provider() to your schema.")
-
-    # Decide event PK column
-    pk_candidates = ["id", "event_id"]
-    event_pk_col = next((c for c in pk_candidates if c in event_cols), None)
-    if not event_pk_col:
-        raise RuntimeError(
-            f"Could not find an event primary key column in events table; "
-            f"looked for {pk_candidates}, found {sorted(event_cols)}"
-        )
-
-    # Decide start/stop time columns
-    start_candidates = ["start_utc", "start_time_utc", "start_time", "start"]
-    stop_candidates = ["stop_utc", "end_utc", "end_time_utc", "end_time", "stop"]
-
-    start_col = next((c for c in start_candidates if c in event_cols), None)
-    stop_col = next((c for c in stop_candidates if c in event_cols), None)
-
-    if not start_col or not stop_col:
-        raise RuntimeError(
-            "Could not find start/stop time columns on events table. "
-            f"Have columns: {sorted(event_cols)}; looked for start in {start_candidates}, stop in {stop_candidates}"
-        )
-
-    # Introspect playables schema
-    cur.execute("PRAGMA table_info(playables);")
-    playable_cols = {row[1] for row in cur.fetchall()}
-    if not playable_cols:
-        raise RuntimeError("Table 'playables' not found; adjust load_events_for_provider() to your schema.")
-
-    # Event FK column on playables
-    if "event_id" in playable_cols:
-        playable_event_fk = "event_id"
-    elif event_pk_col in playable_cols:
-        playable_event_fk = event_pk_col
-    else:
-        raise RuntimeError(
-            "Could not find event foreign key on playables table. "
-            f"Expected 'event_id' or '{event_pk_col}' in columns {sorted(playable_cols)}"
-        )
-
-    # Strategy: Query all playables and filter using logical service mapper
-    if HAS_LOGICAL_MAPPER:
-        # Get all playables with their URLs and use logical mapper to filter
-        sql = f"""
-            SELECT DISTINCT e.{event_pk_col} AS event_id, 
-                   e.{start_col} AS start_utc, 
-                   e.{stop_col} AS stop_utc,
-                   p.provider,
-                   p.deeplink_play,
-                   p.deeplink_open,
-                   p.playable_url
-              FROM events e
-              JOIN playables p
-                ON p.{playable_event_fk} = e.{event_pk_col}
-             ORDER BY e.{start_col};
-        """
-        cur.execute(sql)
-        all_rows = cur.fetchall()
-        
-        # Filter using logical service mapper
-        matching_events = {}
-        for row in all_rows:
-            event_id = row[0]
-            start_utc = row[1]
-            stop_utc = row[2]
-            provider = row[3]
-            deeplink_play = row[4]
-            deeplink_open = row[5]
-            playable_url = row[6]
-            
-            logical_service = get_logical_service_for_playable(
-                provider=provider,
-                deeplink_play=deeplink_play,
-                deeplink_open=deeplink_open,
-                playable_url=playable_url,
-                event_id=event_id,
-                conn=conn
-            )
-            
-            if logical_service == provider_code:
-                matching_events[event_id] = (event_id, start_utc, stop_utc)
-        
-        rows = list(matching_events.values())
-        log.info(
-            "Provider %s: loaded %d events using logical service mapping (scanned %d playables).",
-            provider_code,
-            len(rows),
-            len(all_rows)
-        )
-    else:
-        # Fallback: direct provider match (old behavior)
-        log.warning(
-            "logical_service_mapper not available; falling back to direct provider match. "
-            "This may not work for web-based services like 'max', 'peacock_web', etc."
-        )
-        
-        provider_col = "provider"
-        if "provider_code" in playable_cols:
-            provider_col = "provider_code"
-        
-        sql = f"""
-            SELECT e.{event_pk_col} AS event_id, e.{start_col} AS start_utc, e.{stop_col} AS stop_utc
-              FROM events e
-              JOIN playables p
-                ON p.{playable_event_fk} = e.{event_pk_col}
-             WHERE p.{provider_col} = ?
-             GROUP BY e.{event_pk_col}, e.{start_col}, e.{stop_col}
-             ORDER BY e.{start_col};
-        """
-        cur.execute(sql, (provider_code,))
-        rows = [(r[0], r[1], r[2]) for r in cur.fetchall()]
-        log.info(
-            "Provider %s: loaded %d events from events/playables (direct match).",
-            provider_code,
-            len(rows)
-        )
-    
-    return rows
-
-
-def clear_adb_lanes(conn: sqlite3.Connection, log: logging.Logger, provider_code: Optional[str] = None) -> None:
-    cur = conn.cursor()
-    if provider_code is None:
-        log.info("Clearing ALL rows from adb_lanes ...")
-        cur.execute("DELETE FROM adb_lanes;")
-    else:
-        log.info("Clearing existing adb_lanes rows for provider %s ...", provider_code)
-        cur.execute("DELETE FROM adb_lanes WHERE provider_code = ?;", (provider_code,))
-    conn.commit()
-
-
-
-
-def build_lanes_for_provider(
-    conn: sqlite3.Connection,
-    provider_code: str,
-    lane_count: int,
-    log: logging.Logger,
-    prefs: Optional[dict] = None,
-) -> int:
-    """Build ADB lanes for a single provider with *non-overlapping* lanes.
-
-    Strategy:
-
-      - Load all events for this provider (event_id, start_utc, stop_utc).
-      - Sort by (start time, stop time).
-      - Maintain an "available from" end-time cursor per lane.
-      - For each event, try to place it into the first lane whose end time
-        is <= event.start. If none exist (concurrency > lane_count), the
-        event is *skipped* for ADB lanes and logged as a dropped event.
-
-    This guarantees that, for each (provider_code, lane_number), there are
-    no overlapping intervals in adb_lanes. If you see many dropped events
-    in the logs, increase adb_lane_count for that provider.
-    """
-    if lane_count <= 0:
-        log.warning(
-            "Provider %s has non-positive lane_count=%d; skipping.",
-            provider_code,
-            lane_count,
-        )
-        return 0
-
-    events = load_events_for_provider(conn, provider_code, log)
-    if not events:
-        log.warning(
-            "Provider %s has no events; skipping lane assignment.",
-            provider_code,
-        )
-        return 0
-
-    # Filter out events with null timestamps
-    valid_events = [
-        (event_id, start_utc, stop_utc)
-        for (event_id, start_utc, stop_utc) in events
-        if start_utc is not None and stop_utc is not None
-    ]
-    
-    if len(valid_events) < len(events):
-        null_count = len(events) - len(valid_events)
-        log.warning(
-            "Provider %s: filtered out %d events with null timestamps (keeping %d valid events)",
-            provider_code,
-            null_count,
-            len(valid_events),
-        )
-    
-    if not valid_events:
-        log.warning(
-            "Provider %s has no events with valid timestamps; skipping lane assignment.",
-            provider_code,
-        )
-        return 0
-
-    # Local ISO8601 parser that can handle the typical Apple-style timestamps.
-    def _parse_iso(ts: str) -> datetime:
-        """Parse ISO8601 into a *naive* datetime (UTC-like).
-
-        We always strip timezone info so that all comparisons are between
-        offset-naive datetimes. The source timestamps are UTC-ish
-        (e.g. 2025-12-06T00:00:00+00:00), so dropping tzinfo is fine.
-        """
-        # Handle None/null timestamps
-        if ts is None or not isinstance(ts, str):
-            log.warning(
-                "Provider %s: encountered null/invalid timestamp (type=%s), treating as datetime.min",
-                provider_code,
-                type(ts).__name__,
-            )
-            return datetime.min
-        
+    out: List[Tuple[str, int]] = []
+    for code, lanes in cur.fetchall():
         try:
-            dt = datetime.fromisoformat(ts)
+            out.append((str(code), int(lanes)))
         except Exception:
-            ts2 = ts.replace("Z", "")
-            if "+" in ts2:
-                ts2 = ts2.split("+", 1)[0]
-            try:
-                dt = datetime.fromisoformat(ts2)
-            except Exception:
-                return datetime.min
+            continue
+    return out
 
-        # Force naive so we never mix aware/naive in comparisons.
-        if dt.tzinfo is not None:
-            dt = dt.replace(tzinfo=None)
-        return dt
 
-    # Attach parsed datetimes and sort.
-    # Apply user content filters (disabled sports/leagues) for ADB lanes, if available.
-    if prefs and FILTERS_AVAILABLE and should_include_event:
-        disabled_sports = prefs.get("disabled_sports") or []
-        disabled_leagues = prefs.get("disabled_leagues") or []
-        if disabled_sports or disabled_leagues:
-            # Figure out events PK column for lookups (usually 'id')
-            cur = conn.cursor()
-            cur.execute("PRAGMA table_info(events)")
-            ev_cols = cur.fetchall()
-            pk_col = None
-            for col in ev_cols:
-                # PRAGMA table_info: cid, name, type, notnull, dflt_value, pk
-                if len(col) >= 6 and col[5] == 1:
-                    pk_col = col[1]
-                    break
-            if not pk_col:
-                pk_col = "id"
-    
-            col_names = {c[1] for c in ev_cols}
-            can_filter = ("genres_json" in col_names) or ("classification_json" in col_names)
-    
-            if can_filter:
-                before_n = len(valid_events)
-                filtered = []
-                for (eid, s, t) in valid_events:
-                    try:
-                        cur.execute(
-                            f"SELECT genres_json, classification_json FROM events WHERE {pk_col} = ? LIMIT 1",
-                            (eid,),
-                        )
-                        row = cur.fetchone()
-                        ev = {"genres_json": None, "classification_json": None}
-                        if row:
-                            ev["genres_json"] = row[0]
-                            ev["classification_json"] = row[1]
-                        if should_include_event(ev, prefs):
-                            filtered.append((eid, s, t))
-                    except Exception:
-                        # Fail-open for any parsing/lookup issues
-                        filtered.append((eid, s, t))
-    
-                valid_events = filtered
-                removed = before_n - len(valid_events)
-                if removed:
-                    log.info(
-                        "Provider %s: filtered out %d events due to disabled_sports/leagues.",
-                        provider_code,
-                        removed,
-                    )
-
-    events_with_dt = [
-        (event_id, start_utc, stop_utc, _parse_iso(start_utc), _parse_iso(stop_utc))
-        for (event_id, start_utc, stop_utc) in valid_events
-    ]
-    events_with_dt.sort(key=lambda row: (row[3], row[4]))  # (start_dt, stop_dt)
-
-    clear_adb_lanes(conn, log, provider_code=provider_code)
-
+def clear_adb_lanes(conn: sqlite3.Connection, provider_code: str, log: logging.Logger) -> None:
     cur = conn.cursor()
+    cur.execute("DELETE FROM adb_lanes WHERE provider_code=?;", (provider_code,))
+    conn.commit()
+    log.info("Cleared adb_lanes for provider %s", provider_code)
 
-    # lane_end_times[i] = datetime when lane i+1 becomes free.
-    lane_end_times = [datetime.min for _ in range(lane_count)]
 
-    inserted = 0
-    dropped = 0
+def load_events_for_provider(conn: sqlite3.Connection, provider_code: str) -> List[Dict[str, Any]]:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            e.id,
+            e.title,
+            e.start_utc,
+            e.end_utc,
+            e.start_ms,
+            e.end_ms,
+            e.classification_json
+        FROM events e
+        JOIN playables p ON p.event_id = e.id
+        WHERE p.logical_service = ?
+        GROUP BY e.id
+        """,
+        (provider_code,),
+    )
+    out: List[Dict[str, Any]] = []
+    for (eid, title, start_utc, end_utc, start_ms, end_ms, classification_json) in cur.fetchall():
+        out.append(
+            {
+                "id": eid,
+                "title": title or "",
+                "start_utc": start_utc or "",
+                "end_utc": end_utc or "",
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "classification_json": classification_json or "",
+            }
+        )
+    return out
 
-    for event_id, start_utc, stop_utc, start_dt, stop_dt in events_with_dt:
-        # Find the first lane that is free by this event's start.
-        chosen_index = None
-        for i in range(lane_count):
-            if lane_end_times[i] <= start_dt:
-                chosen_index = i
-                break
 
-        if chosen_index is None:
-            # All lanes are still busy; skip this event for ADB view.
-            dropped += 1
+def assign_to_lanes(
+    events: Sequence[Dict[str, Any]],
+    lane_count: int,
+) -> List[Tuple[int, Dict[str, Any], dt.datetime, dt.datetime]]:
+    lane_ends: List[dt.datetime] = [dt.datetime.min.replace(tzinfo=UTC) for _ in range(lane_count)]
+    assignments: List[Tuple[int, Dict[str, Any], dt.datetime, dt.datetime]] = []
+
+    def start_dt(ev: Dict[str, Any]) -> dt.datetime:
+        st = parse_iso_utc(ev.get("start_utc", "")) or ms_to_dt(ev.get("start_ms"))
+        return st or dt.datetime.max.replace(tzinfo=UTC)
+
+    for ev in sorted(events, key=start_dt):
+        st = parse_iso_utc(ev.get("start_utc", "")) or ms_to_dt(ev.get("start_ms"))
+        en = parse_iso_utc(ev.get("end_utc", "")) or ms_to_dt(ev.get("end_ms"))
+        if not st or not en or en <= st:
             continue
 
-        lane_number = chosen_index + 1
-        channel_id = f"{provider_code}{lane_number:02d}"
+        best_lane = None
+        best_end = None
+        for i, lane_end in enumerate(lane_ends):
+            if lane_end <= st:
+                if best_end is None or lane_end < best_end:
+                    best_end = lane_end
+                    best_lane = i
 
+        if best_lane is None:
+            continue
+
+        lane_ends[best_lane] = en
+        assignments.append((best_lane + 1, ev, st, en))
+
+    return assignments
+
+
+def insert_adb_rows(
+    conn: sqlite3.Connection,
+    provider_code: str,
+    assignments: Sequence[Tuple[int, Dict[str, Any], dt.datetime, dt.datetime]],
+) -> int:
+    cur = conn.cursor()
+    n = 0
+    for lane_number, ev, st, en in assignments:
+        channel_id = f"{provider_code}{lane_number:02d}"
         cur.execute(
             """
             INSERT INTO adb_lanes (provider_code, lane_number, channel_id, event_id, start_utc, stop_utc)
-            VALUES (?, ?, ?, ?, ?, ?);
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (provider_code, lane_number, channel_id, event_id, start_utc, stop_utc),
+            (provider_code, lane_number, channel_id, ev["id"], dt_to_iso(st), dt_to_iso(en)),
         )
-        inserted += 1
-
-        # Advance that lane's cursor.
-        if stop_dt <= start_dt:
-            lane_end_times[chosen_index] = start_dt
-        else:
-            lane_end_times[chosen_index] = stop_dt
-
+        n += 1
     conn.commit()
-    log.info(
-        "Provider %s: assigned %d events into %d lane(s) (adb_lanes); dropped %d events due to concurrency > %d lanes.",
-        provider_code,
-        inserted,
-        lane_count,
-        dropped,
-        lane_count,
-    )
-    return inserted
+    return n
 
 
-
-def build_adb_lanes(db_path: Path, provider_filter: Optional[str] = None) -> None:
-    log = get_logger()
+def build_adb_lanes(db_path: str, provider_filter: Optional[str] = None) -> None:
+    log = setup_logging()
     log.info("Using database: %s", db_path)
 
-    if not db_path.exists():
-        log.error(
-            "Database file does not exist at %s. Run your ingest/refresh pipeline first.",
-            db_path,
-        )
-        raise SystemExit(1)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
 
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.row_factory = sqlite3.Row
-        # Load user preferences (filters) if available.
-        prefs = None
-        enabled_services = []
-        if FILTERS_AVAILABLE and load_user_preferences:
-            try:
-                prefs = load_user_preferences(conn)
-                enabled_services = prefs.get("enabled_services") or []
-                log.info(
-                    "ADB filters loaded: enabled_services=%d disabled_sports=%d disabled_leagues=%d",
-                    len(enabled_services),
-                    len(prefs.get("disabled_sports") or []),
-                    len(prefs.get("disabled_leagues") or []),
-                )
-            except Exception as e:
-                log.warning(
-                    "Could not load user preferences for ADB lanes; proceeding without filters: %s",
-                    e,
-                )
-                prefs = None
-                enabled_services = []
+    if not table_exists(conn, "adb_lanes"):
+        raise RuntimeError("adb_lanes table not found. Run migrate_add_adb_lanes.py first.")
+    if not table_exists(conn, "provider_lanes"):
+        raise RuntimeError("provider_lanes table not found. Run migrate_add_provider_lanes.py first.")
 
+    prefs = load_user_preferences(conn, log)
+    enabled_services: List[str] = prefs.get("enabled_services") or []
+    disabled_sports: List[str] = prefs.get("disabled_sports") or []
+    disabled_leagues: List[str] = prefs.get("disabled_leagues") or []
 
-        # Sanity-check adb_lanes table exists
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='adb_lanes';"
-        )
-        if not cur.fetchone():
-            raise RuntimeError(
-                "Table adb_lanes does not exist. Run migrate_add_adb_lanes.py first."
+    providers = load_adb_enabled_providers(conn)
+    if provider_filter:
+        providers = [(c, n) for (c, n) in providers if c == provider_filter]
+
+    if not providers:
+        log.info("No ADB-enabled providers to build (provider_filter=%s).", provider_filter or "None")
+        return
+
+    log.info(
+        "Loaded %d ADB-enabled provider(s): %s",
+        len(providers),
+        ", ".join([f"{c} ({n} lanes)" for (c, n) in providers]),
+    )
+
+    total_inserted = 0
+
+    for provider_code, lane_count in providers:
+        clear_adb_lanes(conn, provider_code, log)
+
+        # Only enforce enabled_services when the user explicitly set a non-empty allowlist.
+        if enabled_services and provider_code not in enabled_services:
+            log.info("Skipping provider %s because it is not in enabled_services", provider_code)
+            continue
+
+        evs = load_events_for_provider(conn, provider_code)
+
+        filtered: List[Dict[str, Any]] = []
+        null_ts = 0
+        for ev in evs:
+            st = parse_iso_utc(ev.get("start_utc", "")) or ms_to_dt(ev.get("start_ms"))
+            en = parse_iso_utc(ev.get("end_utc", "")) or ms_to_dt(ev.get("end_ms"))
+            if not st or not en:
+                null_ts += 1
+                continue
+            if not should_include_event(ev.get("classification_json", ""), disabled_sports, disabled_leagues):
+                continue
+            filtered.append(ev)
+
+        if null_ts:
+            log.warning(
+                "Provider %s: filtered out %d events with null timestamps (keeping %d valid events)",
+                provider_code,
+                null_ts,
+                len(filtered),
             )
 
-        providers = load_enabled_providers(conn, log)
-        if provider_filter:
-            providers = {
-                code: count
-                for code, count in providers.items()
-                if code == provider_filter
-            }
-            if not providers:
-                log.warning(
-                    "Provider filter %s did not match any enabled providers; nothing to do.",
-                    provider_filter,
-                )
-                return
+        if not filtered:
+            log.info("Provider %s: no events after filtering; nothing to insert.", provider_code)
+            continue
 
-        if not providers:
-            log.warning("No ADB-enabled providers to build lanes for; exiting.")
-            return
+        assignments = assign_to_lanes(filtered, lane_count)
+        inserted = insert_adb_rows(conn, provider_code, assignments)
+        total_inserted += inserted
+        log.info("Provider %s: inserted %d adb_lanes rows", provider_code, inserted)
 
-        # If building all providers, clear all existing adb_lanes rows first.
-        if provider_filter is None:
-            clear_adb_lanes(conn, log, provider_code=None)
-
-        total_inserted = 0
-        for code, lane_count in providers.items():
-            # Always clear existing rows for this provider so config/filter changes take effect.
-            clear_adb_lanes(conn, log, provider_code=code)
-        
-            # If the user has explicitly limited enabled_services, respect it for ADB lanes too:
-            # providers not in enabled_services are treated as "disabled" for ADB outputs.
-            if enabled_services and code not in enabled_services:
-                log.info(
-                    "Skipping provider %s because it is not in enabled_services filters.",
-                    code,
-                )
-                continue
-        
-            inserted = build_lanes_for_provider(conn, code, lane_count, log, prefs=prefs)
-            total_inserted += inserted
+    log.info("ADB lane build complete. Total adb_lanes rows inserted: %d", total_inserted)
 
 
-        log.info(
-            "ADB lane build complete. Total adb_lanes rows inserted: %d",
-            total_inserted,
-        )
-    finally:
-        conn.close()
-
-
-def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Build provider-based ADB lanes into adb_lanes table."
-    )
-    parser.add_argument(
-        "--db",
-        dest="db_path",
-        type=Path,
-        default=DEFAULT_DB_PATH,
-        help=f"Path to SQLite DB (default: {DEFAULT_DB_PATH})",
-    )
-    parser.add_argument(
-        "--provider",
-        dest="provider_filter",
-        default=None,
-        help="Optional provider_code to restrict lane build (default: all enabled providers)",
-    )
-    return parser.parse_args(argv)
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--db", "--db-path", dest="db_path", default="/app/data/fruit_events.db", help="SQLite DB path")
+    ap.add_argument("--provider", dest="provider_filter", default=None, help="Build only a single provider_code")
+    args = ap.parse_args()
+    build_adb_lanes(args.db_path, provider_filter=args.provider_filter)
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    build_adb_lanes(args.db_path, provider_filter=args.provider_filter)
+    main()
