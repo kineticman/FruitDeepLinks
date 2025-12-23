@@ -85,9 +85,8 @@ def normalize_kayo_event(raw_event: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 
     event_id = f"kayo-{external_id}"
     title = raw_event.get("title") or external_id
-    sport = raw_event.get("sport") or "Sports"
-    league = raw_event.get("league") or sport
-
+    sport_raw = raw_event.get("sport") or "Sports"
+    league = raw_event.get("league") or sport_raw
     # Pull additional metadata from the stored raw Kayo content payload (if present)
     raw_payload = raw_event.get("raw") or {}
     raw_data = raw_payload.get("data") or {}
@@ -111,6 +110,13 @@ def normalize_kayo_event(raw_event: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
     elif content_display.get("header"):
         league_best = str(content_display.get("header"))
 
+    # Pick a "genre" bucket used by the UI's Sports filter (genres_json).
+    # Kayo sometimes reports sportName="Other Sport" even when a more specific series/header exists
+    # (e.g., "Ultimate Pool"). In that case, using the series/header yields a nicer filter bucket.
+    genre_sport = sport_raw
+    if isinstance(sport_raw, str) and sport_raw.strip().lower() in ("other sport", "othersport"):
+        if isinstance(league_best, str) and league_best.strip() and league_best.strip().lower() != sport_raw.strip().lower():
+            genre_sport = league_best.strip()
     start_utc = raw_event.get("start_utc")
     end_utc = raw_event.get("end_utc")
     venue = raw_event.get("venue")
@@ -142,8 +148,11 @@ def normalize_kayo_event(raw_event: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
         "channel_name": "Kayo Sports",  # Human-friendly network label (avoid sport/league here)
         "channel_provider_id": (channel_code or "kayo"),  # Kayo linear provider code when available
         "airing_type": None,
-        "classification_json": json.dumps({"sport": sport, "league": league_best}, ensure_ascii=False),
-        "genres_json": json.dumps([sport], ensure_ascii=False),  # Sport as genre array
+        "classification_json": json.dumps([
+            {"type": "sport", "value": sport_raw},
+            {"type": "league", "value": league_best},
+        ], ensure_ascii=False),
+        "genres_json": json.dumps([genre_sport], ensure_ascii=False),  # UI Sports filter bucket
         "content_segments_json": None,
         "is_free": 0,
         "is_premium": 1,  # Kayo is a paid service
@@ -246,6 +255,51 @@ def ingest_kayo_events(conn: sqlite3.Connection, path: Path) -> int:
 
     data = json.loads(path.read_text(encoding="utf-8"))
     events = data.get("events") or []
+    # Kayo sometimes returns duplicate external_id rows (often identical copies).
+    # Since our DB primary key is based on external_id, dedupe here so "last one wins"
+    # doesn't produce confusing counts.
+    def _to_int(v) -> int:
+        try:
+            return int(v)
+        except Exception:
+            return 0
+
+    def _score(ev: dict) -> tuple[int, int, int]:
+        # Prefer freshest/most relevant record if duplicates differ.
+        return (
+            _to_int(ev.get("updated_ms") or ev.get("updatedMs") or ev.get("updated_at_ms")),
+            _to_int(ev.get("start_ms") or ev.get("startMs")),
+            _to_int(ev.get("end_ms") or ev.get("endMs")),
+        )
+
+    best_by_id: dict[str, dict] = {}
+    dup_counts: dict[str, int] = {}
+    missing_id = 0
+
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        eid = ev.get("external_id")
+        if eid is None or eid == "":
+            missing_id += 1
+            continue
+        k = str(eid)
+        dup_counts[k] = dup_counts.get(k, 0) + 1
+        if k not in best_by_id or _score(ev) > _score(best_by_id[k]):
+            best_by_id[k] = ev
+
+    if best_by_id:
+        deduped = list(best_by_id.values())
+        collapsed = len(events) - len(deduped)
+        if collapsed > 0:
+            dup_id_count = sum(1 for _, n in dup_counts.items() if n > 1)
+            top = sorted(((k, n) for k, n in dup_counts.items() if n > 1), key=lambda x: x[1], reverse=True)[:10]
+            print(f"[KAYO] Deduped events by external_id: {len(events)} -> {len(deduped)} (collapsed {collapsed}; dup_ids={dup_id_count})")
+            if top:
+                print(f"[KAYO] Top duplicate external_id counts: {top}")
+        if missing_id:
+            print(f"[KAYO] Skipped {missing_id} event(s) missing external_id during dedupe.")
+        events = deduped
     if not events:
         print(f"[KAYO] File at {path} has no events[]")
         return 0

@@ -262,7 +262,7 @@ def normalize_kayo_event(content: Dict[str, Any], sport_from_panel: str) -> Dict
             'Gridiron': 3.5,
             'Basketball': 2.5,
             'Ice Hockey': 2.5,
-            'football': 2,
+            'Football': 2,
             'Boxing': 3,
             'Darts': 3,
             'Wrestling': 3,
