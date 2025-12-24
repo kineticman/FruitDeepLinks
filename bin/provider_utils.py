@@ -23,7 +23,9 @@ PROVIDER_MAP = {
     
     # Amazon
     'aiv': 'Prime Video',
-    'gametime': 'Prime Video',
+    
+    # NBA
+    'gametime': 'NBA',
     
     # Fox
     'foxone': 'FOX Sports (App)',
@@ -63,9 +65,9 @@ DEFAULT_PROVIDER_PRIORITY = [
     'nflctv',           # NFL+
     'videos',           # Apple TV+
     'cbstve',           # CBS
-    'gametime',         # Prime Video (TNF)
     'watchtnt',         # TNT
     'watchtru',         # truTV
+    'gametime',         # NBA
     'nflmobile',        # NFL
     'sportscenter',     # ESPN (less reliable)
     'https',            # Web fallback

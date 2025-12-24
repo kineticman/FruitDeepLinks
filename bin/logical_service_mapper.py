@@ -34,7 +34,7 @@ SERVICE_DISPLAY_NAMES = {
     'peacocktv': 'Peacock',
     'pplus': 'Paramount+',
     'aiv': 'Prime Video',
-    'gametime': 'Prime Video TNF',
+    'gametime': 'NBA',
     'cbssportsapp': 'CBS Sports',
     'cbstve': 'CBS',
     'nbcsportstve': 'NBC Sports',
@@ -274,13 +274,13 @@ def get_logical_service_priority(service_code: str) -> int:
         
         # League-specific services (direct subscriptions)
         'nba': 24,        # NBA League Pass
+        'gametime': 24,   # NBA app (same priority as League Pass)
         'mlb': 24,        # MLB.TV
         'nhl': 24,        # NHL.TV / NHL Power Play
         
         # Amazon aggregator services (deprioritized - often redirect to other services)
         # These should only be used when no direct service deeplink is available
         'aiv': 25,        # Amazon Prime Video (was 4, now 25)
-        'gametime': 26,   # Prime Video TNF (new, low priority)
         
         # Generic web (lowest priority)
         'https': 30,

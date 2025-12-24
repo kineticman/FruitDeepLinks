@@ -74,7 +74,7 @@ def get_provider_display_name(provider_id: str) -> str:
         'peacock_web': 'Peacock (Web)',
         'pplus': 'Paramount+',
         'aiv': 'Prime Video',
-        'gametime': 'Prime Video TNF',
+        'gametime': 'NBA',
         'cbssportsapp': 'CBS Sports',
         'foxone': 'FOX Sports',
         'dazn': 'DAZN',

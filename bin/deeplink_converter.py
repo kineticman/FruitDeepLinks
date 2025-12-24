@@ -195,25 +195,27 @@ def convert_turner(punchout_url: str) -> Optional[str]:
 
 def convert_nba_gametime(punchout_url: str) -> Optional[str]:
     """
-    gametime://game/0022500373?source=atv-search -> https://www.nba.com/game/0022500373
-    gametime://game?gameId=0022500368           -> https://www.nba.com/game/0022500368
+    NBA (gametime) deeplink - strip Apple TV query params
+    
+    Input:  gametime://game/0022500409?x-source=umc.ums.apple.tvapp&x-apple-...
+    Output: gametime://game/0022500409
+    
+    Per user report from CDVR forum (2024-12):
+    "First test only opened NBA app. Then scrubbed query string linking it to atv 
+    and it opened app, and set it to the event page of the game."
+    
+    Keep the native gametime:// scheme but remove Apple TV tracking params.
+    This works better when launching from CDVR on Fire TV / Android devices.
     """
     if not punchout_url or not punchout_url.lower().startswith("gametime://"):
         return None
 
-    # path form: gametime://game/<id>
-    m = re.search(r"gametime://game/(\d{10})", punchout_url, re.I)
-    if m:
-        return f"https://www.nba.com/game/{m.group(1)}"
-
-    # query form: gametime://game?gameId=<id>
-    pr = urlparse(punchout_url)
-    qs = parse_qs(pr.query)
-    gid = (qs.get("gameId") or qs.get("gameID") or qs.get("gameid") or [None])[0]
-    if gid and re.fullmatch(r"\d{10}", gid):
-        return f"https://www.nba.com/game/{gid}"
-
-    return None
+    # Strip query string parameters - just keep the base deeplink
+    if '?' in punchout_url:
+        return punchout_url.split('?')[0]
+    
+    # Already clean
+    return punchout_url
 
 
 def convert_nbcsports(punchout_url: str) -> Optional[str]:
