@@ -1059,6 +1059,7 @@ def schedule_auto_refresh_from_settings():
             minute=minute,
             id="daily_auto_refresh",
             replace_existing=True,
+            misfire_grace_time=300,  # 5 minute grace period for container CPU contention
         )
         log(
             f"Auto-refresh scheduled daily at {hour:02d}:{minute:02d} (scheduler local TZ)",
