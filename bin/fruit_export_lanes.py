@@ -13,6 +13,24 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
+# Import shared XMLTV helpers
+try:
+    from xmltv_helpers import (
+        get_provider_display_name,
+        get_provider_from_channel,
+        add_categories_and_tags,
+    )
+except ImportError:
+    # Fallback if not in path - define locally
+    def get_provider_display_name(provider_id: str) -> str:
+        return provider_id.title() if provider_id else None
+    
+    def get_provider_from_channel(channel_name: str) -> str:
+        return channel_name or "Sports"
+    
+    def add_categories_and_tags(prog_el, event, provider_name=None, is_placeholder=False):
+        pass
+
 # -------------------- DB helpers --------------------
 def get_conn(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
@@ -27,70 +45,6 @@ def parse_iso(dt_str: str) -> datetime:
 
 def xmltv_time(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y%m%d%H%M%S +0000")
-
-def get_provider_from_channel(channel_name: str) -> str:
-    if not channel_name:
-        return "Sports"
-    channel_lower = channel_name.lower()
-    if "espn" in channel_lower:
-        return "ESPN+"
-    elif "peacock" in channel_lower or "nbc" in channel_lower:
-        return "Peacock"
-    elif "prime" in channel_lower or "amazon" in channel_lower:
-        return "Prime Video"
-    elif "cbs" in channel_lower:
-        return "CBS Sports"
-    elif "paramount" in channel_lower:
-        return "Paramount+"
-    elif "fox" in channel_lower:
-        return "FOX Sports"
-    elif "dazn" in channel_lower:
-        return "DAZN"
-    elif "apple" in channel_lower:
-        return "Apple TV+"
-    else:
-        return channel_name
-
-def get_provider_display_name(provider_id: str) -> str:
-    """Map provider IDs to friendly display names using logical_service_mapper"""
-    if not provider_id:
-        return None
-    
-    # Try to import and use the logical service mapper
-    try:
-        from logical_service_mapper import get_service_display_name
-        return get_service_display_name(provider_id)
-    except ImportError:
-        pass
-    
-    # Fallback to local mapping if import fails
-    provider_lower = provider_id.lower()
-    
-    provider_map = {
-        'sportscenter': 'ESPN+',
-        'sportsonespn': 'ESPN+',
-        'peacock': 'Peacock',
-        'peacocktv': 'Peacock',
-        'peacock_web': 'Peacock (Web)',
-        'pplus': 'Paramount+',
-        'aiv': 'Prime Video',
-        'gametime': 'NBA',
-        'cbssportsapp': 'CBS Sports',
-        'foxone': 'FOX Sports',
-        'dazn': 'DAZN',
-        'open.dazn.com': 'DAZN',
-        'max': 'Max',
-        'f1tv': 'F1 TV',
-        'apple_mls': 'Apple MLS',
-        'apple_mlb': 'Apple MLB',
-        'apple_nba': 'Apple NBA',
-        'apple_nhl': 'Apple NHL',
-        'apple_other': 'Apple TV+',
-        'https': 'Web - Other',
-        'http': 'Web - Other',
-    }
-    
-    return provider_map.get(provider_lower, provider_id.title())
 
 # -------------------- Image helper (matches fruit_export_hybrid) --------------------
 def get_event_image_url(conn: sqlite3.Connection, event: Dict) -> Optional[str]:
@@ -164,7 +118,7 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
     # Build XMLTV
     tv = ET.Element("tv")
     tv.set("generator-info-name", "FruitDeepLinks - Lanes")
-    tv.set("generator-info-url", "https://github.com/yourusername/FruitDeepLinks")
+    tv.set("generator-info-url", "https://github.com/bdean/FruitDeepLinks")
     
     # Create channels
     for lane in lanes:
@@ -233,42 +187,32 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
             
             ET.SubElement(prog, "desc").text = desc
             
-            # Categories - skip for placeholders
+            # Categories and tags - use shared helper
             is_placeholder = event.get("is_placeholder")
-            # Only add categories for real events (is_placeholder == 0 or False or None)
-            if is_placeholder != 1 and is_placeholder != True:
-                # Add provider/service (ESPN+, Peacock, etc)
-                # Reuse variables already fetched for description
+            # Normalize placeholder detection
+            is_placeholder_bool = bool(is_placeholder in (1, True, "1"))
+            
+            # Determine provider name for categories
+            provider_name = None
+            if not is_placeholder_bool:
+                chosen_logical_service = event.get("chosen_logical_service")
+                chosen_provider = event.get("chosen_provider")
+                channel_name = event.get("channel_name")
                 
-                # Use logical service first (already mapped), then provider
-                provider_name = None
                 if chosen_logical_service:
                     provider_name = get_provider_display_name(chosen_logical_service)
                 elif chosen_provider:
                     provider_name = get_provider_display_name(chosen_provider)
                 elif channel_name:
-                    # Fallback to channel name parsing
                     provider_name = get_provider_from_channel(channel_name)
-                
-                if provider_name:
-                    ET.SubElement(prog, "category").text = provider_name
-                
-                # Add standard categories
-                ET.SubElement(prog, "category").text = "Sports"
-                ET.SubElement(prog, "category").text = "Sports Event"
-                ET.SubElement(prog, "category").text = "Live"
-                
-                # Genres (Hockey, Soccer, etc)
-                genres_json = event.get("genres_json")
-                if genres_json:
-                    try:
-                        genres = json.loads(genres_json)
-                        if isinstance(genres, list):
-                            for g in genres:
-                                if g and g != "Sports":
-                                    ET.SubElement(prog, "category").text = str(g)
-                    except Exception:
-                        pass
+            
+            # Add all categories and tags using shared helper
+            add_categories_and_tags(
+                prog,
+                event=dict(event),
+                provider_name=provider_name,
+                is_placeholder=is_placeholder_bool,
+            )
             
             # Image (uses same Apple shelf logic as direct exporter)
             img_url = get_event_image_url(conn, event)

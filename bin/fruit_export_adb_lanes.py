@@ -26,6 +26,20 @@ import xml.etree.ElementTree as ET
 from typing import Optional, Dict
 import json
 
+# Import shared XMLTV helpers
+try:
+    from xmltv_helpers import (
+        get_provider_display_name,
+        add_categories_and_tags,
+    )
+except ImportError:
+    # Fallback if not in path
+    def get_provider_display_name(provider_id: str) -> str:
+        return provider_id.title() if provider_id else None
+    
+    def add_categories_and_tags(prog_el, event, provider_name=None, is_placeholder=False):
+        pass
+
 DEFAULT_DB_PATH = Path(__file__).resolve().parents[1] / "data" / "fruit_events.db"
 DEFAULT_OUT_DIR = Path(__file__).resolve().parents[1] / "out"
 DEFAULT_SERVER_URL = os.getenv("FRUIT_SERVER_URL") or "http://localhost:6655"
@@ -85,31 +99,9 @@ def snap_up_to_quarter(dt: datetime) -> datetime:
     return (dt + timedelta(minutes=delta_min)).replace(second=0, microsecond=0)
 
 
-def _add_categories(prog_el: ET.Element, provider_label: str, genres_json: Optional[str]) -> None:
-    """Attach provider/sports/genre categories to a <programme> element."""
-    if provider_label:
-        ET.SubElement(prog_el, "category").text = provider_label
-    # Always tag as Sports
-    ET.SubElement(prog_el, "category").text = "Sports"
-    if genres_json:
-        try:
-            genres = json.loads(genres_json) or []
-            for g in genres:
-                if not g:
-                    continue
-                if g == provider_label or g == "Sports":
-                    continue
-                ET.SubElement(prog_el, "category").text = str(g)
-        except Exception:
-            # Best-effort only; don't break export on bad JSON
-            pass
-
-
-
 def get_event_image_url(event: Dict) -> Optional[str]:
     """Simply return hero_image_url from events table (pre-selected during import)."""
     return event.get("hero_image_url")
-# -------------------- Event
 
 
 def _add_placeholder_blocks(
@@ -304,7 +296,6 @@ def export_adb_lanes(db_path: Path, out_dir: Path, server_url: str) -> Path:
 
                 title = row["title"] or row["title_brief"] or "Event"
                 synopsis = row["synopsis"] or row["synopsis_brief"] or ""
-                genres_json = row["genres_json"]
 
                 prog_el = ET.SubElement(
                     tv,
@@ -320,7 +311,14 @@ def export_adb_lanes(db_path: Path, out_dir: Path, server_url: str) -> Path:
                     desc_el = ET.SubElement(prog_el, "desc")
                     desc_el.text = synopsis
 
-                _add_categories(prog_el, provider_label, genres_json)
+                # Use shared helper for categories and tags
+                provider_display = get_provider_display_name(provider_code) or provider_label
+                add_categories_and_tags(
+                    prog_el,
+                    event=dict(row),
+                    provider_name=provider_display,
+                    is_placeholder=False,
+                )
 
                 # Add image icon from hero_image_url (pre-selected during import)
                 image_url = get_event_image_url(dict(row))
