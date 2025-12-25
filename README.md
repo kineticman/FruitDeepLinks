@@ -27,17 +27,36 @@ FruitDeepLinks creates virtual TV channels in Channels DVR with deeplinks that l
 
 ---
 
-## 🆕 What's New (Enhanced Scrape)
+## 🆕 What's New
 
-Recent work focused on capturing **more deeplinks per event** and making provider selection more reliable:
+### Latest Features
 
-- **Enhanced Apple scrape** now preserves richer service metadata (e.g., `service_name`, `logical_service`) and captures more playable/deeplink options per event.
-- **Service priority is user-adjustable** so you can control which provider wins when multiple options exist.
-- Added **multi-service selection helpers** to quickly identify events that have multiple services available.
-- **Improved ADB compatibility** for Android/Fire workflows.
-- **Improved HTTP fallback generation** (best‑guess web URLs) for cases where native schemes aren’t usable.
-- **Metadata/labeling fixes** so Category/Description match the chosen provider (e.g., CBS Sports → Paramount+), and duplicate “Available on …” strings are avoided.
-- **Chrome Capture support (BETA)**: exports a Chrome‑Capture friendly lanes playlist and adds `/api/lane/<n>/launch` (302 redirect) so capture/launcher tools can follow an HTTP URL. **This is heavily dependent on FruitDeepLinks being able to derive a reliable HTTP deeplink** for the chosen provider — expect occasional misses and ongoing tuning.
+**🎬 CDVR Detector - Automatic App Launching**
+- Tune to a Fruit Lane in Channels DVR → streaming app launches automatically!
+- Detects which device is watching and launches the correct service (ESPN+, Peacock, etc.)
+- Supported on Apple TV, Fire TV, and Android TV
+- No manual app switching required
+
+**📊 Standards-Compliant XMLTV Exports**
+- Proper `<live/>` and `<new/>` tags for EPG consumers
+- Structured category taxonomy (Provider, Sport, League, "Sports Event")
+- Sport/league metadata from Apple's classification system
+- Clean placeholders with no unnecessary tags
+- Shared `xmltv_helpers.py` module for consistent tagging across all exporters
+
+**🌏 Kayo Sports Integration**
+- Full Australian sports streaming support (Cricket, AFL, NRL, etc.)
+- Web-based deeplink generation
+- Integrated into multi-provider selection
+
+### Enhanced Multi-Provider Support
+
+- **Enhanced Apple scrape** preserves richer service metadata and captures multiple playable/deeplink options per event
+- **User-adjustable service priority** - control which provider wins when multiple options exist
+- **Multi-service selection helpers** to identify events available on multiple services
+- **Improved ADB compatibility** for Android/Fire workflows
+- **Improved HTTP fallback generation** for cases where native schemes aren't usable
+- **Metadata/labeling fixes** - categories/descriptions match the chosen provider accurately
 
 ---
 
@@ -192,7 +211,7 @@ If you’re unsure, **start with direct channels only** and ignore lanes/ADB unt
 | Apple NBA    | Web                           | Apple TV NBA games                                  |
 | Apple NHL    | Web                           | Apple TV NHL games                                  |
 | DAZN         | Native (`dazn://`)            | DAZN sports                                         |
-| Kayo Sports  | Web                           | Australian sports (Cricket, AFL, NRL, etc.)         |
+| Kayo Sports  | Web (`kayo_web`)          | Australian sports (Cricket, AFL, NRL, Rugby, etc.) - Full integration | Australian sports (Cricket, AFL, NRL, etc.)         |
 | F1 TV        | Web                           | F1 TV Pro content                                   |
 | ViX          | Native (`vixapp://`)          | Spanish-language sports                             |
 | NFL+         | Native (`nflctv://`)          | NFL+ games & replays                                |
@@ -217,11 +236,23 @@ Actual event counts vary by season and scrape window.
 
 Configure what you see in the web dashboard:
 
-- **Service Filtering** – Enable only your subscriptions.
-- **Sport Filtering** – Hide sports you don't watch.
-- **League Filtering** – Hide specific leagues/competitions.
-- **Automatic Deeplink Selection** – Uses *your* enabled services and provider priorities.
-- **Built-in scheduling (APScheduler)** – Runs refresh/automation internally (no cron).
+- **Service Filtering** – Enable only your subscriptions
+- **Sport Filtering** – Hide sports you don't watch
+- **League Filtering** – Hide specific leagues/competitions
+- **Automatic Deeplink Selection** – Uses your enabled services and provider priorities
+- **Built-in scheduling (APScheduler)** – Runs refresh/automation internally (no cron)
+
+### 🎬 Automatic App Launching (CDVR Detector)
+
+When you tune to a Fruit Lane channel in Channels DVR, FruitDeepLinks automatically:
+
+1. **Detects which device is watching** (Apple TV, Fire TV, Android TV)
+2. **Looks up the current live event's deeplink**
+3. **Launches the appropriate streaming app** (ESPN+, Peacock, etc.)
+
+**No manual app switching required!** Just tune to the lane and the app launches.
+
+**Setup:** Requires `CDVR_DVR_PATH` environment variable pointing to your Channels DVR recordings folder. See setup instructions below.
 
 **Example:** Enable ESPN+ and Peacock → system shows only events available on those services and automatically selects the best deeplink.
 
@@ -485,10 +516,15 @@ FruitDeepLinks/
    - Handles web URL mapping (Apple MLS, Max, etc.).
 
 4. **Export Engine**
-   - Generates XMLTV EPG files.
-   - Creates M3U playlists with deeplinks.
-   - Builds scheduled lane channels (BETA).
-   - Builds provider-specific ADB lanes (BETA).
+   - Generates standards-compliant XMLTV EPG files
+   - Creates M3U playlists with deeplinks
+   - Builds scheduled lane channels (BETA)
+   - Builds provider-specific ADB lanes (BETA)
+   - Uses shared `xmltv_helpers.py` for consistent tagging:
+     - Proper `<live/>` and `<new/>` tags
+     - Structured categories (Provider, Sport, League)
+     - Sport/league from classification_json
+     - Conditional tagging (placeholders excluded)
 
 5. **Web Dashboard** (Flask)
    - Real-time configuration interface.
@@ -621,10 +657,12 @@ Database size: ~15MB
 
 ### Recently Completed
 
-- [x] Kayo Sports integration (Australian sports streaming)
-- [x] Filter UI bug fixes (JavaScript errors resolved)
-- [x] Improved logical service mapping for web-based providers
-- [x] Sport name capitalization normalization
+- [x] **CDVR Detector** - Automatic app launching when tuning to Fruit Lanes
+- [x] **XMLTV Standards Compliance** - Proper `<live/>` and `<new/>` tags with structured categories
+- [x] **Kayo Sports Integration** - Australian sports streaming support
+- [x] **Filter UI Bug Fixes** - JavaScript errors resolved
+- [x] **Improved Logical Service Mapping** - Better web-based provider support
+- [x] **Sport Name Normalization** - Consistent capitalization
 
 ### Coming Soon
 
