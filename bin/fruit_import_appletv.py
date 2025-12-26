@@ -612,6 +612,15 @@ def extract_playables(
         deeplink_open = punchout.get("open") or playable.get("deeplink_open")
         playable_url = playable.get("playable_url") or playable.get("url") or playable.get("playableUrl")
 
+        # ESPN deeplink fix: Convert playChannel format to playID format
+        if deeplink_play and "sportscenter://" in deeplink_play and "playChannel=" in deeplink_play:
+            external_id = playable.get("externalId")
+            if external_id:
+                # Extract just the ID part (after the last colon)
+                play_id = external_id.split(":")[-1] if ":" in external_id else external_id
+                deeplink_play = f"sportscenter://x-callback-url/showWatchStream?playID={play_id}&x-source=AppleUMC"
+                # ESPN deeplink corrected: playChannel -> playID
+
         # Determine provider (scheme) from best available URL
         provider = None
         url = deeplink_play or deeplink_open or playable_url or ""
