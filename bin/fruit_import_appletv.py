@@ -624,8 +624,10 @@ def extract_playables(
                     # ESPN deeplink corrected: playChannel -> playID
             
             # Strip x-source parameter from all ESPN deeplinks (for cross-platform compatibility)
-            if "&x-source=" in deeplink_play:
-                deeplink_play = deeplink_play.split("&x-source=")[0]
+            # Handle both &x-source= and ?x-source= cases
+            if "x-source=" in deeplink_play:
+                # Split on x-source and take everything before it
+                deeplink_play = deeplink_play.split("x-source=")[0].rstrip("&?")
 
         # Determine provider (scheme) from best available URL
         provider = None
