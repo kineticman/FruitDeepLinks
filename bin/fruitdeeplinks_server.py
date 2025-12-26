@@ -1211,6 +1211,61 @@ def create_dummy_segment():
         log("Install ffmpeg: apt-get install ffmpeg", "WARN")
         return False
 
+def extract_service_name(deeplink: str) -> str:
+    """Extract a friendly service name from a deeplink URL.
+    
+    Args:
+        deeplink: The deeplink URL (scheme or HTTP)
+    
+    Returns:
+        Friendly service name like "ESPN+", "Paramount+", "DAZN", etc.
+    """
+    if not deeplink:
+        return "Unknown"
+    
+    deeplink_lower = deeplink.lower()
+    
+    # Map of patterns to service names
+    service_patterns = [
+        (["sportscenter://", "espn.com/watch"], "ESPN+"),
+        (["pplus://", "paramountplus.com"], "Paramount+"),
+        (["aiv://", "primevideo.com", "amazon.com/"], "Prime Video"),
+        (["peacock://", "peacocktv.com"], "Peacock"),
+        (["max.com", "max://", "hbomax.com"], "Max"),
+        (["formula1.com", "f1tv://"], "F1 TV"),
+        (["mlb.com/tv", "mlbtv://"], "MLB.tv"),
+        (["open.dazn.com://", "dazn.com"], "DAZN"),
+        (["kayosports.com.au"], "Kayo Sports"),
+        (["nba.com/watch", "watch.nba.com"], "NBA League Pass"),
+        (["nhl.com/tv", "nhltv://"], "NHL.tv"),
+        (["apple.com/"], "Apple TV+"),
+        (["videos://", "tv.apple.com"], "Apple TV"),
+        (["netflix.com"], "Netflix"),
+        (["hulu.com"], "Hulu"),
+        (["disneyplus.com", "disney://"], "Disney+"),
+        (["fubo.tv", "fubotv://"], "Fubo"),
+        (["sling.com"], "Sling TV"),
+        (["youtube.com/tv", "youtubetv://"], "YouTube TV"),
+    ]
+    
+    for patterns, service_name in service_patterns:
+        if any(pattern in deeplink_lower for pattern in patterns):
+            return service_name
+    
+    # Fallback: extract domain name
+    import re
+    domain_match = re.search(r'(?:https?://)?(?:www\.)?([^/:]+)', deeplink)
+    if domain_match:
+        domain = domain_match.group(1)
+        # Clean up common prefixes
+        domain = domain.replace("www.", "").replace("watch.", "").replace("tv.", "")
+        # Capitalize first letter of each part
+        parts = domain.split('.')
+        if parts:
+            return parts[0].capitalize()
+    
+    return "Unknown"
+
 def bootstrap_streamlink_files():
     """Bootstrap streamlink files for CDVR detector on startup"""
     if not DETECTOR_ENABLED:
@@ -1320,7 +1375,7 @@ def get_deeplink_for_lane(lane_number: int, self_base_url: str, deeplink_format:
     except Exception:
         return None
 
-def trigger_playback_on_client(client_ip: str, deeplink: str, lane_number: int) -> dict:
+def trigger_playback_on_client(client_ip: str, deeplink: str, lane_number: int, title: str = None, service: str = None) -> dict:
     """Orchestrate playback: update strmlnk, reprocess, trigger client"""
     result = {
         "lane_number": lane_number,
@@ -1332,8 +1387,12 @@ def trigger_playback_on_client(client_ip: str, deeplink: str, lane_number: int) 
     }
     
     try:
-        log(f"Triggering playback for lane {lane_number} on {client_ip}", "INFO")
-        log(f"Deeplink to use: {deeplink}", "INFO")
+        # Log with event details if provided
+        if title and service:
+            log(f"Triggering: Lane {lane_number} → '{title}' on {service}", "INFO")
+        else:
+            log(f"Triggering playback for lane {lane_number} on {client_ip}", "INFO")
+        log(f"Deeplink: {deeplink}", "INFO")
         
         # Update streamlink file
         strmlnk_path = STREAMLINK_DIR / f"lane{lane_number}.strmlnk"
@@ -1382,7 +1441,10 @@ def trigger_playback_on_client(client_ip: str, deeplink: str, lane_number: int) 
         
         if play_resp.status_code == 200:
             result["playback_triggered"] = True
-            log(f"Successfully triggered deeplink on {client_ip}", "INFO")
+            if title and service:
+                log(f"✓ Launched '{title}' on {service} (client: {client_ip})", "INFO")
+            else:
+                log(f"Successfully triggered deeplink on {client_ip}", "INFO")
         else:
             log(f"Play request returned status {play_resp.status_code}", "WARN")
         
@@ -1477,7 +1539,16 @@ def auto_detect_and_trigger(lane_number: int, hint_client_ip: str, self_base_url
                     return
 
                 deeplink = deeplink_info.get("deeplink")
-                result = trigger_playback_on_client(client_ip, deeplink, int(lane_number))
+                title = deeplink_info.get("title", "Unknown Event")
+                is_fallback = deeplink_info.get("is_fallback", False)
+                
+                # Extract service name from deeplink
+                service = extract_service_name(deeplink)
+                
+                fallback_indicator = " [FALLBACK]" if is_fallback else ""
+                log(f"Detector: Event='{title}' Service={service}{fallback_indicator}", "INFO")
+                
+                result = trigger_playback_on_client(client_ip, deeplink, int(lane_number), title, service)
                 
                 return
 
