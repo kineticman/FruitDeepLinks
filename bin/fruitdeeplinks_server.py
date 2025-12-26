@@ -613,7 +613,7 @@ def get_event_link_columns(conn):
     return uid_col, primary_deeplink_col, full_deeplink_col
 
 
-def get_event_link_info(conn, event_id, uid_col, primary_deeplink_col, full_deeplink_col):
+def get_event_link_info(conn, event_id, uid_col, primary_deeplink_col, full_deeplink_col, chosen_provider=None):
     """Fetch UID + deeplink info for a given event_id.
 
     Returns dict with:
@@ -623,13 +623,18 @@ def get_event_link_info(conn, event_id, uid_col, primary_deeplink_col, full_deep
         "deeplink_url_full": str | None,
       }
 
-    Resolution priority (mirrors direct.m3u exporter):
-      1. Explicit deeplink columns in `events` table, if present and non-null.
-      2. `filter_integration.get_best_deeplink_for_event` (respects enabled services).
-      3. `filter_integration.get_fallback_deeplink` using raw_attributes_json.
-      4. Peacock web deeplink (for non-Apple events with pvid).
-      5. Apple TV fallback using `playables.playable_url`.
-      6. Final fallback: `apple_tv_url` from events.raw_attributes_json.
+    Resolution priority:
+      If chosen_provider is provided:
+        - Use provider-specific deeplink from playables table (bypasses service filtering)
+        - Fallback to generic resolution if provider has no playable
+      
+      Otherwise (mirrors direct.m3u exporter):
+        1. Explicit deeplink columns in `events` table, if present and non-null.
+        2. `filter_integration.get_best_deeplink_for_event` (respects enabled services).
+        3. `filter_integration.get_fallback_deeplink` using raw_attributes_json.
+        4. Peacock web deeplink (for non-Apple events with pvid).
+        5. Apple TV fallback using `playables.playable_url`.
+        6. Final fallback: `apple_tv_url` from events.raw_attributes_json.
     """
     cur = conn.cursor()
 
@@ -695,6 +700,20 @@ def get_event_link_info(conn, event_id, uid_col, primary_deeplink_col, full_deep
 
     # Start with explicit columns
     deeplink_url = primary_value or full_value
+
+    # If chosen_provider is provided, use provider-specific deeplink first
+    # This ensures lanes use the exact provider that was selected during lane building
+    if chosen_provider and not deeplink_url:
+        provider_link = get_provider_playable_link(conn, event_id, chosen_provider)
+        deeplink_url = provider_link.get('deeplink')
+        if deeplink_url:
+            # Provider-specific deeplink found, use it
+            deeplink_full = deeplink_url
+            return {
+                "event_uid": event_uid,
+                "deeplink_url": deeplink_url,
+                "deeplink_url_full": deeplink_full,
+            }
 
     # 2. filter_integration best deeplink / fallback
     if not deeplink_url and FILTERING_AVAILABLE:
@@ -3235,8 +3254,9 @@ def whatson_lane(lane_id):
                 
                 log(f"Lane {lane_id}: Using FALLBACK event '{title}' (ended at {fallback['end_utc']})", "INFO")
                 
-                # Get deeplink info for fallback event
-                link_info = get_event_link_info(conn, event_id, uid_col, primary_col, full_col)
+                # Get deeplink info for fallback event - use chosen_provider from fallback if available
+                fallback_provider = fallback.get('chosen_provider') or chosen_provider
+                link_info = get_event_link_info(conn, event_id, uid_col, primary_col, full_col, chosen_provider=fallback_provider)
                 event_uid = link_info.get("event_uid")
                 deeplink_url = link_info.get("deeplink_url")
                 deeplink_url_full = link_info.get("deeplink_url_full")
@@ -3249,7 +3269,8 @@ def whatson_lane(lane_id):
             channel_name = row["channel_name"]
             synopsis = row["synopsis"]
             
-            link_info = get_event_link_info(conn, event_id, uid_col, primary_col, full_col)
+            # Pass chosen_provider to get the exact provider deeplink that was selected during lane building
+            link_info = get_event_link_info(conn, event_id, uid_col, primary_col, full_col, chosen_provider=chosen_provider)
             event_uid = link_info.get("event_uid")
             deeplink_url = link_info.get("deeplink_url")
             deeplink_url_full = link_info.get("deeplink_url_full")
@@ -3474,7 +3495,7 @@ def load_template(template_name):
                         if template_name == "admin_dashboard.html":
                             html2 = re.sub(
                                 r'(<a\s+href="/filters"[^>]*>.*?</a>)',
-                                r'\1\n      <a href="/events" class="btn btn-secondary">🔎 Event Inspector</a>',
+                                r'\1\n      <a href="/events" class="btn btn-secondary">ðŸ”Ž Event Inspector</a>',
                                 html,
                                 count=1,
                                 flags=re.S,
@@ -3482,7 +3503,7 @@ def load_template(template_name):
                             if html2 == html:
                                 html2 = re.sub(
                                     r'(<div\s+class="nav-bar"[^>]*>)',
-                                    r'\1\n      <a href="/events" class="btn btn-secondary">🔎 Event Inspector</a>',
+                                    r'\1\n      <a href="/events" class="btn btn-secondary">ðŸ”Ž Event Inspector</a>',
                                     html,
                                     count=1,
                                     flags=re.S,
@@ -3492,7 +3513,7 @@ def load_template(template_name):
                         elif template_name == "filters.html":
                             html2 = re.sub(
                                 r'(<a\s+href="/adb"[^>]*>.*?</a>)',
-                                r'\1\n      <a href="/events" class="btn btn-secondary">🔎 Event Inspector</a>',
+                                r'\1\n      <a href="/events" class="btn btn-secondary">ðŸ”Ž Event Inspector</a>',
                                 html,
                                 count=1,
                                 flags=re.S,
@@ -3500,7 +3521,7 @@ def load_template(template_name):
                             if html2 == html:
                                 html2 = re.sub(
                                     r'(<div\s+class="nav-bar"[^>]*>)',
-                                    r'\1\n      <a href="/events" class="btn btn-secondary">🔎 Event Inspector</a>',
+                                    r'\1\n      <a href="/events" class="btn btn-secondary">ðŸ”Ž Event Inspector</a>',
                                     html,
                                     count=1,
                                     flags=re.S,
@@ -3520,11 +3541,11 @@ def load_template(template_name):
     <html>
     <head><title>Template Error</title><style>body{{font-family:sans-serif;padding:40px;background:#1a1a1a;color:#eee;}}</style></head>
     <body>
-        <h1>âŒ Template Error</h1>
+        <h1>Ã¢ÂÅ’ Template Error</h1>
         <p>Could not load template: <code>{template_name}</code></p>
         <p>Searched in:</p>
         <ul>{''.join(f'<li><code>{p}</code></li>' for p in template_paths)}</ul>
-        <p><a href="/">â† Back to Dashboard</a></p>
+        <p><a href="/">Ã¢â€ Â Back to Dashboard</a></p>
     </body>
     </html>
     """
