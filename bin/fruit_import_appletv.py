@@ -618,7 +618,7 @@ def extract_playables(
             if external_id:
                 # Extract just the ID part (after the last colon)
                 play_id = external_id.split(":")[-1] if ":" in external_id else external_id
-                deeplink_play = f"sportscenter://x-callback-url/showWatchStream?playID={play_id}&x-source=AppleUMC"
+                deeplink_play = f"sportscenter://x-callback-url/showWatchStream?playID={play_id}"
                 # ESPN deeplink corrected: playChannel -> playID
 
         # Determine provider (scheme) from best available URL
