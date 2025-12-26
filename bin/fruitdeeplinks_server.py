@@ -203,7 +203,8 @@ def get_user_preferences():
             "disabled_sports": [],
             "disabled_leagues": [],
             "service_priorities": {},
-            "amazon_penalty": True
+            "amazon_penalty": True,
+            "language_preference": "en"
         }
 
     try:
@@ -218,7 +219,8 @@ def get_user_preferences():
                 "disabled_sports": [],
                 "disabled_leagues": [],
                 "service_priorities": {},
-                "amazon_penalty": True
+                "amazon_penalty": True,
+                "language_preference": "en"
             }
 
         prefs = {}
@@ -258,6 +260,19 @@ def get_user_preferences():
         else:
             result["amazon_penalty"] = True
         
+        # Add language_preference
+        if "language_preference" in prefs:
+            lang = prefs["language_preference"]
+            # Handle both string and already-parsed values
+            if isinstance(lang, str) and lang.startswith('"'):
+                try:
+                    lang = json.loads(lang)
+                except Exception:
+                    lang = "en"
+            result["language_preference"] = lang if lang in ['en', 'es', 'both'] else 'en'
+        else:
+            result["language_preference"] = "en"
+        
         return result
     except Exception as e:
         log(f"Error loading preferences: {e}", "ERROR")
@@ -266,7 +281,8 @@ def get_user_preferences():
             "disabled_sports": [],
             "disabled_leagues": [],
             "service_priorities": {},
-            "amazon_penalty": True
+            "amazon_penalty": True,
+            "language_preference": "en"
         }
 
 
@@ -1392,7 +1408,10 @@ def trigger_playback_on_client(client_ip: str, deeplink: str, lane_number: int, 
             log(f"Triggering: Lane {lane_number} → '{title}' on {service}", "INFO")
         else:
             log(f"Triggering playback for lane {lane_number} on {client_ip}", "INFO")
-        log(f"Deeplink: {deeplink}", "INFO")
+        
+        # Log the deeplink with format indicator
+        deeplink_type = "HTTP" if deeplink.startswith("http://") or deeplink.startswith("https://") else "Scheme"
+        log(f"Deeplink [{deeplink_type}]: {deeplink}", "INFO")
         
         # Update streamlink file
         strmlnk_path = STREAMLINK_DIR / f"lane{lane_number}.strmlnk"
@@ -3368,6 +3387,7 @@ def whatson_lane(lane_id):
                             else generate_http_deeplink(deeplink_url)
                         )
                     if http_version:
+                        log(f"whatson/{lane_id}: Converted to HTTP deeplink for Android/Fire TV", "DEBUG")
                         deeplink_url = http_version
 
                 # Try to convert full deeplink
@@ -3389,7 +3409,7 @@ def whatson_lane(lane_id):
                         deeplink_url_full = http_version
 
             except ImportError:
-                log("deeplink_converter not available, using original scheme URLs", "WARN")
+                log(f"whatson/{lane_id}: deeplink_converter not available, using scheme URLs", "WARN")
 
         conn.close()
 

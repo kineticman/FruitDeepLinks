@@ -211,14 +211,17 @@ def build_lanes_with_placeholders(
 
     # Load enabled services (if filter integration is available)
     enabled_services: List[str] = []
+    language_preference: str = 'en'
     if FILTERING_AVAILABLE:
         try:
             prefs = load_user_preferences(conn)
             raw_enabled = prefs.get("enabled_services", [])
             if isinstance(raw_enabled, list):
                 enabled_services = raw_enabled
+            language_preference = prefs.get("language_preference", "en")
         except Exception:
             enabled_services = []
+            language_preference = 'en'
 
     # Precompute best playables per event (when filter integration is available)
     playable_cache: Dict[str, Optional[Dict[str, Any]]] = {}
@@ -228,7 +231,8 @@ def build_lanes_with_placeholders(
             if ev.event_id:
                 try:
                     best = get_best_playable_for_event(
-                        conn, ev.event_id, enabled_services
+                        conn, ev.event_id, enabled_services,
+                        language_preference=language_preference
                     )
                 except Exception:
                     best = None

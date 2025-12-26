@@ -345,6 +345,36 @@ Select which streaming services you have subscriptions to. Only events available
 </div>
 
 <div class="card">
+<h2>🌐 Language Preference</h2>
+<p class="section-description">
+When events are available in multiple languages (e.g. ESPN and ESPN Deportes), choose your preferred language.
+</p>
+<div class="filter-grid">
+<div class="filter-item enabled" onclick="setLanguage('en')" id="lang-en">
+<div class="checkbox"></div>
+<div class="filter-info">
+<div class="filter-name">English</div>
+<div class="filter-count">Prefer English broadcasts when available</div>
+</div>
+</div>
+<div class="filter-item disabled" onclick="setLanguage('es')" id="lang-es">
+<div class="checkbox"></div>
+<div class="filter-info">
+<div class="filter-name">Spanish (Español)</div>
+<div class="filter-count">Prefer Spanish broadcasts when available</div>
+</div>
+</div>
+<div class="filter-item disabled" onclick="setLanguage('both')" id="lang-both">
+<div class="checkbox"></div>
+<div class="filter-info">
+<div class="filter-name">Both / No Filter</div>
+<div class="filter-count">Include all language variants</div>
+</div>
+</div>
+</div>
+</div>
+
+<div class="card">
 <h2>🎯 Service Priority Order</h2>
 <div class="priority-help">
 <strong>⚡ When multiple services have the same event, which should be used?</strong><br>
@@ -409,7 +439,8 @@ enabled_services: [],
 disabled_sports: [],
 disabled_leagues: [],
 service_priorities: {},
-amazon_penalty: true
+amazon_penalty: true,
+language_preference: 'en'  // 'en', 'es', or 'both'
 };
 
 let availableFilters = {
@@ -436,11 +467,19 @@ currentPreferences.enabled_services = availableFilters.providers.map(p => p.sche
 // Load priorities
 await loadPriorities();
 
+// Set default language preference if not present
+if (!currentPreferences.language_preference) {
+currentPreferences.language_preference = 'en';
+}
+
 renderProviders();
 renderSports();
 renderLeagues();
 renderPriorities();
 updateStats();
+
+// Update language UI
+setLanguage(currentPreferences.language_preference);
 
 // Load selection examples
 loadSelectionExamples();
@@ -680,6 +719,18 @@ loading.style.display = 'none';
 grid.style.display = 'grid';
 }
 
+function setLanguage(lang) {
+currentPreferences.language_preference = lang;
+// Update UI
+['lang-en', 'lang-es', 'lang-both'].forEach(id => {
+const el = document.getElementById(id);
+el.classList.remove('enabled');
+el.classList.add('disabled');
+});
+document.getElementById(`lang-${lang}`).classList.remove('disabled');
+document.getElementById(`lang-${lang}`).classList.add('enabled');
+}
+
 function toggleProvider(scheme) {
 const index = currentPreferences.enabled_services.indexOf(scheme);
 if (index > -1) {
@@ -721,7 +772,8 @@ headers: {'Content-Type': 'application/json'},
 body: JSON.stringify({
 enabled_services: currentPreferences.enabled_services,
 disabled_sports: currentPreferences.disabled_sports,
-disabled_leagues: currentPreferences.disabled_leagues
+disabled_leagues: currentPreferences.disabled_leagues,
+language_preference: currentPreferences.language_preference
 })
 });
 
@@ -756,7 +808,8 @@ headers: {'Content-Type': 'application/json'},
 body: JSON.stringify({
 enabled_services: currentPreferences.enabled_services,
 disabled_sports: currentPreferences.disabled_sports,
-disabled_leagues: currentPreferences.disabled_leagues
+disabled_leagues: currentPreferences.disabled_leagues,
+language_preference: currentPreferences.language_preference
 })
 });
 
@@ -804,7 +857,8 @@ enabled_services: availableFilters.providers.map(p => p.scheme),
 disabled_sports: [],
 disabled_leagues: [],
 service_priorities: {}, // Will use defaults from backend
-amazon_penalty: true
+amazon_penalty: true,
+language_preference: 'en'
 };
 renderProviders();
 renderSports();

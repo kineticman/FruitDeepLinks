@@ -538,7 +538,7 @@ def compute_http_deeplink_url(deeplink: str | None, provider_hint: str | None = 
     """Best-effort HTTP deeplink resolver.
 
     - If it's already http(s), return as-is (this fixes Max/HBO links like https://play.hbomax.com/...).
-    - Otherwise, try deeplink_converter.generate_http_deeplink() if available (scheme → http fallbacks).
+    - Otherwise, try deeplink_converter.generate_http_deeplink() if available (scheme â†’ http fallbacks).
     """
     if not deeplink:
         return None
@@ -596,6 +596,8 @@ def extract_playables(
         LOGICAL_SERVICES_AVAILABLE = False
 
     result: List[Tuple] = []
+    playable_metadata: List[Tuple] = []  # Track (playable_tuple, locale, title) for filtering
+    
     for playable in playables_list:
         if not isinstance(playable, dict):
             continue
@@ -652,7 +654,7 @@ def extract_playables(
             playable_id=str(playable_id),
         )
 
-        result.append((
+        playable_tuple = (
             event_id,
             str(playable_id),
             provider,
@@ -666,7 +668,18 @@ def extract_playables(
             priority,
             http_deeplink_url,
             now_utc
-        ))
+        )
+        
+        # Extract locale for language filtering
+        primary_locale = playable.get("primaryLocale", {})
+        locale = primary_locale.get("locale", "") if isinstance(primary_locale, dict) else ""
+        
+        playable_metadata.append((playable_tuple, locale, title or ""))
+
+    # Language filtering: prefer English (en_US) when multiple playables exist for same provider
+    # No language filtering during import - keep ALL playables
+    # Language filtering will happen at runtime in filter_integration.py
+    result = [item[0] for item in playable_metadata]
 
     # Stable ordering (highest priority first) helps debugging and deterministic imports
     result.sort(key=lambda r: (-(r[10] or 0), str(r[2] or ""), str(r[1] or "")))

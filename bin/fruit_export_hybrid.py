@@ -24,24 +24,6 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# Import shared XMLTV helpers
-try:
-    from xmltv_helpers import (
-        get_provider_display_name,
-        get_provider_from_channel,
-        add_categories_and_tags,
-    )
-except ImportError:
-    # Fallback if not in path
-    def get_provider_display_name(provider_id: str) -> str:
-        return provider_id.title() if provider_id else None
-    
-    def get_provider_from_channel(channel_name: str) -> str:
-        return channel_name or "Sports"
-    
-    def add_categories_and_tags(prog_el, event, provider_name=None, is_placeholder=False):
-        pass
-
 # Import filtering support
 try:
     from filter_integration import (
@@ -138,6 +120,42 @@ def stable_channel_id(event: Dict, prefix: str = "fdl.") -> str:
         "T", ""
     ).replace("Z", "")
     return _sanitize_id(prefix + t + "." + st)
+
+
+def get_provider_from_channel(channel_name: str) -> str:
+    if not channel_name:
+        return "Sports"
+
+    cl = channel_name.lower()
+    if "espn" in cl:
+        return "ESPN+"
+    if "peacock" in cl:
+        return "Peacock"
+    if "national broadcasting company" in cl or channel_name == "National Broadcasting Company":
+        return "Peacock"
+    if "nbc sports" in cl:
+        return "NBC Sports"
+    if "prime" in cl or "amazon" in cl:
+        return "Prime Video"
+    if "cbs" in cl:
+        return "CBS Sports"
+    if "paramount" in cl:
+        return "Paramount+"
+    if "fox" in cl:
+        return "FOX Sports"
+    if "nfl" in cl and "network" not in cl:
+        return "NFL+"
+    if "nba" in cl and "tv" not in cl:
+        return "NBA League Pass"
+    if "mlb" in cl and "tv" not in cl:
+        return "MLB.TV"
+    if "nhl" in cl and "network" not in cl:
+        return "NHL Power Play"
+    if "hbo" in cl or "max" in cl:
+        return "Max"
+    if "dazn" in cl:
+        return "DAZN"
+    return "Sports"
 
 
 # Local time display helpers
@@ -296,6 +314,7 @@ def build_direct_xmltv(
     enabled_services = preferences.get("enabled_services", [])
     priority_map = preferences.get("service_priorities", {})
     amazon_penalty = preferences.get("amazon_penalty", True)
+    language_preference = preferences.get("language_preference", "en")
 
     now = datetime.now(timezone.utc)
     tv = ET.Element("tv")
@@ -312,7 +331,7 @@ def build_direct_xmltv(
         deeplink_url = None
         if FILTERING_AVAILABLE:
             # Try filtered playables first
-            deeplink_url = get_best_deeplink_for_event(conn, event_id, enabled_services, priority_map, amazon_penalty)
+            deeplink_url = get_best_deeplink_for_event(conn, event_id, enabled_services, priority_map, amazon_penalty, language_preference)
 
         if not deeplink_url and FILTERING_AVAILABLE:
             # Fallback to raw_attributes
@@ -447,16 +466,22 @@ def build_direct_xmltv(
             desc_text = base_desc
         ET.SubElement(prog, "desc").text = desc_text
 
-        # Use shared helper for categories and tags
-        add_categories_and_tags(
-            prog,
-            event=event,
-            provider_name=provider,
-            is_placeholder=False,
-        )
+        ET.SubElement(prog, "category").text = provider
+        ET.SubElement(prog, "category").text = "Sports"
+        if genres_json:
+            try:
+                for g in json.loads(genres_json) or []:
+                    if g and g not in (provider, "Sports"):
+                        ET.SubElement(prog, "category").text = str(g)
+            except Exception:
+                pass
 
         # Attach image to main event
         img_url = get_event_image_url(conn, event)
+        if img_url:
+            ET.SubElement(prog, "icon", src=img_url)
+
+        ET.SubElement(prog, "live").text = "1"
 
         # Post-event placeholders (24h in 1h blocks)
         current = event_end
@@ -498,6 +523,7 @@ def build_direct_m3u(
     enabled_services = preferences.get("enabled_services", [])
     priority_map = preferences.get("service_priorities", {})
     amazon_penalty = preferences.get("amazon_penalty", True)
+    language_preference = preferences.get("language_preference", "en")
 
     skipped_no_deeplink = 0
     reason_counts: Dict[str, int] = {}
@@ -541,7 +567,7 @@ def build_direct_m3u(
                 p_rows = []
 
             if FILTERING_AVAILABLE and p_rows:
-                deeplink_url = get_best_deeplink_for_event(conn, event_id, enabled_services, priority_map, amazon_penalty)
+                deeplink_url = get_best_deeplink_for_event(conn, event_id, enabled_services, priority_map, amazon_penalty, language_preference)
 
             # Second pass: use logical_service_mapper directly on playables
             if (

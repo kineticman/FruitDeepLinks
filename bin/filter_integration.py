@@ -179,6 +179,13 @@ def load_user_preferences(conn: sqlite3.Connection) -> Dict[str, Any]:
         else:
             result["amazon_penalty"] = True
         
+        # Language preference
+        if "language_preference" in prefs:
+            lang = prefs["language_preference"]
+            result["language_preference"] = lang if lang in ['en', 'es', 'both'] else 'en'
+        else:
+            result["language_preference"] = "en"
+        
         return result
         
     except Exception as e:
@@ -189,6 +196,7 @@ def load_user_preferences(conn: sqlite3.Connection) -> Dict[str, Any]:
             "disabled_leagues": [],
             "service_priorities": get_default_service_priorities(),
             "amazon_penalty": True,
+            "language_preference": "en",
         }
 
 
@@ -232,6 +240,87 @@ def should_include_event(event: Dict[str, Any], preferences: Dict[str, Any]) -> 
     return True
 
 
+def apply_language_filter(
+    playables: List[Dict[str, Any]],
+    language_preference: str = 'en'
+) -> List[Dict[str, Any]]:
+    """
+    Filter playables by language preference for ESPN content.
+    
+    When multiple ESPN playables exist for same event (English vs Spanish),
+    keep only the preferred language.
+    
+    Args:
+        playables: List of playable dicts
+        language_preference: 'en' for English, 'es' for Spanish, 'both' for no filter
+    
+    Returns:
+        Filtered playables list
+    """
+    if language_preference == 'both' or not playables:
+        return playables
+    
+    # Group by provider to detect language variants
+    from collections import defaultdict
+    provider_groups = defaultdict(list)
+    
+    for p in playables:
+        # Group sportscenter playables together
+        provider = p.get('provider', '')
+        if provider == 'sportscenter':
+            provider_groups['espn'].append(p)
+        else:
+            # Other providers pass through unchanged
+            provider_groups[provider].append(p)
+    
+    result = []
+    
+    for provider, items in provider_groups.items():
+        if provider != 'espn' or len(items) == 1:
+            # Not ESPN or only one option - include all
+            result.extend(items)
+            continue
+        
+        # ESPN with multiple playables - filter by language
+        # Detect Spanish by service name or title
+        spanish_items = []
+        english_items = []
+        unknown_items = []
+        
+        for item in items:
+            # Check service_name, title, and deeplink for language indicators
+            service_name = (item.get('service_name') or '').lower()
+            title = (item.get('title') or '').lower()
+            deeplink = (item.get('deeplink_play') or '').lower()
+            
+            if 'deportes' in service_name or 'español' in service_name or 'deportes' in title or 'español' in title or 'deportes' in deeplink:
+                spanish_items.append(item)
+            elif 'espn' in service_name or 'espn' in title or 'espn' in deeplink:
+                english_items.append(item)
+            else:
+                unknown_items.append(item)
+        
+        # Select based on preference
+        if language_preference == 'es':
+            # Prefer Spanish
+            if spanish_items:
+                result.extend(spanish_items)
+            elif english_items:
+                result.extend(english_items)
+            else:
+                result.extend(unknown_items)
+        else:  # 'en' or default
+            # Prefer English
+            if english_items:
+                result.extend(english_items)
+            elif spanish_items:
+                result.extend(spanish_items)
+            else:
+                result.extend(unknown_items)
+    
+    return result
+
+
 def apply_amazon_penalty(
     playables: List[Dict[str, Any]], 
     amazon_penalty: bool = True
@@ -272,7 +361,8 @@ def apply_amazon_penalty(
 def get_filtered_playables(
     conn: sqlite3.Connection, event_id: str, enabled_services: List[str],
     priority_map: Optional[Dict[str, int]] = None,
-    amazon_penalty: bool = True
+    amazon_penalty: bool = True,
+    language_preference: str = 'en'
 ) -> List[Dict[str, Any]]:
     """
     Get playables for an event, filtered by enabled services using logical service mapping
@@ -283,6 +373,7 @@ def get_filtered_playables(
         enabled_services: List of enabled logical service codes
         priority_map: Optional dict of service code -> priority (higher = better)
         amazon_penalty: If True, deprioritize Amazon when alternatives exist
+        language_preference: 'en', 'es', or 'both' - filter ESPN language variants
 
     Returns:
         List of playable dicts, filtered and sorted by priority
@@ -293,7 +384,7 @@ def get_filtered_playables(
         cur.execute(
             """
             SELECT playable_id, provider, deeplink_play, deeplink_open,
-                   playable_url, title, content_id, priority
+                   playable_url, title, content_id, priority, service_name
             FROM playables
             WHERE event_id = ?
             ORDER BY priority ASC, playable_id ASC
@@ -312,6 +403,7 @@ def get_filtered_playables(
                 "title": row[5],
                 "content_id": row[6],
                 "priority": row[7],
+                "service_name": row[8] if len(row) > 8 else None,
                 "event_id": event_id,
             }
 
@@ -337,6 +429,9 @@ def get_filtered_playables(
             else:
                 # No filtering - include all
                 playables.append(playable)
+
+        # Apply language filtering
+        playables = apply_language_filter(playables, language_preference)
 
         # Apply Amazon penalty if enabled
         playables = apply_amazon_penalty(playables, amazon_penalty)
@@ -365,7 +460,8 @@ def get_filtered_playables(
 def get_best_playable_for_event(
     conn: sqlite3.Connection, event_id: str, enabled_services: List[str],
     priority_map: Optional[Dict[str, int]] = None,
-    amazon_penalty: bool = True
+    amazon_penalty: bool = True,
+    language_preference: str = 'en'
 ) -> Optional[Dict[str, Any]]:
     """
     Get the best playable dict for an event based on user preferences.
@@ -375,7 +471,7 @@ def get_best_playable_for_event(
         deeplink_* fields, etc.), or None if nothing suitable.
     """
     playables = get_filtered_playables(
-        conn, event_id, enabled_services, priority_map, amazon_penalty
+        conn, event_id, enabled_services, priority_map, amazon_penalty, language_preference
     )
     if not playables:
         return None
@@ -388,7 +484,8 @@ def get_best_playable_for_event(
 def get_best_deeplink_for_event(
     conn: sqlite3.Connection, event_id: str, enabled_services: List[str],
     priority_map: Optional[Dict[str, int]] = None,
-    amazon_penalty: bool = True
+    amazon_penalty: bool = True,
+    language_preference: str = 'en'
 ) -> Optional[str]:
     """
     Get the best deeplink for an event based on user preferences
@@ -399,12 +496,13 @@ def get_best_deeplink_for_event(
         enabled_services: List of enabled provider schemes
         priority_map: Optional dict of service code -> priority
         amazon_penalty: If True, deprioritize Amazon when alternatives exist
+        language_preference: 'en', 'es', or 'both' - filter ESPN language variants
 
     Returns:
         Best deeplink URL, or None if no suitable playables
     """
     best = get_best_playable_for_event(
-        conn, event_id, enabled_services, priority_map, amazon_penalty
+        conn, event_id, enabled_services, priority_map, amazon_penalty, language_preference
     )
     if not best:
         return None
