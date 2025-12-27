@@ -70,7 +70,7 @@ def get_apple_espn_playables(fruit_db: str) -> List[Dict]:
             p.service_name
         FROM events e
         JOIN playables p ON e.id = p.event_id
-        WHERE p.service_name = 'ESPN'
+        WHERE p.provider IN ('sportscenter', 'espn', 'espn+')
     """)
     
     results = []
