@@ -225,6 +225,28 @@ def main():
     ]):
         return 1
 
+    # Step 5b: Ensure espn_graph_id column exists in playables (defensive for ESPN enrichment)
+    print("\n" + "=" * 60)
+    print(f"[5b/{total_steps}] Ensuring espn_graph_id column in playables table")
+    print("=" * 60)
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        # Check if column exists
+        cur.execute("PRAGMA table_info(playables)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "espn_graph_id" not in cols:
+            cur.execute("ALTER TABLE playables ADD COLUMN espn_graph_id TEXT")
+            conn.commit()
+            print("✅ Added espn_graph_id column to playables")
+        else:
+            print("✅ espn_graph_id column already exists")
+        conn.close()
+        print("✅ Step 5b complete")
+    except Exception as e:
+        print(f"⚠️ Step 5b failed (non-fatal): {e}")
+        # Non-fatal - ESPN enrichment will just skip if column doesn't exist
+
     # Step 6: Import Apple TV events (DB-to-DB from apple_events.db)
     # NOTE: Step 6 can be slow (GZIP + JSON parse). If --skip-scrape was used and the Apple DB
     # hasn't changed since the last successful import, we skip this step to keep "Skip Scrape" fast.
