@@ -117,6 +117,7 @@ def get_espn_graph_events(espn_db: str) -> Dict[str, Dict]:
     
     Returns dict where key is program_id and value is:
       - id: ESPN Watch Graph ID
+      - feed_url: Primary feed URL (contains playback ID)
       - airing_id: ESPN airing ID (may be None)
       - simulcast_airing_id: ESPN simulcast ID (may be None)
       - name: Event name
@@ -141,9 +142,17 @@ def get_espn_graph_events(espn_db: str) -> Dict[str, Dict]:
         sys.exit(1)
     
     cursor.execute("""
-        SELECT id, program_id, airing_id, simulcast_airing_id, title
-        FROM events
-        WHERE program_id IS NOT NULL
+        SELECT e.id, e.program_id, e.airing_id, e.simulcast_airing_id, e.title, f.url
+        FROM events e
+        JOIN feeds f ON e.id = f.event_id
+        WHERE e.program_id IS NOT NULL
+          AND (e.program_id, f.id) IN (
+              SELECT e2.program_id, MIN(f2.id)
+              FROM events e2
+              JOIN feeds f2 ON e2.id = f2.event_id
+              WHERE e2.program_id IS NOT NULL
+              GROUP BY e2.program_id
+          )
     """)
     
     results = {}
@@ -153,7 +162,8 @@ def get_espn_graph_events(espn_db: str) -> Dict[str, Dict]:
             'id': row[0],
             'airing_id': row[2],
             'simulcast_airing_id': row[3],
-            'title': row[4]  # Changed from 'name' to 'title'
+            'title': row[4],
+            'feed_url': row[5]  # Feed URL from feeds table
         }
     
     conn.close()
@@ -207,14 +217,37 @@ def enrich_playables(fruit_db: str, espn_db: str, dry_run: bool = False) -> None
         if external_id in espn_events:
             espn_event = espn_events[external_id]
             
-            # Prefer id, then airingId, then simulcastAiringId
-            espn_graph_id = (
-                espn_event['id'] or 
-                espn_event['airing_id'] or 
-                espn_event['simulcast_airing_id']
-            )
+            # Extract playback ID from feed URL (the actual working ID!)
+            # FROM: https://www.espn.com/watch/player/_/id/187c6919-eb2a-4cd8-9ec5-127b4fb41c8b
+            # TO:   187c6919-eb2a-4cd8-9ec5-127b4fb41c8b
+            espn_playback_id = None
             
-            if espn_graph_id:
+            if espn_event.get('feed_url'):
+                try:
+                    # Extract playback ID from feed URL
+                    feed_url = espn_event['feed_url']
+                    if '/id/' in feed_url:
+                        espn_playback_id = feed_url.split('/id/')[-1]
+                        # Clean any query parameters
+                        espn_playback_id = espn_playback_id.split('?')[0].split('#')[0]
+                except Exception as e:
+                    _log(f"⚠️ Warning: Could not extract playback ID from {feed_url}: {e}")
+            
+            # Fallback to event ID format if no feed URL (shouldn't happen, but defensive)
+            if not espn_playback_id and espn_event.get('id'):
+                # Extract middle UUID from espn-watch:UUID:hash format
+                try:
+                    parts = espn_event['id'].split(':')
+                    if len(parts) >= 2:
+                        espn_playback_id = parts[1]
+                except Exception:
+                    pass
+            
+            if espn_playback_id:
+                # Store the PLAYBACK ID, not the event ID!
+                # This is the critical fix - use feed URL playback ID
+                espn_graph_id = f"espn-watch:{espn_playback_id}"
+                
                 if dry_run:
                     _log(f"[DRY-RUN] Would match: {playable['title'][:50]}")
                     _log(f"          Apple playable: {playable['playable_id']}")
