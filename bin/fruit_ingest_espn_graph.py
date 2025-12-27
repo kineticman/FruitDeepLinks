@@ -281,10 +281,10 @@ def post_airings(day_iso: str, tz_str: str, limit: int = 2000) -> List[Dict[str,
         },
         "operationName": "Airings",
     }
-    for attempt in range(1, 5):
+    for attempt in range(1, 6):  # Increased to 5 retries for better resilience
         try:
             r = s.post(
-                API_BASE, params=params, headers=HEADERS, json=payload, timeout=20
+                API_BASE, params=params, headers=HEADERS, json=payload, timeout=30  # Increased to 30s
             )
             if r.status_code >= 400:
                 snippet = (r.text or "")[:800].replace("\n", " ")
@@ -296,7 +296,7 @@ def post_airings(day_iso: str, tz_str: str, limit: int = 2000) -> List[Dict[str,
                 raise RuntimeError("unexpected JSON: airings not list")
             return air
         except Exception:
-            if attempt >= 4:
+            if attempt >= 5:  # Updated to match new max
                 raise
             time.sleep(0.5 * (2 ** (attempt - 1)))
     return []

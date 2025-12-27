@@ -31,6 +31,14 @@ FruitDeepLinks creates virtual TV channels in Channels DVR with deeplinks that l
 
 ### Latest Features
 
+**🔥 ESPN Watch Graph API Integration**
+- Fixes ESPN deeplink compatibility with Fire TV and Android TV devices
+- Automatically enriches ESPN events with Fire TV-compatible deeplinks
+- Scrapes ESPN's Watch Graph API daily (2,000+ events, 14 days forward)
+- 71.7% match rate for current ESPN events
+- Works across all export types: ADB lanes, virtual lanes, and direct channels
+- Falls back to Apple TV deeplinks for unmatched events
+
 **🎬 CDVR Detector - Automatic App Launching**
 - Tune to a Fruit Lane in Channels DVR → streaming app launches automatically!
 - Detects which device is watching and launches the correct service (ESPN+, Peacock, etc.)
@@ -198,7 +206,7 @@ If you’re unsure, **start with direct channels only** and ignore lanes/ADB unt
 
 | Service       | Deeplink Type                 | Notes / Status                                      |
 |--------------|-------------------------------|-----------------------------------------------------|
-| ESPN+        | Native (`sportsonespn://`)    | Primary ESPN+ deep links                            |
+| ESPN+        | Native (`sportscenter://`) + API enrichment | ESPN Watch Graph API provides Fire TV-compatible deeplinks for 71.7% of events |
 | Prime Video  | Native (`aiv://`)             | Amazon sports deep links still being explored       |
 | Peacock      | Native + Web                  | NBC Sports & Peacock events                         |
 | Paramount+ (CBS Sports) | Native (`pplus://`)           | CBS Sports / Paramount+ competitions (preferred label) |
@@ -505,19 +513,28 @@ FruitDeepLinks/
    - Extracts event metadata and deeplinks.
    - Handles multiple playable sources per event.
 
-2. **Database** (SQLite)
+2. **ESPN Watch Graph Enrichment**
+   - Scrapes ESPN's Watch Graph API for Fire TV-compatible deeplinks
+   - Matches Apple TV events using program IDs
+   - Enriches 70%+ of ESPN events with working Fire TV deeplinks
+   - Runs automatically during daily refresh
+
+3. **Database** (SQLite)
    - Stores events, playables, and user preferences.
    - Tracks multiple deeplinks per event.
+   - Maintains ESPN Graph IDs for enriched events.
    - Maintains logical service mappings.
 
-3. **Filter Engine**
+4. **Filter Engine**
    - Applies user preferences (services, sports, leagues).
    - Selects best deeplink based on priority.
+   - Prioritizes ESPN Graph IDs over Apple TV IDs for ESPN events.
    - Handles web URL mapping (Apple MLS, Max, etc.).
 
-4. **Export Engine**
+5. **Export Engine**
    - Generates standards-compliant XMLTV EPG files
    - Creates M3U playlists with deeplinks
+   - Applies ESPN Graph ID corrections during export
    - Builds scheduled lane channels (BETA)
    - Builds provider-specific ADB lanes (BETA)
    - Uses shared `xmltv_helpers.py` for consistent tagging:
@@ -526,7 +543,7 @@ FruitDeepLinks/
      - Sport/league from classification_json
      - Conditional tagging (placeholders excluded)
 
-5. **Web Dashboard** (Flask)
+6. **Web Dashboard** (Flask)
    - Real-time configuration interface.
    - Manual refresh controls.
    - System monitoring.
@@ -534,15 +551,18 @@ FruitDeepLinks/
 ### Data Flow
 
 ```text
-Apple TV Sports API
-        ↓
-    Scraper (Selenium)
+Apple TV Sports API ──┐
+                      ├──> Scraper (Selenium)
+ESPN Watch Graph API ─┘
         ↓
    SQLite Database
+   (with ESPN Graph ID enrichment)
         ↓
   Filter Engine (User Preferences)
+  (prioritizes ESPN Graph IDs)
         ↓
    Export Scripts
+   (applies ESPN corrections)
         ↓
   M3U + XMLTV Files
         ↓
@@ -657,6 +677,8 @@ Database size: ~15MB
 
 ### Recently Completed
 
+- [x] **ESPN Watch Graph API Integration** - Fire TV-compatible deeplinks for ESPN events (71.7% match rate)
+- [x] **Database Event Cleanup** - Automatic removal of old events to improve performance
 - [x] **CDVR Detector** - Automatic app launching when tuning to Fruit Lanes
 - [x] **XMLTV Standards Compliance** - Proper `<live/>` and `<new/>` tags with structured categories
 - [x] **Kayo Sports Integration** - Australian sports streaming support
