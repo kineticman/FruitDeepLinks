@@ -256,6 +256,44 @@ def main():
     else:
         print(f"\n[7/{total_steps}] Kayo data not found at {kayo_json}, skipping ingest")
 
+    # Step 7b: Scrape ESPN Watch Graph (skippable, runs after Apple TV import)
+    espn_days = os.getenv("ESPN_DAYS", "14")
+    espn_db = DATA_DIR / "espn_graph.db"
+    
+    if skip_scrape:
+        print("\n" + "=" * 60)
+        print(f"[7b/{total_steps}] Scraping ESPN Watch Graph ({espn_days} days). SKIPPED")
+        print("=" * 60)
+        if not espn_db.exists():
+            print(f"WARNING: --skip-scrape set but {espn_db} not found; ESPN enrichment will be skipped.")
+    else:
+        print("\n" + "=" * 60)
+        print(f"[7b/{total_steps}] Scraping ESPN Watch Graph ({espn_days} days)")
+        print("=" * 60)
+        # ESPN scrape is non-fatal - don't stop pipeline if it fails
+        run_step("7b", total_steps, f"Scraping ESPN Watch Graph ({espn_days} days)", [
+            "python3", "fruit_ingest_espn_graph.py",
+            "--db", str(espn_db),
+            "--days", espn_days,
+        ], allow_fail=True)
+
+    # Step 7c: Enrich ESPN playables with Watch Graph IDs (always run if ESPN DB exists)
+    if espn_db.exists():
+        print("\n" + "=" * 60)
+        print(f"[7c/{total_steps}] Enriching ESPN playables with FireTV deeplinks")
+        print("=" * 60)
+        # ESPN enrichment is non-fatal - don't stop pipeline if it fails
+        run_step("7c", total_steps, "Enriching ESPN playables with FireTV deeplinks", [
+            "python3", "fruit_enrich_espn.py",
+            "--fruit-db", str(DB_PATH),
+            "--espn-db", str(espn_db),
+        ], allow_fail=True)
+    else:
+        print("\n" + "=" * 60)
+        print(f"[7c/{total_steps}] Enriching ESPN playables. SKIPPED")
+        print("=" * 60)
+        print(f"ESPN database not found at {espn_db}, skipping enrichment")
+
         # Step 8: Prefill HTTP deeplinks for any newly-imported playables
     if not run_step("8", total_steps, "Prefilling HTTP deeplinks (http_deeplink_url)", [
         "python3", "migrate_add_adb_lanes.py",
