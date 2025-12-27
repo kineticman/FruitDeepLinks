@@ -316,10 +316,13 @@ def main():
     migrate_schema(conn)  # Auto-upgrade existing databases
 
     total = 0
+    print(f"\n🔄 Scraping ESPN Watch Graph for {args.days} days...")
     with conn:
         for d in range(args.days):
             day_iso = (start_day + timedelta(days=d)).strftime("%Y-%m-%d")
+            print(f"  📅 Day {d+1}/{args.days}: {day_iso}", end=" ", flush=True)
             airings = post_airings(day_iso, args.tz)
+            day_count = 0
             for a in airings:
                 # Basic event info
                 # Use ESPN's long name as title when available, and keep the shortName
@@ -475,7 +478,9 @@ def main():
                 )
                 replace_feeds(conn, eid, [espn_player_url(a)])
                 total += 1
-    print(f"Ingested {total} airings into {args.db}")
+                day_count += 1
+            print(f"→ {day_count} events")
+    print(f"\n✅ Ingested {total} airings into {args.db}")
 
 
 if __name__ == "__main__":
