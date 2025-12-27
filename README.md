@@ -475,8 +475,8 @@ docker exec fruitdeeplinks ls -la /app/logs/
 FruitDeepLinks/
 ├── bin/                          # Python scripts
 │   ├── daily_refresh.py          # Main orchestrator (scrape → enrich → import → export)
-│   ├── multi_scraper.py          # Apple TV Sports multi-service scraper
-│   ├── apple_scraper_db.py       # Apple TV scraper with DB storage
+│   ├── apple_scraper_db.py       # Apple TV Sports scraper (primary scraper)
+│   ├── multi_scraper.py          # Apple auth token bootstrap (fresh installs only)
 │   ├── fruit_ingest_espn_graph.py # ESPN Watch Graph API scraper
 │   ├── fruit_enrich_espn.py      # ESPN Graph ID enrichment
 │   ├── fruit_import_appletv.py   # Import Apple TV data into SQLite
