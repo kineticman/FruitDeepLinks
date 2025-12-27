@@ -474,31 +474,56 @@ docker exec fruitdeeplinks ls -la /app/logs/
 ```text
 FruitDeepLinks/
 ├── bin/                          # Python scripts
-│   ├── daily_refresh.py          # Main orchestrator (scrape → import → export)
+│   ├── daily_refresh.py          # Main orchestrator (scrape → enrich → import → export)
 │   ├── multi_scraper.py          # Apple TV Sports multi-service scraper
-│   ├── fruit_import_appletv.py   # Import Apple TV JSON into SQLite
+│   ├── apple_scraper_db.py       # Apple TV scraper with DB storage
+│   ├── fruit_ingest_espn_graph.py # ESPN Watch Graph API scraper
+│   ├── fruit_enrich_espn.py      # ESPN Graph ID enrichment
+│   ├── fruit_import_appletv.py   # Import Apple TV data into SQLite
+│   ├── kayo_scrape.py            # Kayo Sports scraper (Australia)
+│   ├── ingest_kayo.py            # Kayo data importer
 │   ├── fruit_build_lanes.py      # Build scheduled lanes (multisource_lanes) [BETA]
 │   ├── fruit_export_hybrid.py    # Direct channels XMLTV + M3U
 │   ├── fruit_export_lanes.py     # Lanes XMLTV + M3U [BETA]
 │   ├── fruit_build_adb_lanes.py  # Build ADB provider lanes [BETA]
 │   ├── fruit_export_adb_lanes.py # Export provider-specific XMLTV + M3U [BETA]
-│   ├── fruitdeeplinks_server.py  # Web dashboard + API
+│   ├── fruitdeeplinks_server.py  # Web dashboard + API + CDVR Detector
 │   ├── filter_integration.py     # Filtering logic
 │   ├── logical_service_mapper.py # Logical service mapping
-│   └── provider_utils.py         # Provider helpers
-├── data/                         # SQLite database
-│   └── fruit_events.db
+│   ├── provider_utils.py         # Provider helpers
+│   ├── deeplink_converter.py     # Deeplink format conversion
+│   ├── xmltv_helpers.py          # XMLTV generation utilities
+│   ├── migrate_*.py              # Database schema migrations
+│   └── (legacy peacock scripts)  # Backward compatibility
+├── data/                         # SQLite databases
+│   ├── fruit_events.db           # Main event database
+│   ├── apple_events.db           # Apple TV scraper cache
+│   ├── espn_graph.db             # ESPN Watch Graph data
+│   └── apple_uts_auth.json       # Apple auth tokens
 ├── out/                          # Generated files
 │   ├── direct.xml                # Direct XMLTV
 │   ├── direct.m3u                # Direct M3U
 │   ├── multisource_lanes.xml     # Lanes XMLTV [BETA]
 │   ├── multisource_lanes.m3u     # Lanes M3U [BETA]
-│   ├── multisource_lanes_chrome.m3u  # Lanes M3U for Chrome Capture [BETA]
-│   └── ...                       # ADB provider lane outputs (XMLTV + M3U) [BETA]
+│   ├── multisource_lanes_chrome.m3u  # Chrome Capture M3U [BETA]
+│   ├── adb_lanes.xml             # ADB lanes XMLTV [BETA]
+│   ├── adb_lanes_*.m3u           # Provider-specific M3U files [BETA]
+│   └── kayo_raw.json             # Kayo scraper output
+├── templates/                    # Flask HTML templates
+│   ├── events.html               # Main event listing
+│   ├── filters.html              # Filter configuration
+│   ├── admin_dashboard.html      # System dashboard
+│   └── ...
+├── docs/                         # Documentation
+│   ├── SERVICE_CATALOG.md        # Supported services
+│   ├── PORTAINER_GUIDE.md        # Portainer setup
+│   ├── PRIORITY_SYSTEM_GUIDE.md  # Priority configuration
+│   └── ...
 ├── logs/                         # Application logs
 ├── docker-compose.yml            # Docker configuration
 ├── Dockerfile                    # Container image
-├── .env.example                  # Environment template
+├── requirements.txt              # Python dependencies
+├── config.json                   # Server configuration
 └── README.md                     # This file
 ```
 
