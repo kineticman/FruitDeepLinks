@@ -1986,11 +1986,19 @@ def api_event_detail(event_id):
                     top_playable = None
 
                 if top_playable:
+                    # Determine the actual deeplink that will be used
+                    actual_deeplink = deeplink or top_playable.get("deeplink_play") or top_playable.get("deeplink_open")
+                    
+                    # Determine source of deeplink
+                    deeplink_source = "ESPN Watch Graph" if (deeplink and top_playable.get("espn_graph_id")) else "Apple TV"
+                    
                     best = {
                         "provider": top_playable.get("provider"),
                         "logical_service": top_playable.get("logical_service"),
-                        "deeplink": top_playable.get("deeplink_play") or top_playable.get("deeplink_open") or deeplink,
+                        "deeplink": actual_deeplink,
                         "http_deeplink_url": top_playable.get("http_deeplink_url"),
+                        "espn_graph_id": top_playable.get("espn_graph_id"),
+                        "deeplink_source": deeplink_source,
                         "reason": "Top of filtered playables order",
                     }
                 elif deeplink:
@@ -1999,11 +2007,16 @@ def api_event_detail(event_id):
                         if deeplink and (p.get("deeplink_play") == deeplink or p.get("deeplink_open") == deeplink):
                             match = p
                             break
+                    
+                    deeplink_source = "ESPN Watch Graph" if (match and match.get("espn_graph_id")) else "get_best_deeplink_for_event()"
+                    
                     best = {
                         "provider": match.get("provider") if match else None,
                         "logical_service": match.get("logical_service") if match else None,
                         "deeplink": deeplink,
                         "http_deeplink_url": match.get("http_deeplink_url") if match else None,
+                        "espn_graph_id": match.get("espn_graph_id") if match else None,
+                        "deeplink_source": deeplink_source,
                         "reason": "get_best_deeplink_for_event()",
                     }
             except Exception:

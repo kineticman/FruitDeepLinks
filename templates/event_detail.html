@@ -156,9 +156,10 @@ pre { background:#0b1220; border:1px solid #334155; border-radius:12px; padding:
                 <th>Service</th>
                 <th>Provider</th>
                 <th>Priority</th>
-                <th>deeplink_play</th>
-                <th>http_deeplink_url</th>
-                <th>espn_graph_id</th>
+                <th>Apple TV Scheme</th>
+                <th>HTTP Deeplink</th>
+                <th>ESPN Graph ID</th>
+                <th style="background:#065f46; color:#a7f3d0;">✅ Best Deeplink</th>
               </tr>
             </thead>
             <tbody id="playables"></tbody>
@@ -237,22 +238,73 @@ async function loadDetail() {
   // playables table
   const tbody = document.getElementById("playables");
   tbody.innerHTML = "";
+  
+  // Get the best deeplink from computed result for comparison
+  const bestDeeplink = (data.best && data.best.deeplink) ? data.best.deeplink : null;
+  
   for (const p of playables) {
     const tr = document.createElement("tr");
-    const http = p.http_deeplink_url ? `<a class="link mono" href="${escapeHtml(p.http_deeplink_url)}" target="_blank">${escapeHtml(p.http_deeplink_url)}</a>` : '<span class="small">—</span>';
     
-    // Show ESPN Graph ID if present (highlight ESPN playables)
-    const espnGraphId = p.espn_graph_id 
-      ? `<span class="mono" style="color:#22c55e;" title="ESPN Watch Graph ID (enables FireTV deeplinks)">${escapeHtml(p.espn_graph_id)}</span>`
+    // Apple TV Scheme deeplink
+    const appleScheme = p.deeplink_play || p.deeplink_open || "";
+    const appleSchemeHtml = appleScheme 
+      ? `<div class="mono" style="font-size:11px; word-break:break-all; max-width:250px;" title="${escapeHtml(appleScheme)}">${escapeHtml(appleScheme)}</div>`
+      : '<span class="small">—</span>';
+    
+    // HTTP deeplink
+    const httpUrl = p.http_deeplink_url || "";
+    const httpHtml = httpUrl 
+      ? `<a class="link mono" style="font-size:11px; word-break:break-all; max-width:250px; display:block;" href="${escapeHtml(httpUrl)}" target="_blank" title="${escapeHtml(httpUrl)}">${escapeHtml(httpUrl)}</a>` 
+      : '<span class="small">—</span>';
+    
+    // ESPN Graph ID
+    const espnGraphId = p.espn_graph_id || "";
+    const espnGraphHtml = espnGraphId
+      ? `<div class="mono" style="color:#22c55e; font-size:11px; word-break:break-all; max-width:200px;" title="ESPN Watch Graph ID (enables working FireTV/Android deeplinks)">${escapeHtml(espnGraphId)}</div>`
+      : '<span class="small">—</span>';
+    
+    // BEST DEEPLINK - Compute what would actually be used
+    // This follows the logic in filter_integration.py
+    let bestDeeplinkForRow = "";
+    let bestSource = "";
+    
+    // Check if this is ESPN and has espn_graph_id
+    const isEspn = (p.provider || "").toLowerCase().includes("espn") || 
+                   (p.provider || "").toLowerCase().includes("sportscenter");
+    
+    if (isEspn && espnGraphId) {
+      // Extract playback ID from espn-watch:PLAYBACK_ID format
+      const playbackId = espnGraphId.replace('espn-watch:', '');
+      bestDeeplinkForRow = `sportscenter://x-callback-url/showWatchStream?playID=${playbackId}`;
+      bestSource = "ESPN Watch Graph";
+    } else if (appleScheme) {
+      bestDeeplinkForRow = appleScheme;
+      bestSource = "Apple TV";
+    } else if (httpUrl) {
+      bestDeeplinkForRow = httpUrl;
+      bestSource = "HTTP";
+    }
+    
+    // Highlight if this matches the computed best
+    const isBest = bestDeeplink && bestDeeplinkForRow && bestDeeplink === bestDeeplinkForRow;
+    const bestStyle = isBest ? "background:#065f46; color:#a7f3d0; font-weight:600;" : "";
+    
+    const bestHtml = bestDeeplinkForRow
+      ? `<div style="${bestStyle} padding:8px; border-radius:6px;">
+           <div class="mono" style="font-size:11px; word-break:break-all; ${isBest ? 'color:#a7f3d0;' : ''}" title="${escapeHtml(bestDeeplinkForRow)}">${escapeHtml(bestDeeplinkForRow)}</div>
+           <div class="small" style="margin-top:4px; ${isBest ? 'color:#6ee7b7;' : 'color:#94a3b8;'}">Source: ${bestSource}</div>
+           ${isBest ? '<div class="small" style="margin-top:4px; color:#6ee7b7;">👑 Selected by filter_integration</div>' : ''}
+         </div>`
       : '<span class="small">—</span>';
     
     tr.innerHTML = `
       <td class="mono">${escapeHtml(p.logical_service || "")}</td>
       <td class="mono">${escapeHtml(p.provider || "")}</td>
       <td class="mono">${escapeHtml(p.priority)}</td>
-      <td class="mono">${escapeHtml(p.deeplink_play || p.deeplink_open || "")}</td>
-      <td>${http}</td>
-      <td>${espnGraphId}</td>
+      <td>${appleSchemeHtml}</td>
+      <td>${httpHtml}</td>
+      <td>${espnGraphHtml}</td>
+      <td>${bestHtml}</td>
     `;
     tbody.appendChild(tr);
   }
@@ -261,11 +313,22 @@ async function loadDetail() {
   const best = data.best || null;
   if (best && best.deeplink) {
     const httpLine = best.http_deeplink_url ? `<div class="small mono" style="margin-top:8px;">HTTP: ${escapeHtml(best.http_deeplink_url)}</div>` : ``;
+    const espnLine = best.espn_graph_id ? `<div class="small mono" style="margin-top:8px; color:#22c55e;">ESPN Graph ID: ${escapeHtml(best.espn_graph_id)}</div>` : ``;
+    const sourceBadge = best.deeplink_source 
+      ? `<span class="badge ${best.deeplink_source.includes('ESPN') ? 'good' : 'warn'}">${escapeHtml(best.deeplink_source)}</span>`
+      : '';
+    
     document.getElementById("bestBox").innerHTML = `
-      <div><span class="badge good">Selected</span> <b>${escapeHtml(best.logical_service || best.provider || "")}</b></div>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+        <span class="badge good">Selected</span> 
+        <b>${escapeHtml(best.logical_service || best.provider || "")}</b>
+        ${sourceBadge}
+      </div>
       <div class="small" style="margin-top:8px;">Reason: ${escapeHtml(best.reason || "—")}</div>
-      <div class="small mono" style="margin-top:8px;">Deeplink: ${escapeHtml(best.deeplink)}</div>
+      <div class="small mono" style="margin-top:8px; word-break:break-all;">Deeplink: ${escapeHtml(best.deeplink)}</div>
       ${httpLine}
+      ${espnLine}
+      ${best.deeplink_source && best.deeplink_source.includes('ESPN') ? '<div class="small" style="margin-top:8px; color:#22c55e;">✅ Using ESPN Watch Graph playback ID (works on Apple TV, Fire TV, Android)</div>' : ''}
     `;
   } else {
     document.getElementById("bestBox").innerHTML = '<span class="badge warn">No selection</span> <div class="small" style="margin-top:8px;">No filter_integration result (or no playables).</div>';
