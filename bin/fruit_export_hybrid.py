@@ -332,6 +332,32 @@ def build_direct_xmltv(
         if FILTERING_AVAILABLE:
             # Try filtered playables first
             deeplink_url = get_best_deeplink_for_event(conn, event_id, enabled_services, priority_map, amazon_penalty, language_preference)
+            
+            # ESPN FIX: Apply ESPN Graph ID correction to XMLTV path too
+            if deeplink_url and deeplink_url.startswith("sportscenter://"):
+                try:
+                    cur.execute(
+                        """SELECT provider, espn_graph_id
+                           FROM playables
+                           WHERE event_id = ?""",
+                        (event_id,),
+                    )
+                    for prow in cur.fetchall():
+                        # Handle sqlite3.Row objects (use dict access, not .get())
+                        raw_provider = prow["provider"] if prow["provider"] else ""
+                        if raw_provider.lower() not in ('sportscenter', 'espn', 'espn+'):
+                            continue
+                        
+                        # sqlite3.Row uses dict-style access
+                        espn_graph_id = prow["espn_graph_id"] if "espn_graph_id" in prow.keys() else None
+                        if espn_graph_id:
+                            parts = espn_graph_id.split(':')
+                            if len(parts) >= 2:
+                                play_id = parts[1]
+                                deeplink_url = f"sportscenter://x-callback-url/showWatchStream?playID={play_id}"
+                                break
+                except Exception:
+                    pass
 
         if not deeplink_url and FILTERING_AVAILABLE:
             # Fallback to raw_attributes
@@ -378,7 +404,7 @@ def build_direct_xmltv(
                     # No deeplink, but check playables for provider metadata
                     cur = conn.cursor()
                     cur.execute("""
-                        SELECT provider, deeplink_play, deeplink_open, playable_url, priority
+                        SELECT provider, deeplink_play, deeplink_open, playable_url, priority, espn_graph_id
                         FROM playables
                         WHERE event_id = ?
                         ORDER BY priority DESC
@@ -391,6 +417,17 @@ def build_direct_xmltv(
                         deeplink_play = (playable["deeplink_play"] or "").strip()
                         deeplink_open = (playable["deeplink_open"] or "").strip()
                         playable_url_str = (playable["playable_url"] or "").strip()
+                        espn_graph_id = (playable.get("espn_graph_id") or "").strip() if "espn_graph_id" in playable.keys() else ""
+                        
+                        # ESPN FIX: Prefer ESPN Graph ID for ESPN playables
+                        if espn_graph_id and raw_provider.lower() in ('sportscenter', 'espn', 'espn+'):
+                            try:
+                                parts = espn_graph_id.split(':')
+                                if len(parts) >= 2:
+                                    play_id = parts[1]
+                                    deeplink_play = f"sportscenter://x-callback-url/showWatchStream?playID={play_id}"
+                            except Exception:
+                                pass
                         
                         logical_service = get_logical_service_for_playable(
                             provider=raw_provider,
@@ -557,7 +594,7 @@ def build_direct_m3u(
 
             try:
                 cur.execute(
-                    """SELECT provider, playable_url, deeplink_play, deeplink_open, priority
+                    """SELECT provider, playable_url, deeplink_play, deeplink_open, priority, espn_graph_id
                            FROM playables
                            WHERE event_id = ?""",
                     (event_id,),
@@ -568,6 +605,28 @@ def build_direct_m3u(
 
             if FILTERING_AVAILABLE and p_rows:
                 deeplink_url = get_best_deeplink_for_event(conn, event_id, enabled_services, priority_map, amazon_penalty, language_preference)
+                
+                # ESPN FIX: Apply ESPN Graph ID correction to filtered result
+                # get_best_deeplink_for_event returns the raw deeplink_play from database
+                # We need to correct ESPN deeplinks to use Graph IDs when available
+                if deeplink_url and deeplink_url.startswith("sportscenter://"):
+                    try:
+                        # Find ANY ESPN playable with a Graph ID (prefer enriched over un-enriched)
+                        for prow in p_rows:
+                            raw_provider = prow["provider"] if prow["provider"] else ""
+                            if raw_provider.lower() not in ('sportscenter', 'espn', 'espn+'):
+                                continue
+                            
+                            # sqlite3.Row dict-style access
+                            espn_graph_id = prow["espn_graph_id"] if "espn_graph_id" in prow.keys() else None
+                            if espn_graph_id:
+                                parts = espn_graph_id.split(':')
+                                if len(parts) >= 2:
+                                    play_id = parts[1]
+                                    deeplink_url = f"sportscenter://x-callback-url/showWatchStream?playID={play_id}"
+                                    break  # Use first ESPN playable with Graph ID
+                    except Exception:
+                        pass  # Fall back to original deeplink
 
             # Second pass: use logical_service_mapper directly on playables
             if (
@@ -585,10 +644,26 @@ def build_direct_m3u(
                         playable_url = (prow["playable_url"] or "").strip()
                         deeplink_play = (prow["deeplink_play"] or "").strip()
                         deeplink_open = (prow["deeplink_open"] or "").strip()
+                        espn_graph_id = (prow.get("espn_graph_id") or "").strip() if "espn_graph_id" in prow.keys() else ""
 
                         url = deeplink_play or deeplink_open or playable_url
                         if not url:
                             continue
+
+                        # ESPN FIX: Use ESPN Graph ID to generate working deeplinks
+                        # Apple TV provides broken playChannel or wrong playID deeplinks
+                        # ESPN Watch Graph provides correct playID deeplinks that work
+                        if espn_graph_id and raw_provider.lower() in ('sportscenter', 'espn', 'espn+'):
+                            try:
+                                # Extract playID from ESPN Graph ID (format: espn-watch:{playID}:{hash})
+                                parts = espn_graph_id.split(':')
+                                if len(parts) >= 2:
+                                    play_id = parts[1]
+                                    # Generate corrected scheme deeplink
+                                    url = f"sportscenter://x-callback-url/showWatchStream?playID={play_id}"
+                                    deeplink_play = url
+                            except Exception:
+                                pass  # Fall back to original deeplink
 
                         logical_service = get_logical_service_for_playable(
                             provider=raw_provider,
