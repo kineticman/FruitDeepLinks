@@ -158,6 +158,7 @@ pre { background:#0b1220; border:1px solid #334155; border-radius:12px; padding:
                 <th>Priority</th>
                 <th>deeplink_play</th>
                 <th>http_deeplink_url</th>
+                <th>espn_graph_id</th>
               </tr>
             </thead>
             <tbody id="playables"></tbody>
@@ -239,12 +240,19 @@ async function loadDetail() {
   for (const p of playables) {
     const tr = document.createElement("tr");
     const http = p.http_deeplink_url ? `<a class="link mono" href="${escapeHtml(p.http_deeplink_url)}" target="_blank">${escapeHtml(p.http_deeplink_url)}</a>` : '<span class="small">—</span>';
+    
+    // Show ESPN Graph ID if present (highlight ESPN playables)
+    const espnGraphId = p.espn_graph_id 
+      ? `<span class="mono" style="color:#22c55e;" title="ESPN Watch Graph ID (enables FireTV deeplinks)">${escapeHtml(p.espn_graph_id)}</span>`
+      : '<span class="small">—</span>';
+    
     tr.innerHTML = `
       <td class="mono">${escapeHtml(p.logical_service || "")}</td>
       <td class="mono">${escapeHtml(p.provider || "")}</td>
       <td class="mono">${escapeHtml(p.priority)}</td>
       <td class="mono">${escapeHtml(p.deeplink_play || p.deeplink_open || "")}</td>
       <td>${http}</td>
+      <td>${espnGraphId}</td>
     `;
     tbody.appendChild(tr);
   }

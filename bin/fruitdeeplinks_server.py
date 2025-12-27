@@ -814,7 +814,7 @@ def get_provider_playable_link(conn, event_id: str, provider_code: str) -> dict:
     selection; the provider lane should return *its provider's* deeplink when possible.
     """
     if not event_id or not provider_code:
-        return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+        return {"deeplink": None, "http_deeplink_url": None, "playable_id": None, "espn_graph_id": None}
 
     try:
         cur = conn.cursor()
@@ -823,26 +823,29 @@ def get_provider_playable_link(conn, event_id: str, provider_code: str) -> dict:
 
         provider_col = "provider" if "provider" in cols else ("provider_code" if "provider_code" in cols else None)
         if not provider_col:
-            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None, "espn_graph_id": None}
 
         event_fk = "event_id" if "event_id" in cols else ("id" if "id" in cols else None)
         if not event_fk:
-            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None, "espn_graph_id": None}
 
         logical_col = "logical_service" if "logical_service" in cols else None
         playable_id_col = "playable_id" if "playable_id" in cols else None
         http_col = "http_deeplink_url" if "http_deeplink_url" in cols else None
         priority_col = "priority" if "priority" in cols else None
+        espn_graph_id_col = "espn_graph_id" if "espn_graph_id" in cols else None
 
         deeplink_cols = [c for c in ["deeplink_play", "deeplink_open", "playable_url"] if c in cols]
         if not deeplink_cols:
-            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None, "espn_graph_id": None}
 
         select_cols = deeplink_cols[:]
         if http_col:
             select_cols.append(http_col)
         if playable_id_col:
             select_cols.append(playable_id_col)
+        if espn_graph_id_col:
+            select_cols.append(espn_graph_id_col)
 
         params = [event_id]
         if logical_col:
@@ -852,13 +855,26 @@ def get_provider_playable_link(conn, event_id: str, provider_code: str) -> dict:
             where = f"{event_fk} = ? AND {provider_col} = ?"
             params.append(provider_code)
 
-        order = f"ORDER BY {priority_col} ASC" if priority_col else ""
+        # For ESPN: prioritize playables WITH espn_graph_id (they have working deeplinks)
+        # For other providers: use standard priority ordering
+        is_espn = provider_code.lower() in ('sportscenter', 'espn', 'espn+')
+        if is_espn and espn_graph_id_col:
+            # ESPN: prefer playables with espn_graph_id, then sort by priority
+            order = f"ORDER BY CASE WHEN {espn_graph_id_col} IS NOT NULL AND {espn_graph_id_col} != '' THEN 0 ELSE 1 END, "
+            if priority_col:
+                order += f"{priority_col} ASC"
+            else:
+                order += "1"  # Dummy constant if no priority column
+        else:
+            # Non-ESPN providers: standard priority ordering
+            order = f"ORDER BY {priority_col} ASC" if priority_col else ""
+        
         sql = f"SELECT {', '.join(select_cols)} FROM playables WHERE {where} {order} LIMIT 1"
 
         cur.execute(sql, tuple(params))
         row = cur.fetchone()
         if not row:
-            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+            return {"deeplink": None, "http_deeplink_url": None, "playable_id": None, "espn_graph_id": None}
 
         if isinstance(row, sqlite3.Row):
             r = dict(row)
@@ -871,11 +887,12 @@ def get_provider_playable_link(conn, event_id: str, provider_code: str) -> dict:
                 "deeplink": deeplink,
                 "http_deeplink_url": r.get(http_col) if http_col else None,
                 "playable_id": r.get(playable_id_col) if playable_id_col else None,
+                "espn_graph_id": r.get(espn_graph_id_col) if espn_graph_id_col else None,
             }
 
-        return {"deeplink": row[0], "http_deeplink_url": None, "playable_id": None}
+        return {"deeplink": row[0], "http_deeplink_url": None, "playable_id": None, "espn_graph_id": None}
     except Exception:
-        return {"deeplink": None, "http_deeplink_url": None, "playable_id": None}
+        return {"deeplink": None, "http_deeplink_url": None, "playable_id": None, "espn_graph_id": None}
 
 
 def get_playable_id_for_event(conn, event_id: str, provider_code: str = None) -> str:
@@ -3071,6 +3088,29 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         # Resolve deeplink *for this provider lane* (do not use enabled_services selection).
         provider_link = get_provider_playable_link(conn, db_event_id, provider_code)
         deeplink_url = provider_link.get('deeplink')
+        espn_graph_id = provider_link.get('espn_graph_id')
+
+        # ESPN FIX: Use ESPN Graph ID to generate working deeplinks
+        # Apple TV provides playChannel or wrong playID deeplinks
+        # ESPN Watch Graph provides correct playID deeplinks that work
+        if espn_graph_id and provider_code.lower() in ('sportscenter', 'espn', 'espn+'):
+            try:
+                from deeplink_converter import generate_espn_scheme_deeplink
+                # Generate the correct sportscenter://...playID=... deeplink
+                corrected_deeplink = generate_espn_scheme_deeplink(espn_graph_id, deeplink_url)
+                if corrected_deeplink:
+                    deeplink_url = corrected_deeplink
+                    log(f"ESPN scheme deeplink corrected using Graph ID", "DEBUG")
+                    
+                    # Also update http_deeplink_url to use ESPN Graph ID
+                    # Extract playID from ESPN Graph ID for HTTP URL
+                    parts = espn_graph_id.split(':')
+                    if len(parts) >= 2:
+                        play_id = parts[1]
+                        provider_link['http_deeplink_url'] = f"https://www.espn.com/watch/player/_/id/{play_id}"
+                        log(f"ESPN HTTP deeplink corrected to use Graph ID: {play_id}", "DEBUG")
+            except ImportError:
+                log("deeplink_converter not available for ESPN correction", "WARN")
 
         # Provider lanes must remain provider-specific: do NOT fall back to generic best-link
         # selection across other providers.
@@ -3103,6 +3143,7 @@ def api_adb_lane_deeplink(provider_code, lane_number):
                         deeplink_url,
                         provider=provider_code,
                         playable_id=playable_uuid,
+                        espn_graph_id=espn_graph_id,
                     )
                 except TypeError:
                     http_version = generate_http_deeplink(deeplink_url, provider_code)

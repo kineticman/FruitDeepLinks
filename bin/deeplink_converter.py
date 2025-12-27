@@ -72,15 +72,29 @@ def convert_amazon_prime(punchout_url: str) -> Optional[str]:
     return None
 
 
-def convert_espn(punchout_url: str, playable_id: Optional[str] = None) -> Optional[str]:
+def convert_espn(punchout_url: str, playable_id: Optional[str] = None, espn_graph_id: Optional[str] = None) -> Optional[str]:
     """
     ESPN (SportsCenter scheme)
 
-    Case A (event-level):
+    Priority (best to worst):
+      1. espn_graph_id from ESPN Watch Graph API (most reliable for ADBTuner)
+      2. playID from sportscenter:// URL
+      3. playable_id extraction from tvs.sbd pattern
+      4. Fallback to ESPN Watch landing page
+
+    espn_graph_id format: "espn-watch:{playID}:{hash}"
+    Example: "espn-watch:9eb9b68b-11c6-4da0-9492-df997dbbf897:bb816546..."
+    We extract the middle part (the actual playID).
+
+    Case A (ESPN Graph ID available - BEST):
+      espn_graph_id="espn-watch:9eb9b68b...:hash"
+        -> https://www.espn.com/watch/player/_/id/9eb9b68b...
+
+    Case B (event-level playID in URL):
       sportscenter://x-callback-url/showWatchStream?playID=<UUID>&...
         -> https://www.espn.com/watch/player/_/id/<UUID>
 
-    Case B (channel-based deeplink, no playID):
+    Case C (channel-based deeplink, no playID):
       sportscenter://...showWatchStream?playChannel=espn1
         -> Extract playback UUID from playable_id: tvs.sbd.30061:<UUID>:...
         -> https://www.espn.com/watch/player/_/id/<UUID>
@@ -88,17 +102,28 @@ def convert_espn(punchout_url: str, playable_id: Optional[str] = None) -> Option
     Otherwise:
       -> https://www.espn.com/watch/ (landing)
     """
+    # Priority 1: Use ESPN Graph ID if available (from ESPN Watch Graph enrichment)
+    if espn_graph_id:
+        # Format: espn-watch:{playID}:{hash}
+        # Extract the middle part
+        parts = espn_graph_id.split(':')
+        if len(parts) >= 2:
+            play_id = parts[1]
+            if _UUID_RE.match(play_id):
+                return f"https://www.espn.com/watch/player/_/id/{play_id}"
+    
     if not punchout_url or not punchout_url.lower().startswith("sportscenter://"):
         return None
 
     pr = urlparse(punchout_url)
     qs = parse_qs(pr.query)
 
+    # Priority 2: Check for playID in URL
     play_id = (qs.get("playID") or qs.get("playId") or qs.get("playid") or [None])[0]
     if play_id and _UUID_RE.match(play_id):
         return f"https://www.espn.com/watch/player/_/id/{play_id}"
 
-    # Channel-based: try to pull UUID from playable_id
+    # Priority 3: Channel-based - try to pull UUID from playable_id
     if playable_id:
         # Common Apple pattern: tvs.sbd.30061:<UUID>:<suffix>
         m = re.search(r":([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):", playable_id, re.I)
@@ -306,9 +331,18 @@ def generate_http_deeplink(
     playable_id: Optional[str] = None,
     league: Optional[str] = None,
     context: Optional[Dict[str, Any]] = None,
+    espn_graph_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     Convert app-scheme deeplinks to HTTP URLs.
+
+    Args:
+        punchout_url: The deeplink URL to convert
+        provider: Provider hint (optional)
+        playable_id: Playable ID (optional, used for ESPN extraction)
+        league: League hint (optional, used for CBS Sports)
+        context: Additional context (optional)
+        espn_graph_id: ESPN Watch Graph ID (optional, preferred for ESPN)
 
     Returns:
       - HTTPS URL if conversion is possible (or punchout_url itself if already HTTPS)
@@ -329,7 +363,7 @@ def generate_http_deeplink(
         return convert_amazon_prime(punchout_url)
 
     if prov in ("sportscenter", "espn", "espn+"):
-        return convert_espn(punchout_url, playable_id=playable_id)
+        return convert_espn(punchout_url, playable_id=playable_id, espn_graph_id=espn_graph_id)
 
     if prov in ("pplus", "paramount", "paramount+"):
         return convert_paramount_plus(punchout_url)
@@ -368,6 +402,39 @@ def generate_http_deeplink(
         return "https://" + m.group(1)
 
     return None
+
+
+def generate_espn_scheme_deeplink(espn_graph_id: Optional[str] = None, fallback_url: Optional[str] = None) -> Optional[str]:
+    """
+    Generate a working sportscenter:// deeplink for ADBTuner using ESPN Watch Graph ID.
+    
+    This fixes the Apple TV deeplink format that uses playChannel (doesn't work) 
+    and converts it to playID format (works with ADBTuner/ESPN4cc4c).
+    
+    Args:
+        espn_graph_id: ESPN Watch Graph ID from enrichment (espn-watch:{playID}:{hash})
+        fallback_url: Original Apple TV deeplink to use if espn_graph_id not available
+        
+    Returns:
+        sportscenter://x-callback-url/showWatchStream?playID={playID}
+        or fallback_url if espn_graph_id is not available
+        
+    Examples:
+        Input:  espn_graph_id = "espn-watch:9eb9b68b-11c6-4da0-9492-df997dbbf897:bb816546..."
+        Output: "sportscenter://x-callback-url/showWatchStream?playID=9eb9b68b-11c6-4da0-9492-df997dbbf897"
+    """
+    if not espn_graph_id:
+        return fallback_url
+    
+    # Extract playID from ESPN Graph ID format: espn-watch:{playID}:{hash}
+    parts = espn_graph_id.split(':')
+    if len(parts) >= 2:
+        play_id = parts[1]
+        if _UUID_RE.match(play_id):
+            return f"sportscenter://x-callback-url/showWatchStream?playID={play_id}"
+    
+    # ESPN Graph ID format unexpected, use fallback
+    return fallback_url
 
 
 if __name__ == "__main__":
@@ -425,6 +492,11 @@ if __name__ == "__main__":
         ("nflctv://livestream/f8d8eae6-311e-11f0-b670-ae1250fadad1",
          dict(provider="nflctv"),
          "https://www.nfl.com/plus/"),
+        
+        # ESPN with Graph ID (new enrichment feature)
+        ("sportscenter://x-callback-url/showWatchStream?playChannel=espn1&x-source=AppleUMC",
+         dict(provider="sportscenter", espn_graph_id="espn-watch:9eb9b68b-11c6-4da0-9492-df997dbbf897:bb816546ee4e3a967b98e9d775c9c6f3"),
+         "https://www.espn.com/watch/player/_/id/9eb9b68b-11c6-4da0-9492-df997dbbf897"),
     ]
 
     ok = 0
@@ -435,3 +507,24 @@ if __name__ == "__main__":
         ok += (got == expected)
 
     print(f"Passed {ok}/{len(tests)} tests")
+    
+    # Test ESPN scheme deeplink generation
+    print("\n" + "="*60)
+    print("ESPN Scheme Deeplink Generation Tests")
+    print("="*60)
+    
+    espn_graph_id = "espn-watch:9eb9b68b-11c6-4da0-9492-df997dbbf897:bb816546ee4e3a967b98e9d775c9c6f3"
+    expected_scheme = "sportscenter://x-callback-url/showWatchStream?playID=9eb9b68b-11c6-4da0-9492-df997dbbf897"
+    got_scheme = generate_espn_scheme_deeplink(espn_graph_id)
+    
+    print(f"{'✓' if got_scheme == expected_scheme else '✗'} ESPN Graph ID → Scheme")
+    print(f"  Input:    {espn_graph_id}")
+    print(f"  Expected: {expected_scheme}")
+    print(f"  Got:      {got_scheme}\n")
+    
+    # Test fallback
+    fallback_url = "sportscenter://x-callback-url/showWatchStream?playChannel=espn1"
+    got_fallback = generate_espn_scheme_deeplink(None, fallback_url)
+    print(f"{'✓' if got_fallback == fallback_url else '✗'} Fallback when no Graph ID")
+    print(f"  Got:      {got_fallback}")
+
