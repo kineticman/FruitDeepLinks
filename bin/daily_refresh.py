@@ -246,6 +246,33 @@ def main():
     except Exception as e:
         print(f"⚠️ Step 5b failed (non-fatal): {e}")
         # Non-fatal - ESPN enrichment will just skip if column doesn't exist
+    
+    # Step 5c: Clean up old events (keep database fresh and improve ESPN enrichment rate)
+    print("\n" + "=" * 60)
+    print(f"[5c/{total_steps}] Cleaning up old events")
+    print("=" * 60)
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        
+        # Count events before cleanup
+        cur.execute("SELECT COUNT(*) FROM events WHERE end_utc < datetime('now', '-1 day')")
+        old_count = cur.fetchone()[0]
+        
+        if old_count > 0:
+            # Delete events that ended before yesterday
+            # This removes stale events and improves ESPN enrichment match rate
+            cur.execute("DELETE FROM events WHERE end_utc < datetime('now', '-1 day')")
+            deleted = cur.rowcount
+            conn.commit()
+            print(f"✅ Deleted {deleted} old events (ended before yesterday)")
+        else:
+            print("✅ No old events to clean up")
+        
+        conn.close()
+        print("✅ Step 5c complete")
+    except Exception as e:
+        print(f"⚠️ Step 5c failed (non-fatal): {e}")
 
     # Step 6: Import Apple TV events (DB-to-DB from apple_events.db)
     # NOTE: Step 6 can be slow (GZIP + JSON parse). If --skip-scrape was used and the Apple DB
