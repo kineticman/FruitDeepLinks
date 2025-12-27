@@ -9,6 +9,7 @@ Usage:
   python fruit_enrich_espn.py
   python fruit_enrich_espn.py --fruit-db data/fruit_events.db --espn-db data/espn_graph.db
   python fruit_enrich_espn.py --dry-run
+  python fruit_enrich_espn.py --skip-enrich  # Skip enrichment (for use with --skip-scrape)
 """
 
 import argparse
@@ -172,11 +173,17 @@ def get_espn_graph_events(espn_db: str) -> Dict[str, Dict]:
     return results
 
 
-def enrich_playables(fruit_db: str, espn_db: str, dry_run: bool = False) -> None:
+def enrich_playables(fruit_db: str, espn_db: str, dry_run: bool = False, skip_enrich: bool = False) -> None:
     """
     Match Apple TV ESPN playables with ESPN Watch Graph events.
     Updates playables.espn_graph_id for matched events.
     """
+    if skip_enrich:
+        _log("="*80)
+        _log("ESPN ENRICHMENT - SKIPPED (--skip-enrich flag)")
+        _log("="*80)
+        return
+    
     _log("="*80)
     _log("ESPN ENRICHMENT - Matching Apple TV with ESPN Watch Graph")
     _log("="*80)
@@ -203,14 +210,12 @@ def enrich_playables(fruit_db: str, espn_db: str, dry_run: bool = False) -> None
     _log("\nStep 3: Matching playables using program.id...")
     _log("-"*80)
     
-    conn = sqlite3.connect(fruit_db)
-    cursor = conn.cursor()
-    
     matched = 0
     unmatched = 0
-    updated = 0
     unmatched_details = []  # Track unmatched for debugging
+    updates_to_apply = []  # Batch updates for massive performance improvement
     
+    # Process all matches first (no DB operations in loop = fast!)
     for playable in apple_playables:
         external_id = playable['external_id']
         
@@ -248,20 +253,8 @@ def enrich_playables(fruit_db: str, espn_db: str, dry_run: bool = False) -> None
                 # This is the critical fix - use feed URL playback ID
                 espn_graph_id = f"espn-watch:{espn_playback_id}"
                 
-                if dry_run:
-                    _log(f"[DRY-RUN] Would match: {playable['title'][:50]}")
-                    _log(f"          Apple playable: {playable['playable_id']}")
-                    _log(f"          ESPN Graph ID:  {espn_graph_id}")
-                else:
-                    # Update playable with ESPN Graph ID
-                    cursor.execute("""
-                        UPDATE playables 
-                        SET espn_graph_id = ?
-                        WHERE playable_id = ?
-                    """, (espn_graph_id, playable['playable_id']))
-                    
-                    if cursor.rowcount > 0:
-                        updated += 1
+                # Add to batch update list
+                updates_to_apply.append((espn_graph_id, playable['playable_id']))
                 
                 matched += 1
                 
@@ -271,6 +264,11 @@ def enrich_playables(fruit_db: str, espn_db: str, dry_run: bool = False) -> None
                     _log(f"   program.id:     {external_id}")
                     _log(f"   ESPN Graph ID:  {espn_graph_id}")
                     _log(f"   FireTV URL:     https://www.espn.com/watch/player/_/id/{espn_graph_id}")
+                
+                if dry_run and matched <= 10:
+                    _log(f"[DRY-RUN] Would match: {playable['title'][:50]}")
+                    _log(f"          Apple playable: {playable['playable_id']}")
+                    _log(f"          ESPN Graph ID:  {espn_graph_id}")
             else:
                 _log(f"⚠️  Match found but no usable ESPN ID: {playable['title'][:50]}")
                 unmatched += 1
@@ -288,11 +286,25 @@ def enrich_playables(fruit_db: str, espn_db: str, dry_run: bool = False) -> None
                 _log(f"❌ No match: {playable['title'][:60]}")
                 _log(f"   program.id: {external_id}")
     
-    if not dry_run and updated > 0:
+    # Apply all updates in a single batch transaction (FAST!)
+    updated = 0
+    if not dry_run and updates_to_apply:
+        _log(f"\n💾 Applying {len(updates_to_apply)} updates in batch...")
+        conn = sqlite3.connect(fruit_db)
+        cursor = conn.cursor()
+        
+        cursor.executemany("""
+            UPDATE playables 
+            SET espn_graph_id = ?
+            WHERE playable_id = ?
+        """, updates_to_apply)
+        
+        updated = cursor.rowcount
         conn.commit()
-        _log(f"\n💾 Updated {updated} playables in database")
-    
-    conn.close()
+        conn.close()
+        _log(f"✅ Batch update complete - {updated} playables updated")
+    elif dry_run:
+        updated = len(updates_to_apply)
     
     # Summary
     _log("\n" + "="*80)
@@ -368,10 +380,15 @@ def main():
         action="store_true",
         help="Show what would be matched without making changes"
     )
+    parser.add_argument(
+        "--skip-enrich",
+        action="store_true",
+        help="Skip enrichment (for use with --skip-scrape in daily_refresh)"
+    )
     
     args = parser.parse_args()
     
-    enrich_playables(args.fruit_db, args.espn_db, args.dry_run)
+    enrich_playables(args.fruit_db, args.espn_db, args.dry_run, args.skip_enrich)
 
 
 if __name__ == "__main__":

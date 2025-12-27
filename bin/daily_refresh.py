@@ -326,17 +326,26 @@ def main():
             "--days", espn_days,
         ], allow_fail=True)
 
-    # Step 7c: Enrich ESPN playables with Watch Graph IDs (always run if ESPN DB exists)
+    # Step 7c: Enrich ESPN playables with Watch Graph IDs (conditional based on scraping)
     if espn_db.exists():
         print("\n" + "=" * 60)
         print(f"[7c/{total_steps}] Enriching ESPN playables with FireTV deeplinks")
         print("=" * 60)
-        # ESPN enrichment is non-fatal - don't stop pipeline if it fails
-        run_step("7c", total_steps, "Enriching ESPN playables with FireTV deeplinks", [
+        
+        # Build enrichment command
+        espn_enrich_cmd = [
             "python3", "fruit_enrich_espn.py",
             "--fruit-db", str(DB_PATH),
             "--espn-db", str(espn_db),
-        ], allow_fail=True)
+        ]
+        
+        # Skip enrichment if no scraping happened (databases unchanged)
+        if skip_scrape:
+            espn_enrich_cmd.append("--skip-enrich")
+        
+        # ESPN enrichment is non-fatal - don't stop pipeline if it fails
+        run_step("7c", total_steps, "Enriching ESPN playables with FireTV deeplinks", 
+                espn_enrich_cmd, allow_fail=True)
     else:
         print("\n" + "=" * 60)
         print(f"[7c/{total_steps}] Enriching ESPN playables. SKIPPED")
