@@ -220,27 +220,35 @@ def convert_turner(punchout_url: str) -> Optional[str]:
 
 def convert_nba_gametime(punchout_url: str) -> Optional[str]:
     """
-    NBA (gametime) deeplink - strip Apple TV query params
+    NBA (gametime) deeplink - convert to HTTPS for Chrome Capture compatibility
     
     Input:  gametime://game/0022500409?x-source=umc.ums.apple.tvapp&x-apple-...
-    Output: gametime://game/0022500409
+    Output: https://www.nba.com/game/0022500409
     
-    Per user report from CDVR forum (2024-12):
-    "First test only opened NBA app. Then scrubbed query string linking it to atv 
-    and it opened app, and set it to the event page of the game."
-    
-    Keep the native gametime:// scheme but remove Apple TV tracking params.
-    This works better when launching from CDVR on Fire TV / Android devices.
+    Extracts the game ID from the gametime:// scheme and converts to the 
+    NBA.com game page URL format. This HTTPS format is required for Chrome 
+    Capture for Channels (CC4C) integration while the native gametime:// 
+    scheme works better for ADBTuner/Fire TV direct app launches.
     """
     if not punchout_url or not punchout_url.lower().startswith("gametime://"):
         return None
 
-    # Strip query string parameters - just keep the base deeplink
-    if '?' in punchout_url:
-        return punchout_url.split('?')[0]
+    # Extract game ID from gametime://game/{gameID}?params
+    # Remove scheme prefix
+    path = punchout_url.split("://", 1)[1] if "://" in punchout_url else punchout_url
     
-    # Already clean
-    return punchout_url
+    # Remove query string
+    if '?' in path:
+        path = path.split('?')[0]
+    
+    # Extract game ID from path like "game/0022500409"
+    if path.startswith("game/"):
+        game_id = path.split("game/", 1)[1].strip("/")
+        if game_id:
+            return f"https://www.nba.com/game/{game_id}"
+    
+    # Fallback if format unexpected
+    return None
 
 
 def convert_nbcsports(punchout_url: str) -> Optional[str]:
