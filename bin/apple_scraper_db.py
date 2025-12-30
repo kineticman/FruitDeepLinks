@@ -79,29 +79,104 @@ def init_database(db_path: Path):
     conn.close()
 
 def analyze_event(raw_data: dict) -> dict:
-    """Analyze event to extract playables metadata"""
-    data = raw_data.get("data", {})
-    playables = data.get("playables", {})
+    """Analyze event to extract playables metadata from all possible locations
     
+    Playables can appear in multiple locations:
+    1. Top-level: raw_data["playables"] - Primary location for full API responses
+    2. Data-level: raw_data["data"]["playables"] - Legacy/alternative location
+    3. Content-level: raw_data["data"]["content"]["playables"] - Shelf items
+    """
+    # Collect playables from ALL possible locations
+    all_playables = []
+    
+    # Location 1: Top-level playables (PRIMARY - full API responses)
+    top_level_playables = raw_data.get("playables", {})
+    if isinstance(top_level_playables, dict):
+        all_playables.extend(top_level_playables.values())
+    
+    # Location 2: data.playables (secondary location)
+    data = raw_data.get("data", {})
+    data_playables = data.get("playables", {})
+    if isinstance(data_playables, dict):
+        all_playables.extend(data_playables.values())
+    elif isinstance(data_playables, list):
+        all_playables.extend(data_playables)
+    
+    # Location 3: data.content.playables (shelf-level items)
+    content = data.get("content", {})
+    content_playables = content.get("playables", {})
+    if isinstance(content_playables, dict):
+        all_playables.extend(content_playables.values())
+    elif isinstance(content_playables, list):
+        all_playables.extend(content_playables)
+    
+    # Count unique services and playables
     playables_count = 0
     unique_services = set()
+    punchout_count = 0
     
-    if isinstance(playables, dict):
-        for p in playables.values():
-            if isinstance(p, dict):
-                playables_count += 1
-                service = p.get("serviceName", "")
-                if service:
-                    unique_services.add(service)
+    for p in all_playables:
+        if isinstance(p, dict):
+            playables_count += 1
+            service = p.get("serviceName", "")
+            if service:
+                unique_services.add(service)
+            
+            # Track deeplink availability
+            punchout_urls = p.get("punchoutUrls", {})
+            if punchout_urls.get("play") or punchout_urls.get("open"):
+                punchout_count += 1
     
     return {
         "playables_count": playables_count,
         "unique_services_count": len(unique_services),
-        "has_multi_playables": len(unique_services) > 1
+        "has_multi_playables": len(unique_services) > 1,
+        "punchout_count": punchout_count
     }
 
+def extract_relevant_playables(parent_data: dict, shelf_item: dict) -> dict:
+    """
+    Extract playables relevant to a specific shelf item from parent event's data.
+    
+    Uses the shelf item's canonical ID to filter playables that belong to this event.
+    Checks both top-level and nested playable locations in the parent data.
+    
+    Args:
+        parent_data: Full parent event response data
+        shelf_item: The shelf item (SportingEvent) to extract playables for
+        
+    Returns:
+        Dict of playable_id -> playable data relevant to this shelf item
+    """
+    relevant = {}
+    shelf_canonical_id = shelf_item.get("id", "")
+    
+    if not shelf_canonical_id:
+        return relevant
+    
+    # Collect all parent playables from various locations
+    all_parent_playables = {}
+    
+    # Check top-level playables (primary location)
+    if "playables" in parent_data and isinstance(parent_data["playables"], dict):
+        all_parent_playables.update(parent_data["playables"])
+    
+    # Check data.playables (secondary location)
+    data = parent_data.get("data", {})
+    if "playables" in data and isinstance(data["playables"], dict):
+        all_parent_playables.update(data["playables"])
+    
+    # Filter playables that match this shelf item's canonical ID
+    for playable_id, playable in all_parent_playables.items():
+        if isinstance(playable, dict):
+            playable_canonical = playable.get("canonicalId", "")
+            if playable_canonical == shelf_canonical_id:
+                relevant[playable_id] = playable
+    
+    return relevant
+
 def save_event(conn: sqlite3.Connection, event_id: str, fetch_level: str, 
-               source: str, raw_data: dict):
+               source: str, raw_data: dict, verbose: bool = False):
     """Save or update event in database with GZIP compression"""
     now = datetime.now(timezone.utc).isoformat()
     analysis = analyze_event(raw_data)
@@ -127,6 +202,12 @@ def save_event(conn: sqlite3.Connection, event_id: str, fetch_level: str,
         event_id, now,
         now
     ))
+    
+    # Optional diagnostic output
+    if verbose and analysis["playables_count"] > 0:
+        print(f"      └─ Saved {analysis['playables_count']} playables, "
+              f"{analysis['unique_services_count']} services, "
+              f"{analysis.get('punchout_count', 0)} with deeplinks")
     
     return analysis
 
@@ -174,25 +255,54 @@ def print_stats(conn: sqlite3.Connection):
     db_size_mb = db_size_bytes / 1024 / 1024
     print(f"Database size: {db_size_mb:.1f} MB")
     
-    # Top services (requires decompression)
+    # Top services (requires decompression) - CHECK ALL LOCATIONS
     print("\nTop services by event count:")
     cur.execute("SELECT event_id, raw_json_gzip FROM apple_events")
     service_counts = {}
+    location_stats = {"top_level": 0, "data_level": 0, "content_level": 0}
+    
     for event_id, compressed in cur.fetchall():
         try:
             json_str = gzip.decompress(compressed).decode('utf-8')
             data = json.loads(json_str)
-            playables_a = data.get('data', {}).get('playables', {})
-            playables_b = data.get('data', {}).get('content', {}).get('playables', {})
-            def _iter_playables(x):
-                if isinstance(x, dict):
-                    return x.values()
-                if isinstance(x, list):
-                    return x
-                return []
-            for p in list(_iter_playables(playables_a)) + list(_iter_playables(playables_b)):
+            
+            # Collect playables from all locations
+            playables_to_check = []
+            
+            # Location 1: Top-level playables (primary for full fetches)
+            if "playables" in data and isinstance(data["playables"], dict):
+                count_before = len(playables_to_check)
+                playables_to_check.extend(data["playables"].values())
+                if len(playables_to_check) > count_before:
+                    location_stats["top_level"] += 1
+            
+            # Location 2: data.playables (secondary)
+            data_obj = data.get("data", {})
+            if "playables" in data_obj:
+                p = data_obj["playables"]
+                count_before = len(playables_to_check)
                 if isinstance(p, dict):
-                    service = p.get('serviceName')
+                    playables_to_check.extend(p.values())
+                elif isinstance(p, list):
+                    playables_to_check.extend(p)
+                if len(playables_to_check) > count_before:
+                    location_stats["data_level"] += 1
+            
+            # Location 3: data.content.playables (shelf items)
+            if "content" in data_obj and "playables" in data_obj["content"]:
+                p = data_obj["content"]["playables"]
+                count_before = len(playables_to_check)
+                if isinstance(p, dict):
+                    playables_to_check.extend(p.values())
+                elif isinstance(p, list):
+                    playables_to_check.extend(p)
+                if len(playables_to_check) > count_before:
+                    location_stats["content_level"] += 1
+            
+            # Count services
+            for playable in playables_to_check:
+                if isinstance(playable, dict):
+                    service = playable.get("serviceName")
                     if service:
                         service_counts[service] = service_counts.get(service, 0) + 1
         except:
@@ -200,6 +310,11 @@ def print_stats(conn: sqlite3.Connection):
     
     for service, count in sorted(service_counts.items(), key=lambda x: x[1], reverse=True)[:10]:
         print(f"  {service}: {count}")
+    
+    print(f"\nPlayables location distribution:")
+    print(f"  Top-level (response.playables): {location_stats['top_level']} events")
+    print(f"  Data-level (data.playables): {location_stats['data_level']} events")
+    print(f"  Content-level (data.content.playables): {location_stats['content_level']} events")
 
 # ------------------------------ Chrome Driver ------------------------------
 def make_driver(headless: bool = False) -> webdriver.Chrome:
@@ -370,13 +485,31 @@ def scrape_search_term(driver, conn: sqlite3.Connection, search_term: str,
                         if item.get("type") == "SportingEvent":
                             shelf_id = item.get("id")
                             if shelf_id and not event_exists_as_full(conn, shelf_id):
+                                # Enhanced shelf data - preserve relevant playables from parent
+                                relevant_playables = extract_relevant_playables(data, item)
+                                
                                 shelf_data = {
                                     "data": {
                                         "content": item,
                                         "canvas": {},
                                         "playables": item.get("playables", {})
-                                    }
+                                    },
+                                    # Preserve top-level data from parent when available
+                                    "playables": relevant_playables,
+                                    "channels": data.get("channels", {}),
+                                    "howToWatch": []  # Will be populated if relevant_playables exist
                                 }
+                                
+                                # If we found relevant playables, create howToWatch entries
+                                if relevant_playables:
+                                    for playable_id, playable in relevant_playables.items():
+                                        channel_id = playable.get("channelId", "")
+                                        if channel_id:
+                                            shelf_data["howToWatch"].append({
+                                                "channelId": channel_id,
+                                                "versions": [{"playableId": playable_id}]
+                                            })
+                                
                                 save_event(conn, shelf_id, "shelf", "shelf", shelf_data)
                                 new_shelf += 1
                                 shelf_discovered += 1
