@@ -30,6 +30,8 @@ SERVICE_DISPLAY_NAMES = {
     # App-based (existing)
     'sportsonespn': 'ESPN+',
     'sportscenter': 'ESPN',
+    'espn_linear': 'ESPN (Linear)',
+    'espn_plus': 'ESPN+',
     'peacock': 'Peacock',
     'peacocktv': 'Peacock',
     'pplus': 'Paramount+',
@@ -121,7 +123,8 @@ def get_logical_service_for_playable(
     deeplink_open: Optional[str],
     playable_url: Optional[str],
     event_id: Optional[str] = None,
-    conn: Optional[sqlite3.Connection] = None
+    conn: Optional[sqlite3.Connection] = None,
+    service_name: Optional[str] = None
 ) -> str:
     """
     Determine the logical service code for a playable.
@@ -133,10 +136,23 @@ def get_logical_service_for_playable(
         playable_url: Playable URL
         event_id: Event ID (needed for Apple TV league lookup)
         conn: Database connection (needed for Apple TV league lookup)
+        service_name: Service name from playables table (used for ESPN differentiation)
     
     Returns:
-        Logical service code (e.g., 'apple_mls', 'peacock_web', 'pplus', 'kayo_web', etc.)
+        Logical service code (e.g., 'espn_linear', 'espn_plus', 'peacock_web', 'pplus', etc.)
     """
+    # ESPN: differentiate linear TV channels from streaming services
+    if provider == 'sportscenter':
+        if service_name:
+            # Streaming services: ESPN+, ESPN Unlimited
+            if any(x in service_name for x in ['ESPN+', 'Unlimited']):
+                return 'espn_plus'
+            # Linear channels: ESPN, ESPN2, ESPN Deportes, ESPNU, ESPNews
+            else:
+                return 'espn_linear'
+        # Fallback if no service_name
+        return 'sportscenter'
+    
     # Kayo provider: map to kayo_web
     if provider == 'kayo':
         return 'kayo_web'
@@ -239,50 +255,52 @@ def get_logical_service_priority(service_code: str) -> int:
     """
     PRIORITY_MAP = {
         # Premium sports services (highest priority)
-        'sportsonespn': 0,
-        'sportscenter': 0,  # ESPN app - same as sportsonespn
-        'peacock': 1,
-        'peacock_web': 2,  # Web version slightly lower priority
+        'espn_linear': 0,    # ESPN linear channels (ESPN, ESPN2, ESPN Deportes, ESPNU, ESPNews)
+        'sportsonespn': 1,   # ESPN+ legacy
+        'espn_plus': 1,      # ESPN+ streaming service
+        'sportscenter': 1,   # ESPN app - fallback for unmapped
+        'peacock': 2,
+        'peacock_web': 3,  # Web version slightly lower priority
         
         # General streaming (prefer direct services)
-        'pplus': 3,
-        'max': 4,
+        'pplus': 4,
+        'max': 5,
         
         # Sports-specific
-        'cbssportsapp': 5,
-        'cbstve': 6,
-        'nbcsportstve': 7,
-        'foxone': 8,
-        'fsapp': 9,
+        'cbssportsapp': 6,
+        'cbstve': 7,
+        'nbcsportstve': 8,
+        'foxone': 9,
+        'fsapp': 10,
         
         # Apple services
-        'apple_mls': 10,
-        'apple_mlb': 11,
-        'apple_nba': 12,
-        'apple_nhl': 13,
-        'apple_other': 14,
+        'apple_mls': 11,
+        'apple_mlb': 12,
+        'apple_nba': 13,
+        'apple_nhl': 14,
+        'apple_other': 15,
         
         # Niche/specialty
-        'dazn': 15,
-        'open.dazn.com': 16,
-        'f1tv': 17,
-        'kayo_web': 18,  # Kayo Sports (Australia)
-        'marquee': 19,   # Marquee Sports Network (Chicago regional)
-        'vixapp': 20,
-        'nflctv': 21,
-        'watchtru': 22,
-        'watchtnt': 23,
-        'watchtbs': 24,  # TBS - College sports, MLB, NBA
+        'dazn': 16,
+        'open.dazn.com': 17,
+        'f1tv': 18,
+        'kayo_web': 19,  # Kayo Sports (Australia)
+        'marquee': 20,   # Marquee Sports Network (Chicago regional)
+        'vixapp': 21,
+        'nflctv': 22,
+        'watchtru': 23,
+        'watchtnt': 24,
+        'watchtbs': 25,  # TBS - College sports, MLB, NBA
         
         # League-specific services (direct subscriptions)
-        'nba': 25,        # NBA League Pass
-        'gametime': 25,   # NBA app (same priority as League Pass)
-        'mlb': 25,        # MLB.TV
-        'nhl': 25,        # NHL.TV / NHL Power Play
+        'nba': 26,        # NBA League Pass
+        'gametime': 26,   # NBA app (same priority as League Pass)
+        'mlb': 26,        # MLB.TV
+        'nhl': 26,        # NHL.TV / NHL Power Play
         
         # Amazon aggregator services (deprioritized - often redirect to other services)
         # These should only be used when no direct service deeplink is available
-        'aiv': 26,        # Amazon Prime Video (was 4, now 26)
+        'aiv': 27,        # Amazon Prime Video (was 4, now 27)
         
         # Generic web (lowest priority)
         'https': 30,
