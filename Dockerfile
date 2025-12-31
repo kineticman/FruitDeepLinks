@@ -1,7 +1,8 @@
 # Dockerfile for FruitDeepLinks
 # Multi-source sports event aggregator (Apple TV + partners)
+# Uses Debian Chromium for cross-platform compatibility (arm64 + amd64)
 
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -14,21 +15,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cron \
     sqlite3 \
     wget \
-    gnupg \
     ca-certificates \
     fonts-liberation \
     fonts-dejavu \
+    fonts-noto-color-emoji \
     tzdata \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Install Chrome for Selenium (keyring method) ---
-RUN wget -qO- https://dl.google.com/linux/linux_signing_key.pub \
-    | gpg --dearmor -o /usr/share/keyrings/google-linux-signing-keyring.gpg \
-    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-linux-signing-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
-       > /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends google-chrome-stable \
+# --- Install Chromium + ChromeDriver for Selenium (native arm64 + amd64 support) ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    chromium-driver \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -32,8 +32,10 @@ def get_auth_path() -> Path:
 # ------------------------------ driver ------------------------------
 def make_driver(headless: bool = False, enable_network: bool = True) -> webdriver.Chrome:
     """
-    Create a Chrome WebDriver, trying webdriver-manager first, and falling back
-    to common system chromedriver locations if needed.
+    Create a Chrome/Chromium WebDriver with cross-platform support.
+    
+    Tries webdriver-manager first, then falls back to common system 
+    chromedriver locations. Supports both Google Chrome and Debian Chromium.
     """
     import logging
     import os
@@ -46,7 +48,7 @@ def make_driver(headless: bool = False, enable_network: bool = True) -> webdrive
     )
     logger = logging.getLogger(__name__)
 
-    logger.info("=== Starting Chrome Driver Initialization ===")
+    logger.info("=== Starting Chrome/Chromium Driver Initialization ===")
     logger.info(f"Headless mode: {headless}")
     logger.info(f"Network enabled: {enable_network}")
 
@@ -70,6 +72,11 @@ def make_driver(headless: bool = False, enable_network: bool = True) -> webdrive
 
     logger.info("Chrome options configured")
 
+    # Detect system Chromium (Docker/Linux environments)
+    if os.path.exists('/usr/bin/chromium'):
+        opts.binary_location = '/usr/bin/chromium'
+        logger.info("Using system Chromium binary at /usr/bin/chromium")
+
     opts.set_capability("goog:loggingPrefs", {"performance": "ALL"})
     opts.set_capability(
         "goog:perfLoggingPrefs",
@@ -77,12 +84,12 @@ def make_driver(headless: bool = False, enable_network: bool = True) -> webdrive
     )
 
     def _try_start_with_service_path(path_str: str):
-        """Helper to try starting Chrome with a given chromedriver path."""
+        """Helper to try starting Chrome/Chromium with a given chromedriver path."""
         try:
-            logger.info(f"Attempting to start Chrome with chromedriver at: {path_str}")
+            logger.info(f"Attempting to start Chrome/Chromium with chromedriver at: {path_str}")
             service = Service(path_str)
             driver = webdriver.Chrome(service=service, options=opts)
-            logger.info("Chrome browser launched successfully!")
+            logger.info("Browser launched successfully!")
             if enable_network:
                 try:
                     logger.info("Enabling network monitoring (CDP Network.enable)...")
@@ -90,10 +97,10 @@ def make_driver(headless: bool = False, enable_network: bool = True) -> webdrive
                     logger.info("Network monitoring enabled")
                 except Exception as ne:
                     logger.warning(f"Failed to enable network monitoring: {ne}")
-            logger.info("=== Chrome Driver Initialization Complete ===")
+            logger.info("=== Chrome/Chromium Driver Initialization Complete ===")
             return driver
         except Exception as e:
-            logger.error(f"Failed to start Chrome with {path_str}: {e}")
+            logger.error(f"Failed to start browser with {path_str}: {e}")
             return None
 
     # 1) Primary attempt: webdriver-manager
@@ -157,7 +164,7 @@ def make_driver(headless: bool = False, enable_network: bool = True) -> webdrive
             logger.info(f"System chromedriver not found at: {sys_path}")
 
     # If we got this far, everything failed. Log diagnostics then raise.
-    logger.error("=== CHROME DRIVER INITIALIZATION FAILED (all attempts) ===")
+    logger.error("=== CHROME/CHROMIUM DRIVER INITIALIZATION FAILED (all attempts) ===")
 
     # Check system resources
     try:
@@ -172,20 +179,26 @@ def make_driver(headless: bool = False, enable_network: bool = True) -> webdrive
     except Exception as shm_err:
         logger.error(f"Could not check /dev/shm: {shm_err}")
 
-    # Check Chrome installation
-    try:
-        logger.info("Checking Chrome installation with 'google-chrome --version'...")
-        chrome_result = subprocess.run(
-            ["google-chrome", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        logger.info(f"Chrome version: {chrome_result.stdout.strip()}")
-    except Exception as chrome_err:
-        logger.error(f"Could not check Chrome version: {chrome_err}")
+    # Check Chrome/Chromium installation
+    logger.info("Checking for installed browsers...")
+    for browser_cmd, browser_name in [
+        ('google-chrome', 'Google Chrome'),
+        ('chromium', 'Chromium'),
+        ('chromium-browser', 'Chromium Browser')
+    ]:
+        try:
+            logger.info(f"Checking {browser_name} with '{browser_cmd} --version'...")
+            chrome_result = subprocess.run(
+                [browser_cmd, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            logger.info(f"{browser_name} version: {chrome_result.stdout.strip()}")
+        except Exception as chrome_err:
+            logger.debug(f"Could not check {browser_name}: {chrome_err}")
 
-    msg = "Unable to initialize Chrome WebDriver. "
+    msg = "Unable to initialize Chrome/Chromium WebDriver. "
     if wm_raw_path is not None:
         msg += f"webdriver-manager path was: {wm_raw_path}. "
     if tried_paths:
