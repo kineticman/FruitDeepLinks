@@ -834,6 +834,7 @@ def get_provider_playable_link(conn, event_id: str, provider_code: str) -> dict:
         http_col = "http_deeplink_url" if "http_deeplink_url" in cols else None
         priority_col = "priority" if "priority" in cols else None
         espn_graph_id_col = "espn_graph_id" if "espn_graph_id" in cols else None
+        service_name_col = "service_name" if "service_name" in cols else None
 
         deeplink_cols = [c for c in ["deeplink_play", "deeplink_open", "playable_url"] if c in cols]
         if not deeplink_cols:
@@ -846,11 +847,23 @@ def get_provider_playable_link(conn, event_id: str, provider_code: str) -> dict:
             select_cols.append(playable_id_col)
         if espn_graph_id_col:
             select_cols.append(espn_graph_id_col)
+        if service_name_col:
+            select_cols.append(service_name_col)
 
         params = [event_id]
         if logical_col:
-            where = f"{event_fk} = ? AND ({logical_col} = ? OR {provider_col} = ?)"
-            params.extend([provider_code, provider_code])
+            # Use ADB provider mapper to find all logical services that map to this provider
+            try:
+                from adb_provider_mapper import get_logical_services_for_adb_provider
+                mapped_services = get_logical_services_for_adb_provider(provider_code)
+                # Build WHERE clause: logical_service IN (mapped services)
+                placeholders = ','.join('?' * len(mapped_services))
+                where = f"{event_fk} = ? AND {logical_col} IN ({placeholders})"
+                params.extend(mapped_services)
+            except ImportError:
+                # Fallback: check both logical_service and provider columns
+                where = f"{event_fk} = ? AND ({logical_col} = ? OR {provider_col} = ?)"
+                params.extend([provider_code, provider_code])
         else:
             where = f"{event_fk} = ? AND {provider_col} = ?"
             params.append(provider_code)
@@ -888,6 +901,7 @@ def get_provider_playable_link(conn, event_id: str, provider_code: str) -> dict:
                 "http_deeplink_url": r.get(http_col) if http_col else None,
                 "playable_id": r.get(playable_id_col) if playable_id_col else None,
                 "espn_graph_id": r.get(espn_graph_id_col) if espn_graph_id_col else None,
+                "service_name": r.get(service_name_col) if service_name_col else None,
             }
 
         return {"deeplink": row[0], "http_deeplink_url": None, "playable_id": None, "espn_graph_id": None}
@@ -2663,8 +2677,57 @@ def get_provider_lane_stats(conn: sqlite3.Connection) -> list[dict]:
                 "updated_at": row[4]
             }
     
+    # Aggregate logical services by their ADB provider code
+    # (e.g., espn_linear and espn_plus both map to sportscenter)
+    adb_aggregated = {}
+    try:
+        from adb_provider_mapper import get_adb_provider_code
+        
+        for code, info in services.items():
+            adb_code = get_adb_provider_code(code)
+            
+            if adb_code not in adb_aggregated:
+                # Initialize with this service's data
+                adb_aggregated[adb_code] = {
+                    "provider_code": adb_code,
+                    "name": info["name"] if adb_code == code else adb_code.upper(),
+                    "event_count": 0,
+                    "playable_count": 0,
+                    "future_event_count": 0,
+                    "adb_enabled": info.get("adb_enabled", 0) if adb_code == code else 0,
+                    "adb_lane_count": info.get("adb_lane_count", 0) if adb_code == code else 0,
+                    "created_at": info.get("created_at") if adb_code == code else None,
+                    "updated_at": info.get("updated_at") if adb_code == code else None
+                }
+                
+                # Get proper display name for ADB provider
+                if LOGICAL_SERVICES_AVAILABLE:
+                    try:
+                        from logical_service_mapper import get_service_display_name
+                        adb_aggregated[adb_code]["name"] = get_service_display_name(adb_code)
+                    except:
+                        pass
+            
+            # Add counts from this logical service
+            adb_aggregated[adb_code]["event_count"] += info["event_count"]
+            adb_aggregated[adb_code]["playable_count"] += info["playable_count"]
+            adb_aggregated[adb_code]["future_event_count"] += info["future_event_count"]
+            
+            # Preserve ADB config if this is the primary service
+            if adb_code == code:
+                adb_aggregated[adb_code]["adb_enabled"] = info.get("adb_enabled", 0)
+                adb_aggregated[adb_code]["adb_lane_count"] = info.get("adb_lane_count", 0)
+                adb_aggregated[adb_code]["created_at"] = info.get("created_at")
+                adb_aggregated[adb_code]["updated_at"] = info.get("updated_at")
+        
+        filtered_services = adb_aggregated
+                
+    except ImportError:
+        # If mapper not available, show all services
+        filtered_services = services
+    
     # Sort by event count (descending), then by name
-    return sorted(services.values(), key=lambda x: (-x["event_count"], x["name"]))
+    return sorted(filtered_services.values(), key=lambda x: (-x["event_count"], x["name"]))
 
 
 @app.route("/api/provider_lanes", methods=["GET", "POST"])
@@ -2982,23 +3045,45 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         cur = conn.cursor()
 
         # Enforce user filters for provider-specific ADB lanes.
-        # If enabled_services is set (non-empty), provider_code must be allowed.
+        # If enabled_services is set (non-empty), check if ANY logical service
+        # that maps to this ADB provider_code is enabled.
         try:
             from filter_integration import load_user_preferences
             prefs = load_user_preferences(conn)
             enabled_services = prefs.get('enabled_services') or []
-            if enabled_services and provider_code not in enabled_services:
-                # Provider filtered out -> behave like 'no event' for ADBTuner.
-                if (request.args.get("format") or "text").lower() == "text":
-                    return Response('', mimetype='text/plain')
-                return jsonify({
-                    'status': 'success',
-                    'deeplink': None,
-                    'title': None,
-                    'provider_code': provider_code,
-                    'lane_number': lane_number,
-                    'message': f'Provider {provider_code} filtered out'
-                })
+            
+            if enabled_services:
+                # Check if ANY logical service mapping to this ADB provider is enabled
+                try:
+                    from adb_provider_mapper import get_logical_services_for_adb_provider
+                    mapped_services = get_logical_services_for_adb_provider(provider_code)
+                    
+                    # Allow if ANY mapped service is enabled
+                    if not any(ls in enabled_services for ls in mapped_services):
+                        # Provider filtered out -> behave like 'no event' for ADBTuner.
+                        if (request.args.get("format") or "text").lower() == "text":
+                            return Response('', mimetype='text/plain')
+                        return jsonify({
+                            'status': 'success',
+                            'deeplink': None,
+                            'title': None,
+                            'provider_code': provider_code,
+                            'lane_number': lane_number,
+                            'message': f'Provider {provider_code} filtered out'
+                        })
+                except ImportError:
+                    # Fallback: check provider_code directly
+                    if provider_code not in enabled_services:
+                        if (request.args.get("format") or "text").lower() == "text":
+                            return Response('', mimetype='text/plain')
+                        return jsonify({
+                            'status': 'success',
+                            'deeplink': None,
+                            'title': None,
+                            'provider_code': provider_code,
+                            'lane_number': lane_number,
+                            'message': f'Provider {provider_code} filtered out'
+                        })
         except Exception as e:
             log(f"ADB provider filter check failed: {e}", 'WARNING')
         
@@ -3102,6 +3187,11 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         provider_link = get_provider_playable_link(conn, db_event_id, provider_code)
         deeplink_url = provider_link.get('deeplink')
         espn_graph_id = provider_link.get('espn_graph_id')
+        service_name = provider_link.get('service_name')  # Get service_name from the selected playable
+        
+        # Use service_name from playable as channel_name for provider lanes
+        # This shows the actual service (e.g., "ESPN", "ESPN+") instead of the original source
+        channel_name_display = service_name or event_row["channel_name"]
 
         # ESPN FIX: Use ESPN Graph ID to generate working deeplinks
         # Apple TV provides playChannel or wrong playID deeplinks
@@ -3136,7 +3226,7 @@ def api_adb_lane_deeplink(provider_code, lane_number):
                 'provider_code': provider_code,
                 'lane_number': lane_number,
                 'title': event_row['title'] if event_row else None,
-                'channel_name': event_row['channel_name'] if event_row else None,
+                'channel_name': channel_name_display,
                 'event_start_utc': start_utc,
                 'event_end_utc': stop_utc,
                 'start_utc': start_utc,
@@ -3174,7 +3264,7 @@ def api_adb_lane_deeplink(provider_code, lane_number):
                 "status": "success",
                 "deeplink": deeplink_url,
                 "title": event_row["title"],
-                "channel_name": event_row["channel_name"],
+                "channel_name": channel_name_display,
                 "provider_code": provider_code,
                 "lane_number": lane_number,
                 "channel_id": channel_id,
