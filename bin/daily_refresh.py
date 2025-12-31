@@ -268,6 +268,14 @@ def main():
         print("✅ Step 5c complete")
     except Exception as e:
         print(f"⚠️ Step 5c failed (non-fatal): {e}")
+    
+    # Step 5d: Ensure locale column exists and populate for ESPN playables
+    if not run_step("5d", total_steps, "Ensuring locale column and populating ESPN locales", [
+        "python3", "migrate_add_locale.py",
+        "--db", str(DB_PATH),
+        "--yes",
+    ]):
+        return 1
 
     # Step 6: Import Apple TV events (DB-to-DB from apple_events.db)
     # NOTE: Step 6 can be slow (GZIP + JSON parse). If --skip-scrape was used and the Apple DB
@@ -374,6 +382,14 @@ def main():
         print(f"[7c/{total_steps}] Enriching ESPN playables. SKIPPED")
         print("=" * 60)
         print(f"ESPN database not found at {espn_db}, skipping enrichment")
+    
+    # Step 7d: Fix Spanish-only ESPN playables to use externalId
+    # This fixes events where Apple TV only provides Spanish broadcasts
+    if not run_step("7d", total_steps, "Fixing Spanish-only ESPN playables", [
+        "python3", "fix_espn_spanish_only.py",
+        "--db", str(DB_PATH),
+    ]):
+        return 1
 
         # Step 8: Prefill HTTP deeplinks for any newly-imported playables
     if not run_step("8", total_steps, "Prefilling HTTP deeplinks (http_deeplink_url)", [
