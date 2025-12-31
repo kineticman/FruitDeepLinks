@@ -144,10 +144,11 @@ def get_logical_service_for_playable(
     # ESPN: differentiate linear TV channels from streaming services
     if provider == 'sportscenter':
         if service_name:
-            # Streaming services: ESPN+, ESPN Unlimited
-            if any(x in service_name for x in ['ESPN+', 'Unlimited']):
+            # Streaming services: ESPN+, ESPN Unlimited, and digital overflow content
+            # ACC Extra, SEC Plus are digital-only content requiring ESPN+ or ESPN Unlimited
+            if any(x in service_name for x in ['ESPN+', 'Unlimited', 'Extra', 'Plus V2']):
                 return 'espn_plus'
-            # Linear channels: ESPN, ESPN2, ESPN Deportes, ESPNU, ESPNews
+            # Linear channels: ESPN, ESPN2, ESPN Deportes, ESPNU, ESPNews, ACC Network, SEC Network
             else:
                 return 'espn_linear'
         # Fallback if no service_name
@@ -219,7 +220,8 @@ def get_all_logical_services_with_counts(conn: sqlite3.Connection) -> Dict[str, 
             p.deeplink_play,
             p.deeplink_open,
             p.playable_url,
-            p.event_id
+            p.event_id,
+            p.service_name
         FROM playables p
         JOIN events e ON p.event_id = e.id
         WHERE e.end_utc > datetime('now')
@@ -233,6 +235,7 @@ def get_all_logical_services_with_counts(conn: sqlite3.Connection) -> Dict[str, 
         deeplink_open = row[2]
         playable_url = row[3]
         event_id = row[4]
+        service_name = row[5]
         
         service_code = get_logical_service_for_playable(
             provider=provider,
@@ -240,7 +243,8 @@ def get_all_logical_services_with_counts(conn: sqlite3.Connection) -> Dict[str, 
             deeplink_open=deeplink_open,
             playable_url=playable_url,
             event_id=event_id,
-            conn=conn
+            conn=conn,
+            service_name=service_name
         )
         
         service_counts[service_code] = service_counts.get(service_code, 0) + 1
