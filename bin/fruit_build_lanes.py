@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # Optional filter integration (service preferences + playables)
 FILTERING_AVAILABLE = False
 try:
-    from filter_integration import load_user_preferences, get_best_playable_for_event
+    from filter_integration import load_user_preferences, get_best_playable_for_event, should_include_event
 
     FILTERING_AVAILABLE = True
 except ImportError:
@@ -93,12 +93,30 @@ def derive_times_from_attrs(
 
 
 def load_future_events(conn: sqlite3.Connection, days_ahead: int) -> List[Event]:
+    """Load future events with optional sports/league filtering."""
     now = datetime.now(timezone.utc)
     cutoff = now + timedelta(days=days_ahead)
+    
+    # Load user preferences if filtering is available
+    prefs = {}
+    disabled_sports = []
+    disabled_leagues = []
+    
+    if FILTERING_AVAILABLE:
+        try:
+            prefs = load_user_preferences(conn)
+            disabled_sports = prefs.get("disabled_sports", [])
+            disabled_leagues = prefs.get("disabled_leagues", [])
+        except Exception:
+            pass
+    
     cur = conn.cursor()
+    
+    # CRITICAL FIX: Include genres_json and classification_json for filtering
     cur.execute(
         """
-        SELECT id, pvid, slug, title, channel_name, start_utc, end_utc, raw_attributes_json 
+        SELECT id, pvid, slug, title, channel_name, start_utc, end_utc, 
+               raw_attributes_json, genres_json, classification_json
         FROM events 
         WHERE pvid IS NOT NULL 
           AND start_utc IS NOT NULL
@@ -107,10 +125,24 @@ def load_future_events(conn: sqlite3.Connection, days_ahead: int) -> List[Event]
     )
 
     events: List[Event] = []
+    filtered_count = 0
+    
     for row in cur.fetchall():
-        event_id, pvid, slug, title, channel_name, start_utc, end_utc, raw_json = row
+        (event_id, pvid, slug, title, channel_name, start_utc, end_utc, 
+         raw_json, genres_json, classification_json) = row
+        
         if channel_name in FAKE_CHANNELS:
             continue
+
+        # Apply sports/league filtering if available
+        if FILTERING_AVAILABLE and (disabled_sports or disabled_leagues):
+            event_dict = {
+                "genres_json": genres_json,
+                "classification_json": classification_json
+            }
+            if not should_include_event(event_dict, prefs):
+                filtered_count += 1
+                continue
 
         # Use the database columns directly (works for both Peacock and Apple TV)
         try:
@@ -154,6 +186,10 @@ def load_future_events(conn: sqlite3.Connection, days_ahead: int) -> List[Event]
         )
 
     events.sort(key=lambda e: e.start)
+    
+    if filtered_count > 0:
+        print(f"Sports/League filters: removed {filtered_count} events")
+    
     return events
 
 
@@ -196,7 +232,7 @@ def create_lanes(conn: sqlite3.Connection, lane_count: int):
         logical_number = LANE_START_CH_DEFAULT + (lane_id - 1)
         cur.execute(
             "INSERT INTO lanes VALUES (?, ?, ?)",
-            (lane_id, f"Fruit Lane {lane_id}", logical_number),  # Renamed from "Multi-Source Sports"
+            (lane_id, f"Fruit Lane {lane_id}", logical_number),
         )
     conn.commit()
 
@@ -417,7 +453,7 @@ def main():
     create_lanes(conn, args.lanes)
 
     events = load_future_events(conn, args.days_ahead)
-    print(f"Loaded {len(events)} future events")
+    print(f"Loaded {len(events)} future events (after sports/league filtering)")
     build_lanes_with_placeholders(conn, events, args.lanes)
 
     conn.close()
@@ -427,4 +463,3 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
