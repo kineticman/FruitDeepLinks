@@ -339,6 +339,7 @@ def get_filtered_playables(
                     playable_url=playable["playable_url"],
                     event_id=event_id,
                     conn=conn,
+                    service_name=playable.get("service_name")  # Pass service_name for ESPN differentiation
                 )
                 playable["logical_service"] = logical_service
             else:
