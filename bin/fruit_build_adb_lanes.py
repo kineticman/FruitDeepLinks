@@ -24,7 +24,17 @@ import json
 import logging
 import os
 import sqlite3
+import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+# Import ADB provider mapping helper
+try:
+    from adb_provider_mapper import get_logical_services_for_adb_provider
+    ADB_MAPPING_AVAILABLE = True
+except ImportError:
+    ADB_MAPPING_AVAILABLE = False
+    def get_logical_services_for_adb_provider(provider: str) -> List[str]:
+        return [provider]
 
 
 UTC = dt.timezone.utc
@@ -218,10 +228,37 @@ def clear_adb_lanes(conn: sqlite3.Connection, provider_code: str, log: logging.L
     log.info("Cleared adb_lanes for provider %s", provider_code)
 
 
-def load_events_for_provider(conn: sqlite3.Connection, provider_code: str) -> List[Dict[str, Any]]:
+def load_events_for_provider(
+    conn: sqlite3.Connection, 
+    provider_code: str,
+    enabled_services: List[str]
+) -> List[Dict[str, Any]]:
+    """
+    Load events for an ADB provider code.
+    
+    Note: provider_code may map to multiple logical_service values.
+    For example, 'sportscenter' maps to both 'espn_linear' and 'espn_plus'.
+    Only events with playables from ENABLED logical services are included.
+    """
     cur = conn.cursor()
-    cur.execute(
-        """
+    
+    # Get all logical services that map to this ADB provider
+    all_logical_services = get_logical_services_for_adb_provider(provider_code)
+    
+    # Filter to only include enabled services
+    # If enabled_services is empty, include all (legacy behavior)
+    if enabled_services:
+        logical_services = [ls for ls in all_logical_services if ls in enabled_services]
+    else:
+        logical_services = all_logical_services
+    
+    if not logical_services:
+        # No enabled services for this provider
+        return []
+    
+    # Build query with IN clause for multiple services
+    placeholders = ','.join('?' * len(logical_services))
+    query = f"""
         SELECT
             e.id,
             e.title,
@@ -232,11 +269,12 @@ def load_events_for_provider(conn: sqlite3.Connection, provider_code: str) -> Li
             e.classification_json
         FROM events e
         JOIN playables p ON p.event_id = e.id
-        WHERE p.logical_service = ?
+        WHERE p.logical_service IN ({placeholders})
         GROUP BY e.id
-        """,
-        (provider_code,),
-    )
+    """
+    
+    cur.execute(query, logical_services)
+    
     out: List[Dict[str, Any]] = []
     for (eid, title, start_utc, end_utc, start_ms, end_ms, classification_json) in cur.fetchall():
         out.append(
@@ -345,11 +383,15 @@ def build_adb_lanes(db_path: str, provider_filter: Optional[str] = None) -> None
         clear_adb_lanes(conn, provider_code, log)
 
         # Only enforce enabled_services when the user explicitly set a non-empty allowlist.
-        if enabled_services and provider_code not in enabled_services:
-            log.info("Skipping provider %s because it is not in enabled_services", provider_code)
-            continue
+        # Check if ANY of the logical services mapped to this ADB provider are enabled
+        if enabled_services:
+            logical_services = get_logical_services_for_adb_provider(provider_code)
+            if not any(ls in enabled_services for ls in logical_services):
+                log.info("Skipping provider %s because none of its logical services %s are in enabled_services", 
+                        provider_code, logical_services)
+                continue
 
-        evs = load_events_for_provider(conn, provider_code)
+        evs = load_events_for_provider(conn, provider_code, enabled_services)
 
         filtered: List[Dict[str, Any]] = []
         null_ts = 0

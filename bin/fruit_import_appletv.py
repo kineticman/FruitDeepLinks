@@ -658,7 +658,8 @@ def extract_playables(
                     deeplink_open=deeplink_open,
                     playable_url=playable_url,
                     event_id=event_id,
-                    conn=conn
+                    conn=conn,
+                    service_name=service_name  # Pass service_name for ESPN differentiation
                 )
                 priority = int(get_logical_service_priority(logical_service))
             except Exception:
