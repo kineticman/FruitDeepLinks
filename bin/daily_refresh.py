@@ -216,26 +216,21 @@ def main():
     # Step 4: Ensure database schema (provider_lanes table)
     if not run_step(4, total_steps, "Ensuring database schema (provider_lanes table)", [
         "python3", "migrate_add_provider_lanes.py",
+        "--db", str(DB_PATH),
     ]):
         return 1
-
-    # Step 5: Ensure database schema (adb_lanes table)
-    if not run_step(5, total_steps, "Ensuring database schema (adb_lanes table)", [
-        "python3", "migrate_add_adb_lanes.py",
-    ]):
-        return 1
-
-    # Step 5b: Ensure espn_graph_id column exists in playables (defensive for ESPN enrichment)
+    
+    # Step 5b: Ensure espn_graph_id column exists in playables table
+    # (Non-fatal migration that enables ESPN enrichment to store FireTV deeplinks)
     print("\n" + "=" * 60)
-    print(f"[5b/{total_steps}] Ensuring espn_graph_id column in playables table")
+    print(f"[5b/{total_steps}] Ensuring database schema (espn_graph_id column)")
     print("=" * 60)
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
-        # Check if column exists
         cur.execute("PRAGMA table_info(playables)")
-        cols = {row[1] for row in cur.fetchall()}
-        if "espn_graph_id" not in cols:
+        columns = [row[1] for row in cur.fetchall()]
+        if "espn_graph_id" not in columns:
             cur.execute("ALTER TABLE playables ADD COLUMN espn_graph_id TEXT")
             conn.commit()
             print("✅ Added espn_graph_id column to playables")
@@ -325,6 +320,34 @@ def main():
             "--db", str(espn_db),
             "--days", espn_days,
         ], allow_fail=True)
+
+    # Step 7b-cleanup: Clean up old ESPN Graph events (after scraping, before enrichment)
+    if espn_db.exists():
+        print("\n" + "=" * 60)
+        print(f"[7b-cleanup/{total_steps}] Cleaning up old ESPN Graph events")
+        print("=" * 60)
+        try:
+            conn = sqlite3.connect(espn_db)
+            cur = conn.cursor()
+            
+            # Count events before cleanup (using stop_utc for ESPN Graph)
+            cur.execute("SELECT COUNT(*) FROM events WHERE stop_utc < datetime('now', '-2 days')")
+            old_count = cur.fetchone()[0]
+            
+            if old_count > 0:
+                # Delete events that ended before 2 days ago
+                # CASCADE automatically removes associated feeds
+                cur.execute("DELETE FROM events WHERE stop_utc < datetime('now', '-2 days')")
+                deleted = cur.rowcount
+                conn.commit()
+                print(f"✅ Deleted {deleted} old ESPN Graph events (and their feeds)")
+            else:
+                print("✅ No old ESPN Graph events to clean up")
+            
+            conn.close()
+            print("✅ Step 7b-cleanup complete")
+        except Exception as e:
+            print(f"⚠️ Step 7b-cleanup failed (non-fatal): {e}")
 
     # Step 7c: Enrich ESPN playables with Watch Graph IDs (conditional based on scraping)
     if espn_db.exists():
@@ -453,4 +476,3 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
