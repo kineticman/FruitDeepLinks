@@ -329,6 +329,21 @@ def convert_peacock(punchout_url: str) -> Optional[str]:
     return None
 
 
+def convert_marquee(punchout_url: str) -> Optional[str]:
+    """
+    marquee://video/u3hy8u20251231ev27?type=LIVE
+      -> https://www.marqueesportsnetwork.com/watch (no direct deeplink available)
+    
+    Marquee Sports Network doesn't have public deeplink documentation.
+    Return landing page for now.
+    """
+    if not punchout_url or not punchout_url.lower().startswith("marquee://"):
+        return None
+    # No known HTTP equivalent for Marquee deeplinks
+    # Return their main watch page as a fallback
+    return "https://www.marqueesportsnetwork.com/watch"
+
+
 # ----------------------------
 # Public API
 # ----------------------------
@@ -403,6 +418,9 @@ def generate_http_deeplink(
 
     if prov in ("nflctv", "nfl"):
         return convert_nfl_ctv(punchout_url)
+
+    if prov in ("marquee", "marquee sports network"):
+        return convert_marquee(punchout_url)
 
     # Last resort: scheme://www.domain/... -> https://www.domain/...
     m = re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://(www\.[^/]+/.+)$", punchout_url)

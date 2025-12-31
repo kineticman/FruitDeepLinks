@@ -33,6 +33,9 @@ PROVIDER_MAP = {
     'watchtru': 'truTV',
     'watchtnt': 'TNT',
     
+    # Regional Sports Networks
+    'marquee': 'Marquee Sports Network',
+    
     # Other
     'dazn': 'DAZN',
     'open.dazn.com': 'DAZN',
@@ -62,6 +65,7 @@ DEFAULT_PROVIDER_PRIORITY = [
     'dazn',             # DAZN
     'vixapp',           # ViX
     'f1tv',             # F1 TV
+    'marquee',          # Marquee Sports Network
     'nflctv',           # NFL+
     'videos',           # Apple TV+
     'cbstve',           # CBS
