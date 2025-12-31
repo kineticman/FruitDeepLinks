@@ -7,6 +7,7 @@ Updates:
 - Stable XML <channel id> == M3U tvg-id via fdl.<event_id|pvid>
 - Deterministic SQL ordering
 - 24h default window, placeholders, provider categories, image extraction, deeplinks
+- FRUIT_DIRECT_START_CH environment variable for custom M3U channel numbering (default 5000)
 """
 
 from __future__ import annotations
@@ -576,7 +577,9 @@ def build_direct_m3u(
 
     with open(m3u_path, "w", encoding="utf-8") as f:
         f.write("#EXTM3U\n\n")
-        for idx, event in enumerate(events, start=1):
+        # Get starting channel number from environment (default 5000)
+        direct_start_ch = int(os.getenv("FRUIT_DIRECT_START_CH", "5000"))
+        for idx, event in enumerate(events, start=direct_start_ch):
             pvid = event.get("pvid")
             if not pvid:
                 continue
@@ -763,9 +766,10 @@ def build_direct_m3u(
             logo_part = f'tvg-logo="{img_url}" ' if img_url else ""
             group_title = actual_provider or provider or "Sports"
             f.write(
-                '#EXTINF:-1 tvg-id="{id}" tvg-name="{name}" {logo}group-title="{group}",{name}\n'.format(
+                '#EXTINF:-1 tvg-id="{id}" tvg-name="{name}" tvg-chno="{chno}" {logo}group-title="{group}",{name}\n'.format(
                     id=chan_id,
                     name=title.replace(",", " "),
+                    chno=idx,
                     logo=logo_part,
                     group=group_title.replace('"', "'"),
                 )

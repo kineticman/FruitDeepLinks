@@ -114,6 +114,9 @@ CC_PORT=8020  # example: set to your Chrome Capture port
 # Lanes (BETA) – only needed if you experiment with lane channels
 FRUIT_LANES=50
 FRUIT_LANE_START_CH=9000
+
+# Direct lanes channel numbering – separates direct lanes from virtual lanes in your guide
+FRUIT_DIRECT_START_CH=5000
 ```
 
 Notes:
@@ -127,6 +130,7 @@ Notes:
 - `FRUIT_HOST_PORT` is the host port Docker exposes; it should match the port in `SERVER_URL`.
 - Scheduling/refresh runs via **APScheduler** inside the container (no cron).
 - Lanes (`FRUIT_LANES`, `FRUIT_LANE_START_CH`, etc.) are only used if you experiment with the **BETA** lane features.
+- `FRUIT_DIRECT_START_CH` controls the starting channel number for direct lanes (default: 5000), keeping them separate from virtual lanes in your channel guide.
 
 ### 3. Deploy the stack
 
