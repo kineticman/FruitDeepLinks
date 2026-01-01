@@ -48,29 +48,63 @@ def populate_locale_for_espn(conn: sqlite3.Connection) -> int:
     
     # Check if locale column exists
     cur.execute("PRAGMA table_info(playables)")
-    columns = [row[1] for row in cur.fetchall()]
+    columns = {row[1] for row in cur.fetchall()}
     
     if 'locale' not in columns:
         print("⚠️  locale column doesn't exist, skipping population")
         return 0
     
-    # Find ESPN playables missing locale
-    cur.execute("""
-        SELECT event_id, playable_id, service_name, title
-        FROM playables
-        WHERE logical_service IN ('espn_plus', 'espn_linear')
-          AND (locale IS NULL OR locale = '')
-    """)
+    # Check for required columns (may not exist on fresh installs)
+    if 'logical_service' not in columns:
+        print("⚠️  logical_service column doesn't exist yet (fresh install?), skipping population")
+        return 0
     
-    rows = cur.fetchall()
+    # Check if service_name column exists (added in recent migration)
+    has_service_name = 'service_name' in columns
+    
+    # Build query based on available columns
+    if has_service_name:
+        query = """
+            SELECT event_id, playable_id, service_name, title
+            FROM playables
+            WHERE logical_service IN ('espn_plus', 'espn_linear')
+              AND (locale IS NULL OR locale = '')
+        """
+    else:
+        # Fallback: use title only
+        query = """
+            SELECT event_id, playable_id, title
+            FROM playables
+            WHERE logical_service IN ('espn_plus', 'espn_linear')
+              AND (locale IS NULL OR locale = '')
+        """
+    
+    try:
+        cur.execute(query)
+        rows = cur.fetchall()
+    except sqlite3.OperationalError as e:
+        # Handle case where table exists but is empty or missing columns
+        print(f"⚠️  Could not query playables: {e}")
+        return 0
+    
     if not rows:
-        print("✅ All ESPN playables have locale populated")
+        print("✅ All ESPN playables have locale populated (or no ESPN playables yet)")
         return 0
     
     print(f"Found {len(rows)} ESPN playables missing locale")
     
     updates = []
-    for event_id, playable_id, service_name, title in rows:
+    for row in rows:
+        event_id = row[0]
+        playable_id = row[1]
+        
+        if has_service_name:
+            service_name = row[2]
+            title = row[3]
+        else:
+            service_name = None
+            title = row[2]
+        
         # Determine locale
         service_lower = (service_name or "").lower()
         title_lower = (title or "").lower()
