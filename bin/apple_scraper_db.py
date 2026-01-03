@@ -318,17 +318,30 @@ def print_stats(conn: sqlite3.Connection):
 
 # ------------------------------ Chrome Driver ------------------------------
 def make_driver(headless: bool = False) -> webdriver.Chrome:
-    """Create Chrome WebDriver"""
+    """Create Chrome/Chromium WebDriver with cross-platform support
+    
+    Attempts multiple strategies:
+    1. webdriver-manager (development environments)
+    2. System chromedriver (Docker with Chromium)
+    3. Fallback paths
+    
+    Supports both Google Chrome and Debian Chromium.
+    """
     import logging
     import os
+    import subprocess
     
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger(__name__)
     
+    logger.info("=== Starting Chrome/Chromium Driver Initialization ===")
+    
     opts = Options()
     if headless:
         opts.add_argument("--headless=new")
+        logger.info("Headless mode enabled")
     
+    # Core Chrome/Chromium options
     opts.add_argument("--disable-gpu")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
@@ -337,27 +350,91 @@ def make_driver(headless: bool = False) -> webdriver.Chrome:
     opts.add_argument("--disable-software-rasterizer")
     opts.add_argument("--disable-extensions")
     
+    # Detect system Chromium (Docker/Linux environments)
+    if os.path.exists('/usr/bin/chromium'):
+        opts.binary_location = '/usr/bin/chromium'
+        logger.info("Using system Chromium binary at /usr/bin/chromium")
+    
+    def _try_start_driver(driver_path: str):
+        """Helper to attempt driver initialization"""
+        try:
+            logger.info(f"Attempting to start driver at: {driver_path}")
+            service = Service(driver_path)
+            driver = webdriver.Chrome(service=service, options=opts)
+            logger.info("Browser launched successfully!")
+            return driver
+        except Exception as e:
+            logger.error(f"Failed to start with {driver_path}: {e}")
+            return None
+    
+    # Strategy 1: Try webdriver-manager first (development environments)
     try:
+        logger.info("Attempting webdriver-manager installation...")
         wm_path = Path(ChromeDriverManager().install())
         if wm_path.name != "chromedriver":
             driver_path = wm_path.with_name("chromedriver")
         else:
             driver_path = wm_path
         
-        if not driver_path.exists():
-            raise FileNotFoundError(f"chromedriver not found at {driver_path}")
-        
-        if not os.access(driver_path, os.X_OK):
-            mode = driver_path.stat().st_mode
-            driver_path.chmod(mode | 0o111)
-        
-        service = Service(str(driver_path))
-        driver = webdriver.Chrome(service=service, options=opts)
-        return driver
-        
+        if driver_path.exists():
+            # Ensure executable permissions
+            if not os.access(driver_path, os.X_OK):
+                logger.info(f"Setting executable permissions on {driver_path}")
+                driver_path.chmod(driver_path.stat().st_mode | 0o111)
+            
+            driver = _try_start_driver(str(driver_path))
+            if driver:
+                logger.info("=== Driver Initialization Complete (webdriver-manager) ===")
+                return driver
     except Exception as e:
-        logger.error(f"Failed to initialize Chrome: {e}")
-        raise
+        logger.warning(f"webdriver-manager approach failed: {e}")
+    
+    # Strategy 2: Try system chromedriver paths (Docker environments)
+    fallback_paths = [
+        "/usr/bin/chromedriver",              # Debian/Ubuntu chromium-driver package
+        "/usr/local/bin/chromedriver",        # Custom installations
+        "/usr/lib/chromium-browser/chromedriver",  # Alternative location
+    ]
+    
+    logger.info("Trying system chromedriver paths...")
+    for sys_path in fallback_paths:
+        if os.path.exists(sys_path):
+            driver = _try_start_driver(sys_path)
+            if driver:
+                logger.info(f"=== Driver Initialization Complete (system: {sys_path}) ===")
+                return driver
+        else:
+            logger.debug(f"System chromedriver not found at: {sys_path}")
+    
+    # All strategies failed - provide diagnostic information
+    logger.error("=== CHROME/CHROMIUM DRIVER INITIALIZATION FAILED ===")
+    
+    # Check for installed browsers
+    logger.info("Checking for installed browsers...")
+    for browser_cmd in ['google-chrome', 'chromium', 'chromium-browser']:
+        try:
+            result = subprocess.run(
+                [browser_cmd, '--version'],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            logger.info(f"Found {browser_cmd}: {result.stdout.strip()}")
+        except Exception:
+            logger.debug(f"{browser_cmd} not found in PATH")
+    
+    # Check for chromedriver binaries
+    logger.info("Checking for chromedriver binaries...")
+    for path in fallback_paths:
+        if os.path.exists(path):
+            logger.info(f"Found chromedriver at: {path}")
+        else:
+            logger.debug(f"No chromedriver at: {path}")
+    
+    raise RuntimeError(
+        "Unable to initialize Chrome/Chromium WebDriver. "
+        "Ensure either Google Chrome or Chromium is installed with matching chromedriver."
+    )
 
 # ------------------------------ Auth ------------------------------
 def load_cached_auth() -> Tuple[Optional[str], Optional[str]]:
