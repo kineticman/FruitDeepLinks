@@ -61,7 +61,7 @@ RUN printf '%s\n' \
   && chmod +x /app/start.sh
 
 # Health check - verify web server is responding
-HEALTHCHECK --interval=1h --timeout=10s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -fsS http://localhost:6655/health || exit 1
 
 # Persistent volumes
