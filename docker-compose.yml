@@ -16,6 +16,11 @@ services:
       # CC_PORT   = port Chrome Capture listens on (often 8080)
       - CC_SERVER=${CC_SERVER:-localhost}
       - CC_PORT=${CC_PORT:-8080}
+      # Channels4Chrome (BETA)
+      # CH4C_SERVER = host/IP where Channels4Chrome is running
+      # CH4C_PORT   = port Channels4Chrome listens on (often 8080)
+      - CH4C_SERVER=${CH4C_SERVER:-localhost}
+      - CH4C_PORT=${CH4C_PORT:-8080}
       # Channels DVR integration (optional)
       - CHANNELS_DVR_IP=${CHANNELS_DVR_IP:-}
       - CHANNELS_SOURCE_NAME=${CHANNELS_SOURCE_NAME:-fruitdeeplinks}
