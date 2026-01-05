@@ -107,13 +107,11 @@ If you want extra automation / features, you can add these as well:
 # Auto Channels DVR guide refresh
 CHANNELS_SOURCE_NAME=fruitdeeplinks-direct  # must match your Channels "Custom Channels" source name
 
-# Chrome Capture (BETA) – only if you use CC4C/AH4C
+# Chrome Capture / Channels4Chrome (BETA) – only if you use CC4C/AH4C or CH4C
 CC_SERVER=192.168.86.80
-CC_PORT=8020  # example: set to your Chrome Capture port
-
-# Channels4Chrome (BETA) – only if you use CH4C
+CC_PORT=8020  # Chrome Capture port
 CH4C_SERVER=192.168.86.80
-CH4C_PORT=8020  # example: set to your Channels4Chrome port
+CH4C_PORT=8020  # Channels4Chrome port (can be same or different)
 
 # Lanes (BETA) – only needed if you experiment with lane channels
 FRUIT_LANES=50
@@ -129,8 +127,7 @@ Notes:
 - Most users only need to set the four **REQUIRED** values.
 - `CHANNELS_DVR_IP` should be the IP/hostname of your Channels DVR server.
 - `CHANNELS_SOURCE_NAME` is only needed if you want FruitDeepLinks to auto-refresh a specific Channels “Custom Channels” source.
-- `CC_SERVER` / `CC_PORT` are only needed if you’re using **Chrome Capture (BETA)**.
-- `CH4C_SERVER` / `CH4C_PORT` are only needed if you're using **Channels4Chrome (BETA)**.
+- `CC_SERVER` / `CC_PORT` and `CH4C_SERVER` / `CH4C_PORT` are only needed if you're using **Chrome Capture (CC4C/AH4C)** or **Channels4Chrome (CH4C)**. Both can share the same host/port if desired.
 - `SERVER_URL` is the base URL embedded in generated links (it should be reachable by your playback devices).
 - `FRUIT_HOST_PORT` is the host port Docker exposes; it should match the port in `SERVER_URL`.
 - Scheduling/refresh runs via **APScheduler** inside the container (no cron).
@@ -298,19 +295,28 @@ When you tune to a Fruit Lane channel in Channels DVR, FruitDeepLinks automatica
 - Uses `adb_lanes` and `provider_lanes` tables under the hood.
 - Consider this experimental for now.
 
-**4. Chrome Capture Lanes (BETA)** (`multisource_lanes_chrome.m3u`)
+**4. Chrome Capture & Channels4Chrome Lanes (BETA)**
 
-**5. Channels4Chrome Lanes (BETA)** (`multisource_lanes_ch4c.m3u`)
+Two output formats for external launcher/capture workflows:
+- **Chrome Capture** (`multisource_lanes_chrome.m3u`) - Uses `chrome://` schema for CC4C/AH4C
+- **Channels4Chrome** (`multisource_lanes_ch4c.m3u`) - Uses `http://` schema for CH4C
 
-- For users running **Channels4Chrome (CH4C)** as an external launcher/capture layer.
-- Similar to Chrome Capture but uses `http://` schema instead of `chrome://`.
-- The playlist points Channels4Chrome at FruitDeepLinks' lane "launch" endpoint (`/api/lane/<n>/launch`), which responds with a **302 redirect** to the best HTTP deeplink FruitDeepLinks can derive for the event.
-- Shares the same XMLTV guide as Chrome Capture (`multisource_lanes.xml`).
-- **Important (beta):** this is **only as good as the HTTP fallback mapping**. Some providers are scheme-only, geo/entitlement gated, or change web URLs frequently — expect occasional broken launches until mappings are refined.
+Both playlists:
+- Point to FruitDeepLinks' lane "launch" endpoint (`/api/lane/<n>/launch`)
+- Receive a **302 redirect** to the best HTTP deeplink for the current event
+- Share the same XMLTV guide (`multisource_lanes.xml`)
+- **Beta warning:** Only as reliable as the HTTP fallback mapping. Some providers are scheme-only, geo/entitlement gated, or change web URLs frequently—expect occasional broken launches until mappings are refined.
 
-- For users running **Chrome Capture (CC4C/AH4C)** as an external launcher/capture layer.
-- The playlist points Chrome Capture at FruitDeepLinks’ lane “launch” endpoint (`/api/lane/<n>/launch`), which responds with a **302 redirect** to the best HTTP deeplink FruitDeepLinks can derive for the event.
-- **Important (beta):** this is **only as good as the HTTP fallback mapping**. Some providers are scheme‑only, geo/entitlement gated, or change web URLs frequently — expect occasional broken launches until mappings are refined.
+Configuration:
+```bash
+# Chrome Capture
+CC_SERVER=192.168.86.80
+CC_PORT=8020
+
+# Channels4Chrome  
+CH4C_SERVER=192.168.86.80
+CH4C_PORT=8020
+```
 
 ### Web Dashboard
 
