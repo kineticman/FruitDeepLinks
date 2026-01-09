@@ -869,11 +869,22 @@ def get_provider_playable_link(conn, event_id: str, provider_code: str) -> dict:
             params.append(provider_code)
 
         # For ESPN: prioritize playables WITH espn_graph_id (they have working deeplinks)
+        # AND prefer main ESPN channel over alternates (ESPN2, ESPNU, ESPNews)
         # For other providers: use standard priority ordering
         is_espn = provider_code.lower() in ('sportscenter', 'espn', 'espn+')
         if is_espn and espn_graph_id_col:
-            # ESPN: prefer playables with espn_graph_id, then sort by priority
+            # ESPN: prefer playables with espn_graph_id, then prioritize by channel (ESPN > ESPN Deportes > ESPN2/ESPNU/ESPNews)
             order = f"ORDER BY CASE WHEN {espn_graph_id_col} IS NOT NULL AND {espn_graph_id_col} != '' THEN 0 ELSE 1 END, "
+            # Add ESPN channel prioritization
+            if service_name_col:
+                order += f"CASE LOWER({service_name_col}) "
+                order += "WHEN 'espn' THEN 0 "
+                order += "WHEN 'espn deportes' THEN 1 "
+                order += "WHEN 'espn2' THEN 2 "
+                order += "WHEN 'espnu' THEN 2 "
+                order += "WHEN 'espnews' THEN 2 "
+                order += "WHEN 'sec network' THEN 2 "
+                order += "ELSE 3 END, "
             if priority_col:
                 order += f"{priority_col} ASC"
             else:
@@ -896,6 +907,21 @@ def get_provider_playable_link(conn, event_id: str, provider_code: str) -> dict:
                 if r.get(c):
                     deeplink = r.get(c)
                     break
+            
+            # For ESPN: if espn_graph_id exists, use it instead of Apple's deeplink
+            espn_graph_id = r.get(espn_graph_id_col) if espn_graph_id_col else None
+            if is_espn and espn_graph_id and deeplink:
+                # Extract playback ID from espn-watch:PLAYBACK_ID format
+                try:
+                    playback_id = espn_graph_id.replace("espn-watch:", "", 1)
+                    # Build correct deeplink with ESPN Watch Graph playback ID
+                    if deeplink.startswith('sportscenter://'):
+                        deeplink = f"sportscenter://x-callback-url/showWatchStream?playID={playback_id}"
+                    elif deeplink.startswith('http'):
+                        deeplink = f"https://www.espn.com/watch/player/_/id/{playback_id}"
+                except Exception:
+                    pass  # Fall back to original deeplink if conversion fails
+            
             return {
                 "deeplink": deeplink,
                 "http_deeplink_url": r.get(http_col) if http_col else None,
