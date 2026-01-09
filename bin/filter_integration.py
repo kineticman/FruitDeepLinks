@@ -357,18 +357,42 @@ def get_filtered_playables(
         # Apply Amazon penalty if enabled
         playables = apply_amazon_penalty(playables, amazon_penalty)
 
+        # ESPN channel prioritization: Prefer main "ESPN" feed over alternates
+        # ESPN provides multiple feeds: ESPN (main), ESPN2 (alt commentary), ESPNU, ESPNews, etc.
+        # We want to prioritize the main broadcast
+        def espn_channel_priority(playable):
+            """Return priority score for ESPN channels (lower = better)"""
+            service_name = (playable.get("service_name") or "").lower()
+            
+            # Main ESPN channel gets highest priority
+            if service_name == "espn":
+                return 0
+            # ESPN Deportes (Spanish) - second priority for Spanish speakers
+            elif "deportes" in service_name or "español" in service_name:
+                return 1
+            # Alternate English feeds
+            elif service_name in ("espn2", "espnu", "espnews", "sec network"):
+                return 2
+            # Unknown/other
+            else:
+                return 3
+
         # Sort by user priorities (if provided) or fallback to system priorities
         if priority_map:
             playables.sort(
                 key=lambda p: (
                     -priority_map.get(p["logical_service"], 50),  # User priority (negative for descending)
+                    espn_channel_priority(p),  # ESPN channel priority (main > alt)
                     get_logical_service_priority(p["logical_service"])  # System fallback
                 )
             )
         elif LOGICAL_SERVICES_AVAILABLE:
-            # Fallback to system priorities only
+            # Fallback to system priorities only + ESPN channel priority
             playables.sort(
-                key=lambda p: get_logical_service_priority(p["logical_service"])
+                key=lambda p: (
+                    espn_channel_priority(p),  # ESPN channel priority (main > alt)
+                    get_logical_service_priority(p["logical_service"])
+                )
             )
 
         return playables
