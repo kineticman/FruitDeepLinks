@@ -345,6 +345,41 @@ def convert_marquee(punchout_url: str) -> Optional[str]:
     return "https://www.marqueesportsnetwork.com/watch"
 
 
+def convert_max(punchout_url: str) -> Optional[str]:
+    """
+    Max (HBO Max) - Convert sport landing page to direct video player
+    
+    Input:  https://play.hbomax.com/sport/{event-id}?utm_source=...
+    Output: https://play.hbomax.com/video/watch-sport/{event-id}
+    
+    The /sport/ URL shows a landing page with 'Watch Live' and 'Watch from Start' buttons.
+    The /video/watch-sport/ URL goes directly to the video player (still requires click to unpause).
+    
+    User can configure Chrome Capture for Channels to auto-play.
+    """
+    if not punchout_url:
+        return None
+    
+    # Already HTTPS, just need to transform the path
+    if not punchout_url.startswith('https://play.hbomax.com/sport/'):
+        # If it's already the watch-sport format, keep it
+        if 'watch-sport' in punchout_url:
+            return punchout_url
+        return None
+    
+    # Extract event ID from /sport/{event-id}
+    # Pattern: https://play.hbomax.com/sport/UUID?params
+    match = re.search(r'play\.hbomax\.com/sport/([0-9a-f\-]{36})', punchout_url, re.I)
+    if not match:
+        return None
+    
+    event_id = match.group(1)
+    
+    # Convert to direct video player URL
+    # Note: Can optionally include /playback-id at the end, but not required
+    return f'https://play.hbomax.com/video/watch-sport/{event_id}'
+
+
 # ----------------------------
 # Public API
 # ----------------------------
@@ -374,6 +409,10 @@ def generate_http_deeplink(
     """
     if not punchout_url:
         return None
+
+    # Special case: Max URLs need transformation even though they're already HTTPS
+    if "play.hbomax.com/sport/" in punchout_url:
+        return convert_max(punchout_url)
 
     # Already HTTPS? keep it.
     if re.match(r"^https?://", punchout_url, re.I):
@@ -422,6 +461,11 @@ def generate_http_deeplink(
 
     if prov in ("marquee", "marquee sports network"):
         return convert_marquee(punchout_url)
+    
+    if prov in ("max", "hbo max", "hbomax", "https"):
+        # Try Max converter for play.hbomax.com URLs
+        if "play.hbomax.com" in punchout_url:
+            return convert_max(punchout_url)
 
     # Last resort: scheme://www.domain/... -> https://www.domain/...
     m = re.match(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://(www\.[^/]+/.+)$", punchout_url)
@@ -519,6 +563,11 @@ if __name__ == "__main__":
         ("nflctv://livestream/f8d8eae6-311e-11f0-b670-ae1250fadad1",
          dict(provider="nflctv"),
          "https://www.nfl.com/plus/"),
+        
+        # Max - Convert landing page to direct video player
+        ("https://play.hbomax.com/sport/10440061-0516-538b-a098-9f71e1edfc33?utm_source=generic_apple",
+         dict(provider="max"),
+         "https://play.hbomax.com/video/watch-sport/10440061-0516-538b-a098-9f71e1edfc33"),
         
         # ESPN with Graph ID (new enrichment feature)
         ("sportscenter://x-callback-url/showWatchStream?playChannel=espn1&x-source=AppleUMC",
