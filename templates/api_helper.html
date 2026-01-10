@@ -271,8 +271,11 @@ Use <code>deeplink_format=http</code> to get HTTP deeplinks instead of app schem
 <li><code>aiv://...</code> → <code>https://app.primevideo.com/...</code></li>
 <li><code>sportscenter://...</code> → <code>https://www.espn.com/watch/player/...</code></li>
 <li><code>peacock://...</code> → <code>https://www.peacocktv.com/watch/playback/...</code></li>
+<li><code>cbssportsapp://home/watch/LET-XXX</code> → <code>https://www.cbssports.com/watch/college-basketball/LET-XXX</code> (league-aware)</li>
 </ul>
 Scheme format (default) works for Apple TV. HTTP format required for Android/Fire TV devices.
+<br><br>
+<strong>CBS Sports League Support:</strong> CBS Sports HTTP deeplinks automatically include the correct league path segment (e.g., <code>college-basketball</code>, <code>serie-a</code>, <code>uefa-conference-league</code>) extracted from event metadata to ensure valid URLs.
 </div>
 <div class="note">
 <div class="note-title">📺 ADBTuner Integration</div>

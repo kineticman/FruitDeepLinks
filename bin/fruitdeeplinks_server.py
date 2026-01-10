@@ -1979,7 +1979,51 @@ def api_event_detail(event_id):
         order_sql = " ORDER BY " + ", ".join(order_bits)
 
         cur.execute(f"SELECT * FROM playables WHERE event_id = ? {order_sql}", (event_id,))
-        playables = [_row_to_dict(r) for r in cur.fetchall()]
+        playables_raw = [_row_to_dict(r) for r in cur.fetchall()]
+        
+        # Compute HTTP deeplinks on-the-fly for each playable
+        # This ensures CBS Sports and other providers get correct league-aware URLs
+        playables = []
+        for p in playables_raw:
+            # Get the scheme deeplink
+            scheme_deeplink = p.get("deeplink_play") or p.get("deeplink_open") or p.get("playable_url")
+            
+            # Compute HTTP version if we have a scheme deeplink
+            if scheme_deeplink:
+                try:
+                    from deeplink_converter import generate_http_deeplink
+                    
+                    # Extract league from event classification for CBS Sports
+                    league_hint = None
+                    if event.get("classification_json"):
+                        try:
+                            import json
+                            classifications = json.loads(event["classification_json"])
+                            for item in classifications:
+                                if isinstance(item, dict) and item.get('type') == 'league':
+                                    league_hint = item.get('value')
+                                    break
+                        except:
+                            pass
+                    
+                    # Generate HTTP deeplink with league awareness
+                    http_url = generate_http_deeplink(
+                        scheme_deeplink,
+                        provider=p.get("provider"),
+                        playable_id=p.get("playable_id"),
+                        espn_graph_id=p.get("espn_graph_id"),
+                        league=league_hint,
+                    )
+                    
+                    # Override the database value with the computed one
+                    if http_url:
+                        p["http_deeplink_url"] = http_url
+                
+                except Exception:
+                    # If conversion fails, keep the database value
+                    pass
+            
+            playables.append(p)
 
         # providers list
         providers = []
@@ -3178,7 +3222,8 @@ def api_adb_lane_deeplink(provider_code, lane_number):
                 channel_name,
                 synopsis,
                 start_utc,
-                end_utc
+                end_utc,
+                classification_json
             FROM events
             WHERE {uid_col} = ?
             LIMIT 1
@@ -3268,12 +3313,27 @@ def api_adb_lane_deeplink(provider_code, lane_number):
             try:
                 from deeplink_converter import generate_http_deeplink
                 playable_uuid = (provider_link.get("playable_id") if isinstance(provider_link, dict) else None) or get_playable_id_for_event(conn, db_event_id, provider_code)
+                
+                # Extract league from event classification for CBS Sports URL construction
+                league_hint = None
+                if event_row and len(event_row) > 6 and event_row[6]:  # classification_json is index 6
+                    try:
+                        import json
+                        classifications = json.loads(event_row[6])
+                        for item in classifications:
+                            if isinstance(item, dict) and item.get('type') == 'league':
+                                league_hint = item.get('value')
+                                break
+                    except:
+                        pass
+                
                 try:
                     http_version = generate_http_deeplink(
                         deeplink_url,
                         provider=provider_code,
                         playable_id=playable_uuid,
                         espn_graph_id=espn_graph_id,
+                        league=league_hint,
                     )
                 except TypeError:
                     http_version = generate_http_deeplink(deeplink_url, provider_code)
@@ -3469,7 +3529,8 @@ def whatson_lane(lane_id):
                 le.chosen_provider,
                 e.title,
                 e.channel_name,
-                e.synopsis
+                e.synopsis,
+                e.classification_json
             FROM lane_events le
             LEFT JOIN events e ON le.event_id = e.id
             WHERE le.lane_id = ?
@@ -3541,6 +3602,19 @@ def whatson_lane(lane_id):
             try:
                 from deeplink_converter import generate_http_deeplink
                 
+                # Extract league from event classification for CBS Sports URL construction
+                league_hint = None
+                if row and "classification_json" in row.keys() and row["classification_json"]:
+                    try:
+                        import json
+                        classifications = json.loads(row["classification_json"])
+                        for item in classifications:
+                            if isinstance(item, dict) and item.get('type') == 'league':
+                                league_hint = item.get('value')
+                                break
+                    except:
+                        pass
+                
                 # Try to convert primary deeplink
                 if deeplink_url:
                     playable_uuid = get_playable_id_for_event(conn, event_id, chosen_provider)
@@ -3549,6 +3623,7 @@ def whatson_lane(lane_id):
                             deeplink_url,
                             provider=chosen_provider,
                             playable_id=playable_uuid,
+                            league=league_hint,
                         )
                     except TypeError:
                         # Backwards compatible with older converter signatures
@@ -3569,6 +3644,7 @@ def whatson_lane(lane_id):
                             deeplink_url_full,
                             provider=chosen_provider,
                             playable_id=playable_uuid,
+                            league=league_hint,
                         )
                     except TypeError:
                         http_version = (

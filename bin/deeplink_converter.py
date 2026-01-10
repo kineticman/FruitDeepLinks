@@ -282,6 +282,7 @@ def convert_nfl_ctv(punchout_url: str) -> Optional[str]:
 
 # CBS Sports app needs a league-ish path segment to form the most specific watch URL.
 _CBS_LEAGUE_TO_PATH = {
+    "College Basketball": "college-basketball",  # Generic college basketball (men's default)
     "Men's College Basketball": "college-basketball",
     "Women's College Basketball": "womens-college-basketball",
     "Conference League": "uefa-conference-league",
