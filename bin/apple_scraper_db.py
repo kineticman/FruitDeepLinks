@@ -587,11 +587,13 @@ def scrape_search_term(driver, conn: sqlite3.Connection, search_term: str,
             data = api_client.fetch_event_v3(event_id)
             
             if isinstance(data, dict) and data.get("data"):
+                # ALWAYS save fetched data, even if event exists
+                # This ensures provider updates (new streaming services added close to game time) are captured
+                save_event(conn, event_id, "full", "main", data)
                 if not already_full:
-                    save_event(conn, event_id, "full", "main", data)
                     new_seeds += 1
                 else:
-                    skipped += 1
+                    skipped += 1  # Count as skipped for stats, but data IS updated
                 
                 # Extract shelf events
                 canvas = data.get("data", {}).get("canvas", {})

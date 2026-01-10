@@ -1205,12 +1205,17 @@ def run_refresh(skip_scrape=False, source="manual"):
         if skip_scrape:
             cmd.append("--skip-scrape")
 
+        # Set PYTHONUNBUFFERED to ensure subprocess output is captured immediately
+        env = os.environ.copy()
+        env['PYTHONUNBUFFERED'] = '1'
+        
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1,
+            bufsize=0,  # Unbuffered mode to capture output immediately
+            env=env,
         )
 
         for line in process.stdout:
