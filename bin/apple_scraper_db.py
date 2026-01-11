@@ -206,11 +206,17 @@ def event_exists_as_full(conn: sqlite3.Connection, event_id: str) -> bool:
     return row is not None and row[0] == 'full'
 
 def get_shelf_events_to_upgrade(conn: sqlite3.Connection, limit: int) -> List[str]:
-    """Get shelf events that should be upgraded to full fetch"""
+    """Get events that should be upgraded/refreshed
+    
+    Returns:
+    - All shelf events (incomplete data needs upgrade)
+    - Any event updated more than 12 hours ago (might have new playables)
+    """
     cur = conn.cursor()
     cur.execute("""
         SELECT event_id FROM apple_events 
         WHERE fetch_level = 'shelf'
+           OR last_updated < datetime('now', '-12 hours')
         ORDER BY last_updated ASC
         LIMIT ?
     """, (limit,))
@@ -726,10 +732,10 @@ def main():
         
         # Upgrade shelf events
         if args.upgrade_shelf_limit and args.upgrade_shelf_limit > 0:
-            print(f"\n== Upgrading {args.upgrade_shelf_limit} shelf events ==")
+            print(f"\n== Upgrading/Refreshing events (limit: {args.upgrade_shelf_limit}) ==")
             shelf_ids = get_shelf_events_to_upgrade(conn, args.upgrade_shelf_limit)
             
-            print(f"  Found {len(shelf_ids)} shelf events to upgrade")
+            print(f"  Found {len(shelf_ids)} events to upgrade/refresh")
             
             upgraded = 0
             for i, shelf_id in enumerate(shelf_ids, 1):
