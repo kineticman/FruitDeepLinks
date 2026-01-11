@@ -468,36 +468,110 @@ class HybridAPIClient:
         self.requests_count = 0
         self.selenium_count = 0
         self.requests_failures = 0
+
+        # Last-call diagnostics (sanitized) for logging / troubleshooting
+        self.last_debug: dict = {}
+        self.last_error: Optional[str] = None
     
     def fetch_event_v3(self, event_id: str) -> dict:
-        """Fetch event using hybrid approach (requests first, Selenium fallback)"""
+        """Fetch event using hybrid approach (requests first, Selenium fallback).
+
+        Populates ``self.last_debug`` with sanitized diagnostics that can be logged
+        if an event fails to upgrade (no secrets / cookies / tokens).
+        """
         base = f"https://tv.apple.com/api/uts/v3/sporting-events/{event_id}"
-        params = f"caller=web&locale=en-US&pfm=web&sf=143441&v=90&utscf={self.utscf}&utsk={self.utsk}"
+        params = (
+            f"caller=web&locale=en-US&pfm=web&sf=143441&v=90"
+            f"&utscf={self.utscf}&utsk={self.utsk}"
+        )
         url = f"{base}?{params}"
-        
+
+        self.last_error = None
+        self.last_debug = {
+            "event_id": event_id,
+            "used": None,
+            "requests": None,
+            "selenium": None,
+        }
+
         # Try fast requests library first
         if self.use_hybrid:
             try:
                 resp = self.session.get(url, timeout=10)
-                
-                if resp.status_code == 200 and 'json' in resp.headers.get('content-type', ''):
-                    data = resp.json()
-                    if data.get('data'):
+                ct = (resp.headers.get("content-type") or "").lower()
+                is_json = ("json" in ct)
+                req_info = {
+                    "status_code": resp.status_code,
+                    "content_type": ct[:80],
+                    "is_json": bool(is_json),
+                    "content_len": int(resp.headers.get("content-length") or len(resp.content or b"")),
+                }
+
+                if resp.status_code == 200 and is_json:
+                    try:
+                        data = resp.json()
+                    except Exception as je:
+                        req_info["json_error"] = str(je)[:200]
+                        data = None
+
+                    if isinstance(data, dict) and data.get("data"):
                         self.requests_count += 1
+                        req_info["has_data"] = True
+                        self.last_debug["used"] = "requests"
+                        self.last_debug["requests"] = req_info
                         return data
-                
-                # If we get HTML or error, fall back to Selenium
+
+                    req_info["has_data"] = False
+                    if isinstance(data, dict):
+                        if "errors" in data:
+                            req_info["errors"] = data.get("errors")
+                        req_info["top_keys"] = list(data.keys())[:12]
+
+                else:
+                    # HTML / redirect / 403 etc; keep a tiny preview for debugging
+                    preview = ""
+                    try:
+                        preview = (resp.text or "")[:180]
+                    except Exception:
+                        preview = ""
+                    if preview:
+                        req_info["body_preview"] = preview.replace("\n", " ")[:180]
+
                 self.requests_failures += 1
-                
-            except Exception:
+                self.last_debug["requests"] = req_info
+
+            except Exception as e:
                 self.requests_failures += 1
-        
-        # Fallback to Selenium (slower but reliable)
+                self.last_error = str(e)
+                self.last_debug["requests"] = {"exception": str(e)[:200]}
+
+        # Fallback to Selenium (slower but more reliable)
         self.selenium_count += 1
-        return self._fetch_via_browser(url)
-    
+        self.last_debug["used"] = "selenium"
+        data = self._fetch_via_browser(url)
+
+        sel_info: dict = {}
+        if isinstance(data, dict):
+            if data.get("data"):
+                sel_info["has_data"] = True
+            else:
+                sel_info["has_data"] = False
+                if "error" in data:
+                    sel_info["error"] = str(data.get("error"))[:200]
+                if "errors" in data:
+                    sel_info["errors"] = data.get("errors")
+                sel_info["top_keys"] = list(data.keys())[:12]
+        else:
+            sel_info["non_dict_type"] = type(data).__name__
+
+        self.last_debug["selenium"] = sel_info
+        return data
+
     def _fetch_via_browser(self, url: str) -> dict:
-        """Original Selenium-based fetch (fallback)"""
+        """Original Selenium-based fetch (fallback).
+
+        Returns a dict (Apple JSON) or ``{'error': '...'}`` on failure.
+        """
         script = f"""
         return fetch('{url}', {{
             method: 'GET',
@@ -505,8 +579,11 @@ class HybridAPIClient:
             headers: {{ 'Accept': 'application/json' }}
         }}).then(r => r.json()).catch(e => ({{error: e.toString()}}));
         """
-        return self.driver.execute_script(script)
-    
+        try:
+            return self.driver.execute_script(script)
+        except Exception as e:
+            return {"error": f"Selenium execute_script failed: {e}"}
+
     def print_stats(self):
         """Print performance statistics"""
         total = self.requests_count + self.selenium_count
@@ -738,21 +815,65 @@ def main():
             print(f"  Found {len(shelf_ids)} events to upgrade/refresh")
             
             upgraded = 0
+            failed_upgrades: List[dict] = []
             for i, shelf_id in enumerate(shelf_ids, 1):
                 print(f"  [Upgrade {i}/{len(shelf_ids)}] {shelf_id}")
                 try:
                     data = api_client.fetch_event_v3(shelf_id)
+                    dbg = getattr(api_client, "last_debug", None)
                     if isinstance(data, dict) and data.get("data"):
                         save_event(conn, shelf_id, "full", "main", data)
                         upgraded += 1
                         conn.commit()
+                    else:
+                        failed_upgrades.append({
+                            "event_id": shelf_id,
+                            "reason": "missing_data",
+                            "debug": dbg,
+                            "top_keys": list(data.keys())[:12] if isinstance(data, dict) else [type(data).__name__],
+                        })
                 except Exception as e:
+                    dbg = getattr(api_client, "last_debug", None)
+                    failed_upgrades.append({
+                        "event_id": shelf_id,
+                        "reason": "exception",
+                        "error": str(e),
+                        "debug": dbg,
+                    })
                     print(f"    error: {e}")
                 
                 time.sleep(0.18)
             
             print(f"\n=== Shelf Upgrade Complete ===")
             print(f"Successfully upgraded: {upgraded}/{len(shelf_ids)}")
+
+            if failed_upgrades:
+                print(f"\n--- Failed Shelf Upgrades ({len(failed_upgrades)}) ---")
+                for f in failed_upgrades:
+                    dbg = f.get("debug") or {}
+                    used = dbg.get("used") or "unknown"
+                    r = dbg.get("requests") or {}
+                    s = dbg.get("selenium") or {}
+                    msg = f"  - {f.get('event_id')}: used={used}"
+                    if r:
+                        if "status_code" in r:
+                            msg += f", req_status={r.get('status_code')}, ct={r.get('content_type')}"
+                        elif "exception" in r:
+                            msg += f", req_exc={r.get('exception')}"
+                    if s and not s.get("has_data", False):
+                        if s.get("error"):
+                            msg += f", selenium_error={s.get('error')}"
+                    print(msg)
+
+                # Write full diagnostics next to the DB for deeper troubleshooting
+                try:
+                    out_path = Path(args.db).resolve().parent / (
+                        f"failed_shelf_upgrades_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                    )
+                    out_path.write_text(json.dumps(failed_upgrades, indent=2))
+                    print(f"  (details saved to: {out_path})")
+                except Exception as e:
+                    print(f"  (could not write failure details JSON: {e})")
         
         # Print hybrid performance stats
         api_client.print_stats()
