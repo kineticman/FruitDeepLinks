@@ -89,13 +89,13 @@ def run_step(step_num, total_steps, description, command, allow_fail: bool = Fal
             cwd=BIN_DIR,
             capture_output=False,
         )
-        print(f"✔ Step {step_num} complete")
+        print(f"[OK] Step {step_num} complete")
         return True
     except subprocess.CalledProcessError as e:
         if allow_fail:
             print(f"⚠ Step {step_num} FAILED (non-fatal) with exit code {e.returncode}")
             return False
-        print(f"✖ Step {step_num} FAILED with exit code {e.returncode}")
+        print(f"[ERROR] Step {step_num} FAILED with exit code {e.returncode}")
         return False
 
 
@@ -205,9 +205,9 @@ def main():
         try:
             DB_PATH.parent.mkdir(parents=True, exist_ok=True)
             sqlite3.connect(DB_PATH).close()
-            print(f"✔ Created new DB at {DB_PATH}")
+            print(f"[OK] Created new DB at {DB_PATH}")
         except Exception as e:
-            print(f"✖ Failed to create DB at {DB_PATH}: {e}")
+            print(f"[ERROR] Failed to create DB at {DB_PATH}: {e}")
             return 1
 
     # Step 3: Ensure database schema (playables table)
@@ -238,13 +238,13 @@ def main():
         if "espn_graph_id" not in columns:
             cur.execute("ALTER TABLE playables ADD COLUMN espn_graph_id TEXT")
             conn.commit()
-            print("✅ Added espn_graph_id column to playables")
+            print("[OK] Added espn_graph_id column to playables")
         else:
-            print("✅ espn_graph_id column already exists")
+            print("[OK] espn_graph_id column already exists")
         conn.close()
-        print("✅ Step 5b complete")
+        print("[OK] Step 5b complete")
     except Exception as e:
-        print(f"⚠️ Step 5b failed (non-fatal): {e}")
+        print(f"[WARN] Step 5b failed (non-fatal): {e}")
         # Non-fatal - ESPN enrichment will just skip if column doesn't exist
     
     # Step 5c: Clean up old events (keep database fresh and improve ESPN enrichment rate)
@@ -265,14 +265,14 @@ def main():
             cur.execute("DELETE FROM events WHERE end_utc < datetime('now', '-1 day')")
             deleted = cur.rowcount
             conn.commit()
-            print(f"✅ Deleted {deleted} old events (ended before yesterday)")
+            print(f"[OK] Deleted {deleted} old events (ended before yesterday)")
         else:
-            print("✅ No old events to clean up")
+            print("[OK] No old events to clean up")
         
         conn.close()
-        print("✅ Step 5c complete")
+        print("[OK] Step 5c complete")
     except Exception as e:
-        print(f"⚠️ Step 5c failed (non-fatal): {e}")
+        print(f"[WARN] Step 5c failed (non-fatal): {e}")
     
     # Step 5d: Ensure locale column exists and populate for ESPN playables
     if not run_step("5d", total_steps, "Ensuring locale column and populating ESPN locales", [
@@ -291,7 +291,7 @@ def main():
         print("\n" + "=" * 60)
         print(f"[6/{total_steps}] Importing Apple TV events to master database. SKIPPED (apple_events.db unchanged)")
         print("=" * 60)
-        print("✔ Step 6 complete (skipped)")
+        print("Step 6 complete (skipped)")
     else:
         if not run_step(6, total_steps, "Importing Apple TV events to master database", [
             "python3", "-u", "fruit_import_appletv.py",
@@ -300,6 +300,32 @@ def main():
         ]):
             return 1
         _write_apple_import_stamp(APPLE_DB_PATH)
+    
+    # Step 6a: Clean up old Apple TV events (keep database lean)
+    print("\n" + "=" * 60)
+    print(f"[6a/{total_steps}] Cleaning up old Apple TV events")
+    print("=" * 60)
+    try:
+        conn = sqlite3.connect(APPLE_DB_PATH)
+        cur = conn.cursor()
+        
+        # Count events before cleanup
+        cur.execute("SELECT COUNT(*) FROM apple_events WHERE last_updated < datetime('now', '-7 days')")
+        old_count = cur.fetchone()[0]
+        
+        if old_count > 0:
+            # Delete events not updated in 7+ days (likely ended/cancelled)
+            cur.execute("DELETE FROM apple_events WHERE last_updated < datetime('now', '-7 days')")
+            deleted = cur.rowcount
+            conn.commit()
+            print(f"Deleted {deleted} old Apple TV events (not updated in 7+ days)")
+        else:
+            print("No old Apple TV events to clean up")
+        
+        conn.close()
+        print("Step 6a complete")
+    except Exception as e:
+        print(f"Step 6a failed (non-fatal): {e}")
 
     # Step 7: Import Kayo events
     kayo_json = OUT_DIR / "kayo_raw.json"
@@ -353,14 +379,14 @@ def main():
                 cur.execute("DELETE FROM events WHERE stop_utc < datetime('now', '-2 days')")
                 deleted = cur.rowcount
                 conn.commit()
-                print(f"✅ Deleted {deleted} old ESPN Graph events (and their feeds)")
+                print(f"[OK] Deleted {deleted} old ESPN Graph events (and their feeds)")
             else:
-                print("✅ No old ESPN Graph events to clean up")
+                print("[OK] No old ESPN Graph events to clean up")
             
             conn.close()
-            print("✅ Step 7b-cleanup complete")
+            print("[OK] Step 7b-cleanup complete")
         except Exception as e:
-            print(f"⚠️ Step 7b-cleanup failed (non-fatal): {e}")
+            print(f"[WARN] Step 7b-cleanup failed (non-fatal): {e}")
 
     # Step 7c: Enrich ESPN playables with Watch Graph IDs (conditional based on scraping)
     if espn_db.exists():
@@ -461,7 +487,7 @@ def main():
                 f"http://{channels_ip}:8089/providers/m3u/sources/{channels_source_name}/refresh",
                 "-o", "/dev/null",
             ], check=False)
-            print("  ✔ M3U playlist refreshed")
+            print("  [OK] M3U playlist refreshed")
 
             time.sleep(2)
 
@@ -471,7 +497,7 @@ def main():
                 f"http://{channels_ip}:8089/dvr/lineups/XMLTV-{channels_source_name}",
                 "-o", "/dev/null",
             ], check=False)
-            print("  ✔ XMLTV guide refreshed")
+            print("  [OK] XMLTV guide refreshed")
         except Exception as e:
             print(f"  ⚠ Channels DVR refresh failed: {e}")
     elif channels_ip and not channels_source_name:

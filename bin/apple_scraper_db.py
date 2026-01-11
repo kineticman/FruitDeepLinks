@@ -210,13 +210,14 @@ def get_shelf_events_to_upgrade(conn: sqlite3.Connection, limit: int) -> List[st
     
     Returns:
     - All shelf events (incomplete data needs upgrade)
-    - Any event updated more than 12 hours ago (might have new playables)
+    - Any event updated 23hrs-5days ago (might have new playables, but skip very old)
     """
     cur = conn.cursor()
     cur.execute("""
         SELECT event_id FROM apple_events 
         WHERE fetch_level = 'shelf'
-           OR last_updated < datetime('now', '-12 hours')
+           OR (last_updated < datetime('now', '-23 hours') 
+               AND last_updated > datetime('now', '-5 days'))
         ORDER BY last_updated ASC
         LIMIT ?
     """, (limit,))
