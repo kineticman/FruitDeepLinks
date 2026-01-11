@@ -310,12 +310,12 @@ def main():
         cur = conn.cursor()
         
         # Count events before cleanup
-        cur.execute("SELECT COUNT(*) FROM apple_events WHERE last_updated < datetime('now', '-7 days')")
+        cur.execute("SELECT COUNT(*) FROM apple_events WHERE last_updated < datetime('now', '-5 days')")
         old_count = cur.fetchone()[0]
         
         if old_count > 0:
             # Delete events not updated in 7+ days (likely ended/cancelled)
-            cur.execute("DELETE FROM apple_events WHERE last_updated < datetime('now', '-7 days')")
+            cur.execute("DELETE FROM apple_events WHERE last_updated < datetime('now', '-5 days')")
             deleted = cur.rowcount
             conn.commit()
             print(f"Deleted {deleted} old Apple TV events (not updated in 7+ days)")
