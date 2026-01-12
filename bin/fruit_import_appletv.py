@@ -487,6 +487,15 @@ def ensure_events_schema(conn: sqlite3.Connection):
 
     _SCHEMA_ENSURED = True
 def upsert_event(conn: sqlite3.Connection, event: Dict[str, Any], dry: bool = False):
+    """
+    Insert or update an event in the database.
+    
+    IMPORTANT: Uses COALESCE() for timing fields (start_ms, end_ms, start_utc, end_utc, runtime_secs)
+    to preserve existing values when new values are NULL. This prevents data loss when Apple TV API
+    returns live events without end times, which would otherwise overwrite good data with nulls.
+    
+    Fix applied 2026-01-12 to resolve issue where 313+ events lost end_utc when transitioning to live state.
+    """
     if dry:
         print(f"[DRY] event {event['id']} :: {event['title']}")
         return
@@ -514,8 +523,12 @@ def upsert_event(conn: sqlite3.Connection, event: Dict[str, Any], dry: bool = Fa
             channel_name=excluded.channel_name, channel_provider_id=excluded.channel_provider_id,
             airing_type=excluded.airing_type, classification_json=excluded.classification_json,
             genres_json=excluded.genres_json, content_segments_json=excluded.content_segments_json,
-            is_free=excluded.is_free, is_premium=excluded.is_premium, runtime_secs=excluded.runtime_secs,
-            start_ms=excluded.start_ms, end_ms=excluded.end_ms, start_utc=excluded.start_utc, end_utc=excluded.end_utc,
+            is_free=excluded.is_free, is_premium=excluded.is_premium, 
+            runtime_secs=COALESCE(excluded.runtime_secs, events.runtime_secs),
+            start_ms=COALESCE(excluded.start_ms, events.start_ms), 
+            end_ms=COALESCE(excluded.end_ms, events.end_ms), 
+            start_utc=COALESCE(excluded.start_utc, events.start_utc), 
+            end_utc=COALESCE(excluded.end_utc, events.end_utc),
             hero_image_url=excluded.hero_image_url,
             last_seen_utc=excluded.last_seen_utc, raw_attributes_json=excluded.raw_attributes_json
         """,
