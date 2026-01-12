@@ -1205,17 +1205,12 @@ def run_refresh(skip_scrape=False, source="manual"):
         if skip_scrape:
             cmd.append("--skip-scrape")
 
-        # Set PYTHONUNBUFFERED to ensure subprocess output is captured immediately
-        env = os.environ.copy()
-        env['PYTHONUNBUFFERED'] = '1'
-        
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=0,  # Unbuffered mode to capture output immediately
-            env=env,
+            bufsize=1,
         )
 
         for line in process.stdout:
@@ -1984,51 +1979,7 @@ def api_event_detail(event_id):
         order_sql = " ORDER BY " + ", ".join(order_bits)
 
         cur.execute(f"SELECT * FROM playables WHERE event_id = ? {order_sql}", (event_id,))
-        playables_raw = [_row_to_dict(r) for r in cur.fetchall()]
-        
-        # Compute HTTP deeplinks on-the-fly for each playable
-        # This ensures CBS Sports and other providers get correct league-aware URLs
-        playables = []
-        for p in playables_raw:
-            # Get the scheme deeplink
-            scheme_deeplink = p.get("deeplink_play") or p.get("deeplink_open") or p.get("playable_url")
-            
-            # Compute HTTP version if we have a scheme deeplink
-            if scheme_deeplink:
-                try:
-                    from deeplink_converter import generate_http_deeplink
-                    
-                    # Extract league from event classification for CBS Sports
-                    league_hint = None
-                    if event.get("classification_json"):
-                        try:
-                            import json
-                            classifications = json.loads(event["classification_json"])
-                            for item in classifications:
-                                if isinstance(item, dict) and item.get('type') == 'league':
-                                    league_hint = item.get('value')
-                                    break
-                        except:
-                            pass
-                    
-                    # Generate HTTP deeplink with league awareness
-                    http_url = generate_http_deeplink(
-                        scheme_deeplink,
-                        provider=p.get("provider"),
-                        playable_id=p.get("playable_id"),
-                        espn_graph_id=p.get("espn_graph_id"),
-                        league=league_hint,
-                    )
-                    
-                    # Override the database value with the computed one
-                    if http_url:
-                        p["http_deeplink_url"] = http_url
-                
-                except Exception:
-                    # If conversion fails, keep the database value
-                    pass
-            
-            playables.append(p)
+        playables = [_row_to_dict(r) for r in cur.fetchall()]
 
         # providers list
         providers = []
@@ -3291,6 +3242,14 @@ def api_adb_lane_deeplink(provider_code, lane_number):
                         log(f"ESPN HTTP deeplink corrected to use Graph ID: {play_id}", "DEBUG")
             except ImportError:
                 log("deeplink_converter not available for ESPN correction", "WARN")
+        
+        # NBA/GAMETIME FIX: Strip query parameters for ADBTuner compatibility
+        # Apple TV provides: gametime://game/0022500553?source=atv-search
+        # ADBTuner needs: gametime://game/0022500553
+        if provider_code.lower() in ('gametime', 'nba') and deeplink_url:
+            if deeplink_url.startswith('gametime://') and '?' in deeplink_url:
+                deeplink_url = deeplink_url.split('?')[0]
+                log(f"NBA deeplink cleaned for ADBTuner: removed query parameters", "DEBUG")
 
         # Provider lanes must remain provider-specific: do NOT fall back to generic best-link
         # selection across other providers.
