@@ -797,6 +797,34 @@ def build_direct_m3u(
                             event_id=event_id,
                             conn=conn,
                         )
+                        
+                        # Handle aiv_exclusive synthetic service for display names
+                        # Check if aiv_exclusive is enabled and this is an exclusive event
+                        if logical_service == "aiv" and "aiv_exclusive" in enabled_services:
+                            # Check if event is Amazon-exclusive
+                            try:
+                                cur.execute("""
+                                    SELECT 1
+                                    FROM events e
+                                    WHERE e.id = ?
+                                      AND EXISTS (
+                                            SELECT 1 FROM playables p
+                                             WHERE p.event_id = e.id AND p.logical_service = 'aiv'
+                                      )
+                                      AND NOT EXISTS (
+                                            SELECT 1 FROM playables p
+                                             WHERE p.event_id = e.id
+                                               AND p.logical_service IS NOT NULL
+                                               AND p.logical_service <> ''
+                                               AND p.logical_service <> 'aiv'
+                                      )
+                                    LIMIT 1
+                                """, (event_id,))
+                                if cur.fetchone() is not None:
+                                    logical_service = "aiv_exclusive"
+                            except Exception:
+                                pass
+                        
                         actual_provider = get_service_display_name(logical_service)
             except Exception:
                 actual_provider = provider
