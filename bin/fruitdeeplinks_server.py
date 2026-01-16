@@ -413,6 +413,35 @@ def get_available_filters():
                             "count": count,
                         }
                     )
+                
+                # Synthetic provider: Amazon Exclusives (AIV-only events)
+                try:
+                    cur.execute(
+                        """
+                        SELECT COUNT(DISTINCT e.id)
+                        FROM events e
+                        WHERE EXISTS (
+                          SELECT 1 FROM playables p
+                          WHERE p.event_id = e.id AND p.logical_service = 'aiv'
+                        )
+                        AND NOT EXISTS (
+                          SELECT 1 FROM playables p
+                          WHERE p.event_id = e.id
+                            AND COALESCE(p.logical_service,'') <> 'aiv'
+                        )
+                        AND e.end_utc > datetime('now')
+                        """
+                    )
+                    excl_count = int((cur.fetchone() or (0,))[0] or 0)
+                    if excl_count > 0:
+                        providers.append({
+                            'scheme': 'aiv_exclusive',
+                            'name': get_logical_service_display_name('aiv_exclusive'),
+                            'count': excl_count,
+                        })
+                except Exception as e:
+                    log(f"Error computing aiv_exclusive filter count: {e}", 'ERROR')
+            
             else:
                 # Fallback: use raw provider grouping
                 cur.execute(
@@ -2669,6 +2698,51 @@ def get_provider_lane_stats(conn: sqlite3.Connection) -> list[dict]:
             "updated_at": None
         }
     
+
+    # Synthetic service: aiv_exclusive (Amazon Exclusives)
+    if LOGICAL_SERVICES_AVAILABLE and 'logical_service' in columns:
+        try:
+            # Count events where AIV is the only mapped logical_service
+            cur.execute(
+                """
+                SELECT
+                    COUNT(DISTINCT e.id) AS event_count,
+                    COUNT(p.playable_id) AS playable_count,
+                    COUNT(DISTINCT CASE WHEN datetime(e.end_utc) > datetime('now') THEN e.id END) AS future_event_count
+                FROM events e
+                JOIN playables p ON p.event_id = e.id
+                WHERE p.logical_service = 'aiv'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM playables p2
+                    WHERE p2.event_id = e.id
+                      AND COALESCE(p2.logical_service,'') <> 'aiv'
+                  )
+                """
+            )
+            row = cur.fetchone() or (0,0,0)
+            excl_events = int(row[0] or 0)
+            excl_playables = int(row[1] or 0)
+            excl_future = int(row[2] or 0)
+            if excl_events > 0 and 'aiv_exclusive' not in services:
+                display_name = 'aiv_exclusive'
+                try:
+                    from logical_service_mapper import get_service_display_name
+                    display_name = get_service_display_name('aiv_exclusive')
+                except Exception:
+                    display_name = 'Amazon Exclusives'
+                services['aiv_exclusive'] = {
+                    'provider_code': 'aiv_exclusive',
+                    'name': display_name,
+                    'event_count': excl_events,
+                    'playable_count': excl_playables,
+                    'future_event_count': excl_future,
+                    'adb_enabled': 0,
+                    'adb_lane_count': 0,
+                    'created_at': None,
+                    'updated_at': None,
+                }
+        except Exception as e:
+            log(f"Error computing aiv_exclusive lane stats: {e}", 'ERROR')
     # Merge with provider_lanes configuration
     cur.execute("""
         SELECT provider_code, adb_enabled, adb_lane_count, created_at, updated_at
