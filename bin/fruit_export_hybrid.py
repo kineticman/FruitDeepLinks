@@ -640,35 +640,6 @@ def build_direct_m3u(
             ):
                 try:
                     from logical_service_mapper import get_logical_service_for_playable
-                    
-                    # Check if aiv_exclusive is enabled
-                    aiv_exclusive_enabled = "aiv_exclusive" in enabled_services
-                    
-                    # Determine if this event is Amazon-exclusive (for synthetic service labeling)
-                    is_exclusive = False
-                    if aiv_exclusive_enabled:
-                        # Check if event has ONLY AIV playables
-                        try:
-                            cur.execute("""
-                                SELECT 1
-                                FROM events e
-                                WHERE e.id = ?
-                                  AND EXISTS (
-                                        SELECT 1 FROM playables p
-                                         WHERE p.event_id = e.id AND p.logical_service = 'aiv'
-                                  )
-                                  AND NOT EXISTS (
-                                        SELECT 1 FROM playables p
-                                         WHERE p.event_id = e.id
-                                           AND p.logical_service IS NOT NULL
-                                           AND p.logical_service <> ''
-                                           AND p.logical_service <> 'aiv'
-                                  )
-                                LIMIT 1
-                            """, (event_id,))
-                            is_exclusive = cur.fetchone() is not None
-                        except Exception:
-                            pass
 
                     best = None
                     for prow in p_rows:
@@ -705,13 +676,6 @@ def build_direct_m3u(
                             event_id=event_id,
                             conn=conn,
                         )
-                        
-                        # Handle aiv_exclusive synthetic service
-                        # If this is an exclusive AIV event and aiv_exclusive is enabled,
-                        # relabel it to aiv_exclusive for filtering purposes
-                        if is_exclusive and logical_service == "aiv":
-                            logical_service = "aiv_exclusive"
-                        
                         if not logical_service or logical_service not in enabled_services:
                             continue
 
@@ -757,12 +721,7 @@ def build_direct_m3u(
                 else:
                     reason = "no_playables_no_rawattrs"
 
-                # Special-case: when the only enabled service is "Amazon Exclusives",
-                # we do *not* want to fall back to a generic webUrl for events that
-                # have playables but were filtered out (i.e., not truly Amazon-exclusive).
-                aiv_exclusive_only = bool(enabled_services) and set(enabled_services) == {"aiv_exclusive"}
-
-                if FILTERING_AVAILABLE and not (aiv_exclusive_only and reason == "playables_filtered_out"):
+                if FILTERING_AVAILABLE:
                     raw_url_fallback = get_fallback_deeplink(event)
                 else:
                     raw_url_fallback = None
