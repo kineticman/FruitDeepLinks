@@ -3155,12 +3155,13 @@ def api_adb_lane_deeplink(provider_code, lane_number):
             
             if enabled_services:
                 # Check if ANY logical service mapping to this ADB provider is enabled
+                # OR if the provider code itself is enabled (for synthetic providers like aiv_exclusive)
                 try:
                     from adb_provider_mapper import get_logical_services_for_adb_provider
                     mapped_services = get_logical_services_for_adb_provider(provider_code)
                     
-                    # Allow if ANY mapped service is enabled
-                    if not any(ls in enabled_services for ls in mapped_services):
+                    # Allow if ANY mapped service is enabled OR provider code itself is enabled
+                    if not any(ls in enabled_services for ls in mapped_services) and provider_code not in enabled_services:
                         # Provider filtered out -> behave like 'no event' for ADBTuner.
                         if (request.args.get("format") or "text").lower() == "text":
                             return Response('', mimetype='text/plain')
