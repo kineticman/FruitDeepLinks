@@ -434,9 +434,11 @@ def build_adb_lanes(db_path: str, provider_filter: Optional[str] = None) -> None
 
         # Only enforce enabled_services when the user explicitly set a non-empty allowlist.
         # Check if ANY of the logical services mapped to this ADB provider are enabled
+        # OR if the provider code itself is enabled (for synthetic providers like aiv_exclusive)
         if enabled_services:
             logical_services = get_logical_services_for_adb_provider(provider_code)
-            if not any(ls in enabled_services for ls in logical_services):
+            # Check both logical services AND the provider code itself
+            if not any(ls in enabled_services for ls in logical_services) and provider_code not in enabled_services:
                 log.info("Skipping provider %s because none of its logical services %s are in enabled_services", 
                         provider_code, logical_services)
                 continue
