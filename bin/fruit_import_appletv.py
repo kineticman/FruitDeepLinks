@@ -786,6 +786,20 @@ def main():
         # Normalize ONCE - use for everything
         normalized = normalize_event_structure(e)
         
+        # Skip events that started 2+ days ago with no end time (Apple's incomplete historical data)
+        # These are old live events that Apple keeps returning without end times
+        start_time_str = normalized.get("start_time")
+        end_time_str = normalized.get("end_time")
+        if start_time_str and not end_time_str:
+            try:
+                start_dt = datetime.fromisoformat(start_time_str.replace('Z', '+00:00'))
+                days_since_start = (datetime.now(timezone.utc) - start_dt).total_seconds() / 86400
+                if days_since_start > 2:
+                    # Skip old event with no end time
+                    continue
+            except (ValueError, AttributeError):
+                pass  # If parsing fails, import anyway
+        
         # Map to peacock schema (will normalize again internally, but that's ok)
         mapped = map_apple_to_fruit(e, provider_prefix="appletv")
         upsert_event(conn, mapped, dry=args.dry_run)
