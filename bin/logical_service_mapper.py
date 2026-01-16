@@ -36,7 +36,6 @@ SERVICE_DISPLAY_NAMES = {
     'peacocktv': 'Peacock',
     'pplus': 'Paramount+',
     'aiv': 'Prime Video',
-    'aiv_exclusive': 'Amazon Exclusives',
     'gametime': 'NBA',
     'cbssportsapp': 'CBS Sports',
     'cbstve': 'CBS',
@@ -306,7 +305,6 @@ def get_logical_service_priority(service_code: str) -> int:
         # Amazon aggregator services (deprioritized - often redirect to other services)
         # These should only be used when no direct service deeplink is available
         'aiv': 27,        # Amazon Prime Video (was 4, now 27)
-        'aiv_exclusive': 27,  # Amazon Exclusives (synthetic service)
         
         # Generic web (lowest priority)
         'https': 30,

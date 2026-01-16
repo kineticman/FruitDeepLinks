@@ -721,12 +721,7 @@ def build_direct_m3u(
                 else:
                     reason = "no_playables_no_rawattrs"
 
-                # Special-case: when the only enabled service is "Amazon Exclusives",
-                # we do *not* want to fall back to a generic webUrl for events that
-                # have playables but were filtered out (i.e., not truly Amazon-exclusive).
-                aiv_exclusive_only = bool(enabled_services) and set(enabled_services) == {"aiv_exclusive"}
-
-                if FILTERING_AVAILABLE and not (aiv_exclusive_only and reason == "playables_filtered_out"):
+                if FILTERING_AVAILABLE:
                     raw_url_fallback = get_fallback_deeplink(event)
                 else:
                     raw_url_fallback = None
