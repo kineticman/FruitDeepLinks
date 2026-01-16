@@ -216,8 +216,10 @@ def export_adb_lanes(db_path: Path, out_dir: Path, server_url: str) -> Path:
 
             ch_el = ET.SubElement(tv, "channel", id=str(channel_id))
 
-            # Display name: PROVIDER 01 (e.g., AIV 01)
-            display_name = f"{provider_code.upper()} {int(lane_number):02d}"
+            # Display name: Friendly provider name + lane number
+            # (e.g., "ESPN+ 01", "Amazon Exclusives 01")
+            provider_display = get_provider_display_name(provider_code) or provider_code.upper()
+            display_name = f"{provider_display} {int(lane_number):02d}"
             dn_el = ET.SubElement(ch_el, "display-name")
             dn_el.text = display_name
 
@@ -255,7 +257,7 @@ def export_adb_lanes(db_path: Path, out_dir: Path, server_url: str) -> Path:
                 continue
 
             provider_code = events_sorted[0]["provider_code"]
-            provider_label = (provider_code or "").upper()
+            provider_label = get_provider_display_name(provider_code) or (provider_code or "").upper()
 
             # Determine per-channel post window
             last_end = max_end_by_channel.get(channel_id, now)
@@ -390,7 +392,9 @@ def build_adb_m3u(
             lane_number = int(row["lane_number"])
             channel_id = row["channel_id"] or f"{provider_code}{lane_number:02d}"
 
-            name = f"{provider_code} lane {lane_number:02d}"
+            provider_display = get_provider_display_name(provider_code) or provider_code
+
+            name = f"{provider_display} {lane_number:02d}"
             chno = lane_number
 
             stream_url = (
@@ -400,7 +404,7 @@ def build_adb_m3u(
 
             f.write(
                 f'#EXTINF:-1 tvg-id="{channel_id}" tvg-chno="{chno}" '
-                f'group-title="ADB {provider_code}",{name}\n'
+                f'group-title="ADB {provider_display}",{name}\n'
             )
             f.write(stream_url + "\n\n")
 
@@ -421,7 +425,9 @@ def build_adb_m3u(
                 lane_number = int(row["lane_number"])
                 channel_id = row["channel_id"] or f"{provider_code}{lane_number:02d}"
 
-                name = f"{provider_code} lane {lane_number:02d}"
+                provider_display = get_provider_display_name(provider_code) or provider_code
+
+                name = f"{provider_display} {lane_number:02d}"
                 chno = lane_number
 
                 stream_url = (
@@ -431,7 +437,7 @@ def build_adb_m3u(
 
                 f.write(
                     f'#EXTINF:-1 tvg-id="{channel_id}" tvg-chno="{chno}" '
-                    f'group-title="ADB {provider_code}",{name}\n'
+                    f'group-title="ADB {provider_display}",{name}\n'
                 )
                 f.write(stream_url + "\n\n")
 
