@@ -1807,8 +1807,24 @@ def api_events():
         params.extend([like, like, like, like, like, like])
 
     if provider:
-        where.append(f"EXISTS (SELECT 1 FROM playables p WHERE p.event_id = e.id AND {service_expr} = ?)")
-        params.append(provider)
+        # Special handling for aiv_exclusive synthetic service
+        if provider == 'aiv_exclusive':
+            # Events where AIV is the ONLY logical service
+            where.append("""
+                EXISTS (
+                    SELECT 1 FROM playables p 
+                    WHERE p.event_id = e.id AND p.logical_service = 'aiv'
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM playables p 
+                    WHERE p.event_id = e.id 
+                      AND COALESCE(p.logical_service, '') <> ''
+                      AND p.logical_service <> 'aiv'
+                )
+            """)
+        else:
+            where.append(f"EXISTS (SELECT 1 FROM playables p WHERE p.event_id = e.id AND {service_expr} = ?)")
+            params.append(provider)
 
     if has_playables:
         where.append("(SELECT COUNT(*) FROM playables p WHERE p.event_id = e.id) > 0")
@@ -3155,13 +3171,12 @@ def api_adb_lane_deeplink(provider_code, lane_number):
             
             if enabled_services:
                 # Check if ANY logical service mapping to this ADB provider is enabled
-                # OR if the provider code itself is enabled (for synthetic providers like aiv_exclusive)
                 try:
                     from adb_provider_mapper import get_logical_services_for_adb_provider
                     mapped_services = get_logical_services_for_adb_provider(provider_code)
                     
-                    # Allow if ANY mapped service is enabled OR provider code itself is enabled
-                    if not any(ls in enabled_services for ls in mapped_services) and provider_code not in enabled_services:
+                    # Allow if ANY mapped service is enabled
+                    if not any(ls in enabled_services for ls in mapped_services):
                         # Provider filtered out -> behave like 'no event' for ADBTuner.
                         if (request.args.get("format") or "text").lower() == "text":
                             return Response('', mimetype='text/plain')
