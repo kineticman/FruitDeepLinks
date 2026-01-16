@@ -255,17 +255,26 @@ def main():
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         
-        # Count events before cleanup
-        cur.execute("SELECT COUNT(*) FROM events WHERE end_utc < datetime('now', '-1 day')")
+        # Count events before cleanup (including NULL end_utc events with old start dates)
+        cur.execute("""
+            SELECT COUNT(*) FROM events 
+            WHERE end_utc < datetime('now', '-1 day')
+               OR (end_utc IS NULL AND start_utc < datetime('now', '-2 days'))
+        """)
         old_count = cur.fetchone()[0]
         
         if old_count > 0:
-            # Delete events that ended before yesterday
+            # Delete events that ended before yesterday OR have NULL end_utc and started 2+ days ago
             # This removes stale events and improves ESPN enrichment match rate
-            cur.execute("DELETE FROM events WHERE end_utc < datetime('now', '-1 day')")
+            # Note: NULL end_utc events stay fresh via last_seen_utc updates, so we check start_utc
+            cur.execute("""
+                DELETE FROM events 
+                WHERE end_utc < datetime('now', '-1 day')
+                   OR (end_utc IS NULL AND start_utc < datetime('now', '-2 days'))
+            """)
             deleted = cur.rowcount
             conn.commit()
-            print(f"[OK] Deleted {deleted} old events (ended before yesterday)")
+            print(f"[OK] Deleted {deleted} old events (ended or started 2+ days ago with NULL end_utc)")
         else:
             print("[OK] No old events to clean up")
         
