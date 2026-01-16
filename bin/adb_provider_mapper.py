@@ -46,6 +46,11 @@ def get_logical_services_for_adb_provider(adb_provider: str) -> List[str]:
     Returns:
         List of logical service codes that map to this provider
     """
+    # Special case: aiv_exclusive is a synthetic ADB provider
+    # Playables are stored as logical_service='aiv' in the database
+    if adb_provider == 'aiv_exclusive':
+        return ['aiv']
+    
     # Build reverse mapping
     services = []
     for logical, adb in ADB_PROVIDER_MAP.items():
