@@ -95,6 +95,8 @@ def get_league_from_event(conn: sqlite3.Connection, event_id: str) -> Optional[s
         """, (event_id,))
         
         row = cur.fetchone()
+        cur.close()  # CRITICAL FIX: Close cursor after fetching
+        
         if not row or not row[0]:
             return None
         
@@ -228,9 +230,15 @@ def get_all_logical_services_with_counts(conn: sqlite3.Connection) -> Dict[str, 
         WHERE e.end_utc > datetime('now')
     """)
     
-    service_counts = {}
+    # CRITICAL FIX: Fetch ALL rows first before processing
+    # This prevents SQLite lock when get_logical_service_for_playable 
+    # calls get_league_from_event which creates another cursor
+    all_rows = cur.fetchall()
     
-    for row in cur.fetchall():
+    service_counts = {}
+    event_services = {}  # Track which services each event has
+    
+    for row in all_rows:  # Changed from cur.fetchall() to all_rows
         provider = row[0]
         deeplink_play = row[1]
         deeplink_open = row[2]
@@ -249,6 +257,18 @@ def get_all_logical_services_with_counts(conn: sqlite3.Connection) -> Dict[str, 
         )
         
         service_counts[service_code] = service_counts.get(service_code, 0) + 1
+        
+        # Track which services each event has (for Amazon Exclusives detection)
+        if event_id not in event_services:
+            event_services[event_id] = set()
+        event_services[event_id].add(service_code)
+    
+    # Compute Amazon Exclusives: events that ONLY have 'aiv' and no other services
+    aiv_exclusive_count = sum(1 for services in event_services.values() 
+                               if services == {'aiv'})
+    
+    if aiv_exclusive_count > 0:
+        service_counts['aiv_exclusive'] = aiv_exclusive_count
     
     return service_counts
 

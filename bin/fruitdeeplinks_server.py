@@ -214,6 +214,7 @@ def get_user_preferences():
             "SELECT name FROM sqlite_master WHERE type='table' AND name='user_preferences'"
         )
         if not cur.fetchone():
+            conn.close()
             return {
                 "enabled_services": [],
                 "disabled_sports": [],
@@ -276,6 +277,7 @@ def get_user_preferences():
         return result
     except Exception as e:
         log(f"Error loading preferences: {e}", "ERROR")
+        conn.close()
         return {
             "enabled_services": [],
             "disabled_sports": [],
@@ -318,6 +320,7 @@ def save_user_preferences(prefs):
         return True
     except Exception as e:
         log(f"Error saving preferences: {e}", "ERROR")
+        conn.close()
         return False
 
 
@@ -383,6 +386,7 @@ def save_auto_refresh_settings(settings):
         return True
     except Exception as e:
         log(f"Error saving auto-refresh settings: {e}", "ERROR")
+        conn.close()
         return False
 
 
@@ -414,33 +418,7 @@ def get_available_filters():
                         }
                     )
                 
-                # Synthetic provider: Amazon Exclusives (AIV-only events)
-                try:
-                    cur.execute(
-                        """
-                        SELECT COUNT(DISTINCT e.id)
-                        FROM events e
-                        WHERE EXISTS (
-                          SELECT 1 FROM playables p
-                          WHERE p.event_id = e.id AND p.logical_service = 'aiv'
-                        )
-                        AND NOT EXISTS (
-                          SELECT 1 FROM playables p
-                          WHERE p.event_id = e.id
-                            AND COALESCE(p.logical_service,'') <> 'aiv'
-                        )
-                        AND e.end_utc > datetime('now')
-                        """
-                    )
-                    excl_count = int((cur.fetchone() or (0,))[0] or 0)
-                    if excl_count > 0:
-                        providers.append({
-                            'scheme': 'aiv_exclusive',
-                            'name': get_logical_service_display_name('aiv_exclusive'),
-                            'count': excl_count,
-                        })
-                except Exception as e:
-                    log(f"Error computing aiv_exclusive filter count: {e}", 'ERROR')
+                # Amazon Exclusives is now computed in get_all_logical_services_with_counts()
             
             else:
                 # Fallback: use raw provider grouping
@@ -530,6 +508,7 @@ def get_available_filters():
         }
     except Exception as e:
         log(f"Error getting filters: {e}", "ERROR")
+        conn.close()
         return {"providers": [], "sports": [], "leagues": []}
 
 
@@ -2606,6 +2585,7 @@ def api_selection_examples():
         
     except Exception as e:
         log(f"Error in selection-examples: {e}", "ERROR")
+        conn.close()
         return jsonify({"error": str(e)}), 500
 
 
@@ -3146,9 +3126,8 @@ def api_adb_lane_deeplink(provider_code, lane_number):
             return Response("", mimetype="text/plain")
         return jsonify({"status": "error", "message": "Database not found"}), 404
     
-    conn.row_factory = sqlite3.Row
-    
     try:
+        conn.row_factory = sqlite3.Row
         from datetime import datetime as _dt
         
         # Get timestamp to query
@@ -3178,6 +3157,7 @@ def api_adb_lane_deeplink(provider_code, lane_number):
                     # Allow if ANY mapped service is enabled
                     if not any(ls in enabled_services for ls in mapped_services):
                         # Provider filtered out -> behave like 'no event' for ADBTuner.
+                        conn.close()
                         if (request.args.get("format") or "text").lower() == "text":
                             return Response('', mimetype='text/plain')
                         return jsonify({
@@ -3191,6 +3171,7 @@ def api_adb_lane_deeplink(provider_code, lane_number):
                 except ImportError:
                     # Fallback: check provider_code directly
                     if provider_code not in enabled_services:
+                        conn.close()
                         if (request.args.get("format") or "text").lower() == "text":
                             return Response('', mimetype='text/plain')
                         return jsonify({
@@ -3227,6 +3208,7 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         
         if not adb_row:
             # No event scheduled for this provider+lane at this time
+            conn.close()
             if request.args.get("format") == "text":
                 return Response("", mimetype="text/plain")
             return jsonify({
@@ -3284,6 +3266,7 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         
         if not event_row:
             # Event not found in events table, return just the event_id
+            conn.close()
             if request.args.get("format") == "text":
                 # Return the event_id as a basic deeplink
                 return Response(event_id_str, mimetype="text/plain")
@@ -3344,6 +3327,7 @@ def api_adb_lane_deeplink(provider_code, lane_number):
         # Provider lanes must remain provider-specific: do NOT fall back to generic best-link
         # selection across other providers.
         if not deeplink_url:
+            conn.close()
             if (request.args.get("format") or "text").lower() == "text":
                 return Response('', mimetype='text/plain')
             return jsonify({
@@ -3364,37 +3348,45 @@ def api_adb_lane_deeplink(provider_code, lane_number):
 
         # Convert to HTTP format if requested (for Android/Fire TV)
         if deeplink_format == "http" and deeplink_url:
-            try:
-                from deeplink_converter import generate_http_deeplink
-                playable_uuid = (provider_link.get("playable_id") if isinstance(provider_link, dict) else None) or get_playable_id_for_event(conn, db_event_id, provider_code)
-                
-                # Extract league from event classification for CBS Sports URL construction
-                league_hint = None
-                if event_row and len(event_row) > 6 and event_row[6]:  # classification_json is index 6
-                    try:
-                        import json
-                        classifications = json.loads(event_row[6])
-                        for item in classifications:
-                            if isinstance(item, dict) and item.get('type') == 'league':
-                                league_hint = item.get('value')
-                                break
-                    except:
-                        pass
-                
+            # First, check if we already have an HTTP deeplink in the database
+            http_from_db = provider_link.get('http_deeplink_url')
+            if http_from_db:
+                deeplink_url = http_from_db
+                log(f"Using pre-existing HTTP deeplink from database: {http_from_db[:80]}", "DEBUG")
+            else:
+                # Fall back to conversion if no HTTP deeplink in database
+                log(f"No HTTP deeplink in database, attempting conversion from scheme URL", "DEBUG")
                 try:
-                    http_version = generate_http_deeplink(
-                        deeplink_url,
-                        provider=provider_code,
-                        playable_id=playable_uuid,
-                        espn_graph_id=espn_graph_id,
-                        league=league_hint,
-                    )
-                except TypeError:
-                    http_version = generate_http_deeplink(deeplink_url, provider_code)
-                if http_version:
-                    deeplink_url = http_version
-            except ImportError:
-                log("deeplink_converter not available for HTTP conversion", "WARN")
+                    from deeplink_converter import generate_http_deeplink
+                    playable_uuid = (provider_link.get("playable_id") if isinstance(provider_link, dict) else None) or get_playable_id_for_event(conn, db_event_id, provider_code)
+                    
+                    # Extract league from event classification for CBS Sports URL construction
+                    league_hint = None
+                    if event_row and len(event_row) > 6 and event_row[6]:  # classification_json is index 6
+                        try:
+                            import json
+                            classifications = json.loads(event_row[6])
+                            for item in classifications:
+                                if isinstance(item, dict) and item.get('type') == 'league':
+                                    league_hint = item.get('value')
+                                    break
+                        except:
+                            pass
+                    
+                    try:
+                        http_version = generate_http_deeplink(
+                            deeplink_url,
+                            provider=provider_code,
+                            playable_id=playable_uuid,
+                            espn_graph_id=espn_graph_id,
+                            league=league_hint,
+                        )
+                    except TypeError:
+                        http_version = generate_http_deeplink(deeplink_url, provider_code)
+                    if http_version:
+                        deeplink_url = http_version
+                except ImportError:
+                    log("deeplink_converter not available for HTTP conversion", "WARN")
         
         # Return response
         fmt = (request.args.get("format") or "text").lower()
