@@ -448,17 +448,30 @@ def bootstrap_database(db_path: str, force: bool = False) -> None:
             logger.info("Seeding amazon_services...")
             cursor.executescript("""
                 INSERT INTO amazon_services (service_id, display_name, amazon_channel_id, logical_service, requires_prime, is_free, monthly_price_usd, sort_order) VALUES
-                    ('aiv_prime', 'Amazon Prime', 'prime_premium', 'aiv_prime', 0, 0, 14.99, 10),
-                    ('aiv_prime_included', 'Included with Prime', 'prime_included', 'aiv_prime', 1, 0, 0.00, 5),
+                    ('aiv_prime', 'Prime Exclusive', 'prime_premium', 'aiv_prime', 0, 0, 14.99, 10),
+                    ('aiv_prime_included', 'Prime Exclusive', 'prime_included', 'aiv_prime', 1, 0, 0.00, 5),
                     ('aiv_prime_free', 'Free with Ads', 'prime_free', 'aiv_free', 0, 1, 0.00, 1),
+                    
+                    -- League Passes
                     ('aiv_nba_league_pass', 'NBA League Pass', 'amzn1.dv.channel.7a36cb2b-40e6-40c7-809f-a6cf9b9f0859', 'aiv_nba_league_pass', 1, 0, 14.99, 20),
-                    ('aiv_peacock', 'Peacock Premium', 'peacockus', 'aiv_peacock', 1, 0, 7.99, 30),
-                    ('aiv_dazn', 'DAZN', 'daznus', 'aiv_dazn', 1, 0, 19.99, 40),
-                    ('aiv_fox_one', 'FOX One', 'amzn1.dv.spid.8cc2a36e-cd1b-d2cb-0e3b-b9ddce868f1d', 'aiv_fox', 1, 0, NULL, 50),
+                    ('aiv_nba_league_pass_alt', 'NBA League Pass', 'NBALP', 'aiv_nba_league_pass', 1, 0, 14.99, 21),
+                    ('aiv_wnba_league_pass', 'WNBA League Pass', 'wnbalp', 'aiv_wnba', 1, 0, NULL, 22),
+                    
+                    -- Streaming Services
+                    ('aiv_peacock', 'Peacock', 'peacockus', 'aiv_peacock', 1, 0, 7.99, 30),
+                    ('aiv_max', 'Max', 'maxliveeventsus', 'aiv_max', 1, 0, NULL, 40),
+                    ('aiv_paramount_plus', 'Paramount+', 'cbsaacf', 'aiv_paramount_plus', 1, 0, NULL, 45),
+                    ('aiv_dazn', 'DAZN', 'daznus', 'aiv_dazn', 1, 0, 19.99, 50),
                     ('aiv_vix_premium', 'ViX Premium', 'vixplusus', 'aiv_vix_premium', 1, 0, 6.99, 60),
-                    ('aiv_vix_gratis', 'ViX Gratis', 'vixus', 'aiv_vix', 0, 1, 0.00, 61),
-                    ('aiv_fanduel', 'FanDuel Sports Network', 'FSNOHIFSOH3', 'aiv_fanduel', 1, 0, NULL, 70),
-                    ('aiv_max', 'Max', 'maxliveeventsus', 'aiv_max', 1, 0, NULL, 80);
+                    ('aiv_vix_gratis', 'ViX', 'vixus', 'aiv_vix', 0, 1, 0.00, 61),
+                    
+                    -- Sports Networks
+                    ('aiv_fox_one', 'FOX One', 'amzn1.dv.spid.8cc2a36e-cd1b-d2cb-0e3b-b9ddce868f1d', 'aiv_fox', 1, 0, NULL, 70),
+                    ('aiv_fanduel', 'FanDuel Sports Network', 'FSNOHIFSOH3', 'aiv_fanduel', 1, 0, NULL, 80),
+                    
+                    -- Niche Sports
+                    ('aiv_willow', 'Willow TV', 'willowtv', 'aiv_willow', 1, 0, NULL, 90),
+                    ('aiv_squash', 'SquashTV', 'squashtvus', 'aiv_squash', 1, 0, NULL, 91);
             """)
             conn.commit()
             logger.info("✓ Seeded amazon_services")
@@ -852,6 +865,9 @@ def _benefit_id_to_name(bid: str) -> Optional[str]:
         "NBALP": "NBA League Pass",
         "amzn1.dv.channel.7a36cb2b-40e6-40c7-809f-a6cf9b9f0859": "NBA League Pass",
         
+        # Other League Passes
+        "wnbalp": "WNBA League Pass",
+        
         # Regional Sports Networks
         "FSNOHIFSOH3": "FanDuel Sports Network",
         
@@ -862,6 +878,10 @@ def _benefit_id_to_name(bid: str) -> Optional[str]:
         "maxliveeventsus": "Max",
         "peacockus": "Peacock",
         "cbsaacf": "Paramount+",
+        "daznus": "DAZN",
+        "vixus": "ViX",
+        "willowtv": "Willow TV",
+        "squashtvus": "SquashTV",
     }
     
     result = mapping.get(bid)
@@ -1450,8 +1470,10 @@ def scrape_single_gti_with_driver(
             
             # Log if we're using raw badge text that doesn't match known providers
             known_providers = {
-                'Prime Exclusive', 'NBA League Pass', 'FanDuel Sports Network', 
-                'FOX One', 'Peacock', 'Max', 'Paramount+', 'Amazon Error', 'STALE_GTI_404'
+                'Prime Exclusive', 'NBA League Pass', 'WNBA League Pass',
+                'FanDuel Sports Network', 'FOX One', 'Peacock', 'Max', 'Paramount+',
+                'DAZN', 'ViX', 'Willow TV', 'SquashTV',
+                'Amazon Error', 'STALE_GTI_404'
             }
             if channel_name not in known_providers:
                 logger.warning(f"⚠️ Unknown channel name from badge: '{channel_name}' (entitlement='{entitlement}') | GTI={gti}")

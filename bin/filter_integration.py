@@ -276,7 +276,8 @@ def get_filtered_playables(
     conn: sqlite3.Connection, event_id: str, enabled_services: List[str],
     priority_map: Optional[Dict[str, int]] = None,
     amazon_penalty: bool = True,
-    language_preference: str = "en"
+    language_preference: str = "en",
+    amazon_master_enabled: bool = True
 ) -> List[Dict[str, Any]]:
     """
     Get playables for an event, filtered by enabled services using logical service mapping
@@ -288,6 +289,7 @@ def get_filtered_playables(
         priority_map: Optional dict of service code -> priority (higher = better)
         amazon_penalty: If True, deprioritize Amazon when alternatives exist
         language_preference: Language preference - "en", "es", or "both"
+        amazon_master_enabled: If False, ALL Amazon services are disabled regardless of enabled_services
 
     Returns:
         List of playable dicts, filtered and sorted by priority
@@ -357,6 +359,10 @@ def get_filtered_playables(
             else:
                 # Fallback: use raw provider
                 playable["logical_service"] = playable["provider"]
+
+            # AMAZON MASTER TOGGLE: If master toggle is OFF, skip ALL Amazon services
+            if not amazon_master_enabled and playable["logical_service"].startswith("aiv"):
+                continue
 
             # Filter by enabled services
             if enabled_services:  # If list not empty, filter

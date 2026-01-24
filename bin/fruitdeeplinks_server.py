@@ -204,6 +204,7 @@ def get_user_preferences():
             "disabled_leagues": [],
             "service_priorities": {},
             "amazon_penalty": True,
+            "amazon_master_enabled": True,  # Master toggle for all Amazon services
             "language_preference": "en"
         }
 
@@ -221,6 +222,7 @@ def get_user_preferences():
                 "disabled_leagues": [],
                 "service_priorities": {},
                 "amazon_penalty": True,
+                "amazon_master_enabled": True,
                 "language_preference": "en"
             }
 
@@ -274,6 +276,15 @@ def get_user_preferences():
         else:
             result["language_preference"] = "en"
         
+        # Add amazon_master_enabled (default: True)
+        if "amazon_master_enabled" in prefs:
+            try:
+                result["amazon_master_enabled"] = bool(json.loads(prefs["amazon_master_enabled"]) if isinstance(prefs["amazon_master_enabled"], str) else prefs["amazon_master_enabled"])
+            except Exception:
+                result["amazon_master_enabled"] = True
+        else:
+            result["amazon_master_enabled"] = True
+        
         return result
     except Exception as e:
         log(f"Error loading preferences: {e}", "ERROR")
@@ -284,6 +295,7 @@ def get_user_preferences():
             "disabled_leagues": [],
             "service_priorities": {},
             "amazon_penalty": True,
+            "amazon_master_enabled": True,
             "language_preference": "en"
         }
 
@@ -394,13 +406,15 @@ def get_available_filters():
     """Get available sports, leagues, and providers for filtering"""
     conn = get_db_connection()
     if not conn:
-        return {"providers": [], "sports": [], "leagues": []}
+        return {"providers": [], "sports": [], "leagues": [], "amazon_services": []}
 
     try:
         cur = conn.cursor()
 
         # Get providers using logical service mapping
         providers = []
+        amazon_services = []  # Separate list for Amazon sub-services
+        
         try:
             if LOGICAL_SERVICES_AVAILABLE:
                 # Use logical service mapper to get web services broken down
@@ -410,15 +424,24 @@ def get_available_filters():
                     service_counts.items(), key=lambda x: -x[1]
                 ):
                     display_name = get_logical_service_display_name(service_code)
-                    providers.append(
-                        {
-                            "scheme": service_code,
-                            "name": display_name,
-                            "count": count,
-                        }
-                    )
-                
-                # Amazon Exclusives is now computed in get_all_logical_services_with_counts()
+                    
+                    # Separate Amazon services from regular providers
+                    if service_code.startswith('aiv_'):
+                        amazon_services.append(
+                            {
+                                "scheme": service_code,
+                                "name": display_name,
+                                "count": count,
+                            }
+                        )
+                    else:
+                        providers.append(
+                            {
+                                "scheme": service_code,
+                                "name": display_name,
+                                "count": count,
+                            }
+                        )
             
             else:
                 # Fallback: use raw provider grouping
@@ -434,13 +457,23 @@ def get_available_filters():
                 for row in cur.fetchall():
                     provider, count = row
                     display_name = get_provider_display_name(provider)
-                    providers.append(
-                        {
-                            "scheme": provider,
-                            "name": display_name,
-                            "count": count,
-                        }
-                    )
+                    
+                    if provider == 'aiv':
+                        amazon_services.append(
+                            {
+                                "scheme": provider,
+                                "name": display_name,
+                                "count": count,
+                            }
+                        )
+                    else:
+                        providers.append(
+                            {
+                                "scheme": provider,
+                                "name": display_name,
+                                "count": count,
+                            }
+                        )
         except Exception as e:
             log(f"Error loading providers: {e}", "ERROR")
 
@@ -503,13 +536,14 @@ def get_available_filters():
         conn.close()
         return {
             "providers": providers,
+            "amazon_services": amazon_services,
             "sports": sports_list,
             "leagues": leagues_list,
         }
     except Exception as e:
         log(f"Error getting filters: {e}", "ERROR")
         conn.close()
-        return {"providers": [], "sports": [], "leagues": []}
+        return {"providers": [], "amazon_services": [], "sports": [], "leagues": []}
 
 
 def get_db_stats():
@@ -2018,6 +2052,7 @@ def api_event_detail(event_id):
             try:
                 prefs = load_user_preferences(conn)
                 enabled_services = prefs.get("enabled_services", [])
+                amazon_master_enabled = prefs.get("amazon_master_enabled", True)
 
                 deeplink = None
                 try:
@@ -2028,7 +2063,10 @@ def api_event_detail(event_id):
                 top_playable = None
                 try:
                     from filter_integration import get_filtered_playables
-                    filtered = get_filtered_playables(conn, event_id, enabled_services)
+                    filtered = get_filtered_playables(
+                        conn, event_id, enabled_services,
+                        amazon_master_enabled=amazon_master_enabled
+                    )
                     if filtered:
                         top_playable = filtered[0]
                 except Exception:
@@ -2456,6 +2494,7 @@ def api_selection_examples():
         enabled_services = prefs.get("enabled_services", [])
         priority_map = prefs.get("service_priorities", {})
         amazon_penalty = prefs.get("amazon_penalty", True)
+        amazon_master_enabled = prefs.get("amazon_master_enabled", True)
         
         # Find events with multiple DISTINCT services (more interesting for examples)
         cur.execute("""
@@ -2516,7 +2555,8 @@ def api_selection_examples():
                 
                 # Get filtered playables (with user preferences) to determine winner
                 filtered_playables = get_filtered_playables(
-                    conn, event_id, enabled_services, priority_map, amazon_penalty
+                    conn, event_id, enabled_services, priority_map, amazon_penalty, 
+                    language_preference="en", amazon_master_enabled=amazon_master_enabled
                 )
                 
                 winner = filtered_playables[0] if filtered_playables else None

@@ -76,18 +76,24 @@ def _write_apple_import_stamp(apple_db_path: Path):
 
 
 
-def run_step(step_num, total_steps, description, command, allow_fail: bool = False):
+def run_step(step_num, total_steps, description, command, allow_fail: bool = False, env: dict = None):
     """Run a pipeline step and handle errors"""
     print(f"\n{'=' * 60}")
     print(f"[{step_num}/{total_steps}] {description}")
     print(f"{'=' * 60}")
 
     try:
+        # Merge custom env vars with current environment
+        step_env = os.environ.copy()
+        if env:
+            step_env.update(env)
+        
         subprocess.run(
             command,
             check=True,
             cwd=BIN_DIR,
             capture_output=False,
+            env=step_env,
         )
         print(f"[OK] Step {step_num} complete")
         return True
@@ -349,7 +355,7 @@ def main():
         print(f"\n[7/{total_steps}] Kayo data not found at {kayo_json}, skipping ingest")
 
     # Step 7b: Scrape ESPN Watch Graph (skippable, runs after Apple TV import)
-    espn_days = os.getenv("ESPN_DAYS", "14")
+    espn_days = os.getenv("ESPN_DAYS", "7")
     espn_db = DATA_DIR / "espn_graph.db"
     
     if skip_scrape:
@@ -441,14 +447,26 @@ def main():
         print("Amazon scraper skipped (--skip-scrape flag)")
     else:
         print("\n" + "=" * 60)
-        print(f"[7e/{total_steps}] Scraping Amazon channels (smart cache)")
+        print(f"[7e/{total_steps}] Scraping Amazon channels (Chrome only)")
         print("=" * 60)
         # Amazon scrape is non-fatal - don't stop pipeline if it fails
         # Uses 5 workers for parallel scraping, respects 7-day cache
+        # AIV_HTTP_PASSES=0 skips HTTP fast passes and goes straight to Chrome
         run_step("7e", total_steps, "Scraping Amazon channel requirements", [
             "python3", "scrape_amazon.py",
             "--db", str(DB_PATH),
             "--workers", "5",
+        ], allow_fail=True, env={"AIV_HTTP_PASSES": "0"})
+        
+        # Step 7e-migrate: Update logical_service on existing Amazon playables
+        # This ensures all playables have correct logical_service based on amazon_channels mapping
+        # Safe to run repeatedly - only updates playables that don't match current mapping
+        print("\n" + "=" * 60)
+        print(f"[7e-migrate/{total_steps}] Updating Amazon playable logical services")
+        print("=" * 60)
+        run_step("7e-migrate", total_steps, "Migrating Amazon logical services", [
+            "python3", "migrate_amazon_logical_services.py",
+            str(DB_PATH),
         ], allow_fail=True)
 
         # Step 8: Prefill HTTP deeplinks for any newly-imported playables
