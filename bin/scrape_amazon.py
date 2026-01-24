@@ -27,7 +27,6 @@ Features:
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import os
 import pickle
@@ -35,19 +34,36 @@ import re
 import sys
 import sqlite3
 import logging
+import time
+import threading
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from playwright.async_api import async_playwright, Browser, Error as PlaywrightError
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import TimeoutException, WebDriverException
+try:
+    from webdriver_manager.chrome import ChromeDriverManager
+    WEBDRIVER_MANAGER_AVAILABLE = True
+except ImportError:
+    WEBDRIVER_MANAGER_AVAILABLE = False
+
+import requests
 
 # Configuration
 DEFAULT_DB = "data/fruit_events.db"
 CACHE_FILE = "data/amazon_gti_cache.pkl"
 CACHE_MAX_AGE_DAYS = 7
 DEBUG_DIR: Optional[str] = None
+
+# HTTP Request configuration
+USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+REQUEST_TIMEOUT = 15
 
 # Known channel mappings
 CHANNEL_MAPPINGS = {
@@ -68,6 +84,76 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger('amazon_scraper')
+
+# Silence urllib3 connection pool warnings (harmless noise from Selenium)
+logging.getLogger('urllib3.connectionpool').setLevel(logging.ERROR)
+
+
+# ==============================================================================
+# CHROME DRIVER SETUP (Cross-platform compatibility)
+# ==============================================================================
+
+def make_driver(headless: bool = True) -> webdriver.Chrome:
+    """Create Chrome/Chromium WebDriver with cross-platform support (matches Apple scraper)"""
+    
+    opts = Options()
+    if headless:
+        opts.add_argument("--headless=new")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    opts.add_experimental_option("useAutomationExtension", False)
+    
+    # Try different methods to initialize driver
+    driver = None
+    
+    # Method 1: System chromedriver
+    try:
+        logger.debug("Attempting system chromedriver...")
+        service = Service()
+        driver = webdriver.Chrome(service=service, options=opts)
+        logger.debug("✓ Successfully initialized with system chromedriver")
+        return driver
+    except Exception as e:
+        logger.debug(f"System chromedriver failed: {e}")
+    
+    # Method 2: webdriver-manager (if available)
+    if WEBDRIVER_MANAGER_AVAILABLE:
+        try:
+            logger.debug("Attempting webdriver-manager...")
+            wm_path = Path(ChromeDriverManager().install())
+            if wm_path.exists():
+                service = Service(executable_path=str(wm_path))
+                driver = webdriver.Chrome(service=service, options=opts)
+                logger.debug("✓ Successfully initialized with webdriver-manager")
+                return driver
+        except Exception as e:
+            logger.debug(f"webdriver-manager failed: {e}")
+    
+    # Method 3: Common system paths
+    common_paths = [
+        "/usr/bin/chromedriver",
+        "/usr/local/bin/chromedriver",
+        "/opt/homebrew/bin/chromedriver",
+    ]
+    
+    for path in common_paths:
+        if Path(path).exists():
+            try:
+                logger.debug(f"Attempting chromedriver at {path}...")
+                service = Service(executable_path=path)
+                driver = webdriver.Chrome(service=service, options=opts)
+                logger.debug(f"✓ Successfully initialized with {path}")
+                return driver
+            except Exception as e:
+                logger.debug(f"Failed with {path}: {e}")
+    
+    raise RuntimeError(
+        "Unable to initialize Chrome/Chromium WebDriver. "
+        "Ensure either Google Chrome or Chromium is installed with matching chromedriver."
+    )
 
 
 # ==============================================================================
@@ -486,6 +572,120 @@ def clean_channel_name(raw_label: str, channel_id: str) -> str:
     return cleaned if cleaned else 'Unknown'
 
 
+def parse_amazon_json(scripts: List[str], gti: str, title: str) -> Dict[str, Any]:
+    """Parse Amazon JSON from script contents"""
+    
+    # First try: Parse as JSON
+    for script_text in scripts:
+        try:
+            data = json.loads(script_text)
+            provider_info = extract_provider_info(data, gti)
+            
+            result = {
+                'gti': gti,
+                'title': title,
+                **provider_info
+            }
+            
+            # If we found valid provider info, return it
+            if 'error' not in provider_info or provider_info.get('channel_id'):
+                return result
+                
+        except json.JSONDecodeError:
+            continue
+    
+    # Second try: Extract data using regex (for malformed JSON)
+    combined_text = ' '.join(scripts)
+    regex_result = extract_provider_info_regex(combined_text, gti, title)
+    if regex_result.get('channel_id') or regex_result.get('success'):
+        return regex_result
+    
+    # No valid data found
+    return {
+        'gti': gti,
+        'title': title,
+        'error': 'NO_JSON',
+        'error_detail': 'No valid JSON found in scripts',
+    }
+
+
+def extract_provider_info_regex(text: str, gti: str, title: str) -> Dict[str, Any]:
+    """Extract channel info using regex when JSON parsing fails"""
+    
+    result = {
+        'gti': gti,
+        'title': title,
+        'channel_id': None,
+        'channel_name': None,
+        'subscription_type': None,
+        'availability': 'unknown',
+        'requires_prime': False,
+        'is_free': False,
+    }
+    
+    # Check for known channel names
+    channel_patterns = {
+        'NBA League Pass': 'nba_league_pass',
+        'Peacock': 'peacock',
+        'DAZN': 'dazn',
+        'FOX One': 'fox_one',
+        'FanDuel': 'fanduel',
+        'ViX Premium': 'vix_premium',
+        'ViX': 'vix',
+        'Max': 'max',
+    }
+    
+    for name, code in channel_patterns.items():
+        if name in text or name.lower() in text.lower():
+            result['channel_id'] = code
+            result['channel_name'] = name
+            result['subscription_type'] = 'CHANNEL'
+            result['availability'] = 'requires_subscription'
+            break
+    
+    # Check for free/entitled - but be VERY specific about "with ads"
+    # Don't just search entire page text, look for specific patterns
+    if 'Entitled' in text or 'entitled' in text:
+        # Only mark as "Free with Ads" if we see explicit free-with-ads messaging
+        # NOT just because "with ads" appears somewhere on the page
+        # Look for patterns like "Watch free with ads" or "Free (with ads)"
+        text_lower = text.lower()
+        
+        # Specific patterns that indicate truly free content
+        free_with_ads_patterns = [
+            'watch free with ads',
+            'free (with ads)',
+            'free with ads',
+            'stream free with ads',
+        ]
+        
+        is_free_with_ads = any(pattern in text_lower for pattern in free_with_ads_patterns)
+        
+        if is_free_with_ads:
+            result['channel_id'] = 'prime_free'
+            result['channel_name'] = 'Free with Ads'
+            result['is_free'] = True
+        else:
+            # Default to "Included with Prime" for Prime exclusives
+            result['channel_id'] = 'prime_included'
+            result['channel_name'] = 'Included with Prime'
+        result['requires_prime'] = True
+        result['subscription_type'] = 'PRIME'
+        result['availability'] = 'entitled'
+        result['success'] = True
+        return result
+    
+    # If we found a channel, mark as success
+    if result['channel_id']:
+        result['success'] = True
+        return result
+    
+    # No channel info found
+    result['error'] = 'NO_CHANNEL_REGEX'
+    result['error_detail'] = 'Could not extract channel info from text'
+    return result
+
+
 def extract_provider_info(data: Dict[str, Any], main_gti: str) -> Dict[str, Any]:
     """Extract channel/subscription info from Amazon page JSON"""
     
@@ -646,38 +846,25 @@ def extract_provider_info(data: Dict[str, Any], main_gti: str) -> Dict[str, Any]
     return result
 
 
-async def scrape_single_gti_async(
-    browser: Browser,
+def scrape_single_gti_http(
     gti: str,
     url: str,
     title: str,
-    nav_timeout_ms: int = 15000,
+    timeout_sec: int = 15,
 ) -> Dict[str, Any]:
-    """Scrape a single GTI"""
-    
-    ctx = None
-    page = None
+    """Scrape a single GTI using fast HTTP requests (no Chrome needed!)"""
     
     try:
-        ctx = await browser.new_context()
-        page = await ctx.new_page()
+        # Keep headers minimal - Amazon blocks requests with too many headers
+        headers = {
+            'User-Agent': USER_AGENT,
+        }
         
-        # Navigate
-        try:
-            response = await page.goto(url, wait_until="domcontentloaded", timeout=nav_timeout_ms)
-            http_status = response.status if response else 0
-        except PlaywrightError as e:
-            if 'net::ERR_' in str(e) or 'NS_ERROR_' in str(e):
-                return {
-                    'gti': gti,
-                    'title': title,
-                    'error': 'NETWORK_ERROR',
-                    'error_detail': str(e)[:200],
-                    'success': False
-                }
-            raise
+        # Make HTTP request
+        response = requests.get(url, headers=headers, timeout=timeout_sec)
+        http_status = response.status_code
         
-        # Check for 404
+        # Check for actual 404
         if http_status == 404:
             return {
                 'gti': gti,
@@ -688,59 +875,157 @@ async def scrape_single_gti_async(
                 'success': False
             }
         
-        await page.wait_for_timeout(2000)
+        # Check page size - stub pages are typically < 10KB
+        page_size = len(response.text)
+        is_stub_page = page_size < 10000
         
-        # Extract JSON
-        scripts_json = await page.evaluate(r"""
-() => {
-  const GTI = /amzn1\.dv\.gti\.[0-9a-fA-F-]{36}|B0[A-Z0-9]{8}/;
-  const scripts = document.querySelectorAll('script');
-  for (const script of scripts) {
-    const text = script.textContent || '';
-    if (GTI.test(text)) {
-      try { JSON.parse(text); return text; } catch (e) {}
-    }
-  }
-  return null;
-}
-""")
+        # Check if page contains "404" or "not found" indicators
+        page_text = response.text.lower()
+        has_404_text = '404' in page_text or 'page not found' in page_text or 'page you requested cannot be found' in page_text
+        
+        # If it's a small stub page with 404 indicators, it's a real 404
+        if is_stub_page and has_404_text:
+            return {
+                'gti': gti,
+                'title': title,
+                'error': 'STALE_GTI_404',
+                'error_detail': 'GTI no longer exists on Amazon (stub page with 404)',
+                'http_status': http_status,
+                'success': False
+            }
+        
+        # Extract JSON from page source
+        scripts_json = extract_scripts_with_gti(response.text)
+        
+        if not scripts_json:
+            # No JSON found - this shouldn't happen based on our test
+            # Return error so we can fall back to Chrome if needed
+            return {
+                'gti': gti,
+                'title': title,
+                'error': 'NO_SCRIPT_HTTP',
+                'error_detail': 'No script tags with GTI found (try Chrome)',
+                'success': False,
+                'http_status': http_status
+            }
+        
+        # Parse JSON
+        result = parse_amazon_json(scripts_json, gti, title)
+        result['http_status'] = http_status
+        result['method'] = 'http'  # Mark as HTTP scrape
+        
+        if 'error' not in result:
+            result['success'] = True
+        else:
+            result['success'] = False
+        
+        return result
+        
+    except requests.Timeout:
+        return {
+            'gti': gti,
+            'title': title,
+            'error': 'TIMEOUT_HTTP',
+            'error_detail': f'HTTP request timeout after {timeout_sec}s',
+            'success': False
+        }
+    except requests.RequestException as e:
+        return {
+            'gti': gti,
+            'title': title,
+            'error': 'NETWORK_ERROR_HTTP',
+            'error_detail': str(e)[:200],
+            'success': False
+        }
+    except Exception as e:
+        logger.debug(f"HTTP scrape failed for {gti}: {e}")
+        return {
+            'gti': gti,
+            'title': title,
+            'error': 'HTTP_FAILED',
+            'error_detail': str(e)[:200],
+            'success': False
+        }
+
+
+def scrape_single_gti_with_driver(
+    driver: webdriver.Chrome,
+    gti: str,
+    url: str,
+    title: str,
+    timeout_sec: int = 15,
+) -> Dict[str, Any]:
+    """Scrape a single GTI using an existing driver instance (for pooling)"""
+    
+    try:
+        driver.set_page_load_timeout(timeout_sec)
+        
+        # Navigate
+        try:
+            driver.get(url)
+            http_status = 200  # Selenium doesn't expose HTTP status directly
+        except TimeoutException:
+            return {
+                'gti': gti,
+                'title': title,
+                'error': 'TIMEOUT',
+                'error_detail': f'Page load timeout after {timeout_sec}s',
+                'success': False
+            }
+        except WebDriverException as e:
+            error_msg = str(e)
+            if 'net::ERR_' in error_msg or 'NS_ERROR_' in error_msg:
+                return {
+                    'gti': gti,
+                    'title': title,
+                    'error': 'NETWORK_ERROR',
+                    'error_detail': error_msg[:200],
+                    'success': False
+                }
+            raise
+        
+        # Check page size and 404 indicators (same logic as HTTP)
+        page_source = driver.page_source
+        page_size = len(page_source)
+        is_stub_page = page_size < 10000
+        
+        page_text = page_source.lower()
+        has_404_text = '404' in page_text or 'page not found' in page_text or 'page you requested cannot be found' in page_text
+        
+        # If it's a small stub page with 404 indicators, it's a real 404
+        if is_stub_page and has_404_text:
+            return {
+                'gti': gti,
+                'title': title,
+                'error': 'STALE_GTI_404',
+                'error_detail': 'GTI no longer exists on Amazon (stub page with 404)',
+                'http_status': 404,
+                'success': False
+            }
+        
+        time.sleep(2)  # Wait for JS to execute
+        
+        # Extract JSON from page source
+        page_source = driver.page_source
+        scripts_json = extract_scripts_with_gti(page_source)
         
         if not scripts_json:
             return {
                 'gti': gti,
                 'title': title,
-                'error': 'NO_JSON',
-                'error_detail': 'No JSON found on page',
-                'http_status': http_status,
+                'error': 'NO_SCRIPT',
+                'error_detail': 'No script tags with GTI found',
                 'success': False
             }
         
-        # Parse and extract
-        try:
-            data = json.loads(scripts_json)
-        except json.JSONDecodeError as e:
-            return {
-                'gti': gti,
-                'title': title,
-                'error': 'PARSE_ERROR',
-                'error_detail': f'JSON parse failed: {e}',
-                'http_status': http_status,
-                'success': False
-            }
+        # Parse JSON
+        result = parse_amazon_json(scripts_json, gti, title)
+        result['http_status'] = http_status
         
-        provider_info = extract_provider_info(data, gti)
-        
-        result = {
-            'gti': gti,
-            'title': title,
-            'http_status': http_status,
-            **provider_info
-        }
-        
-        if 'error' in provider_info:
-            result['success'] = False
-        else:
+        if 'error' not in result:
             result['success'] = True
+        else:
+            result['success'] = False
         
         return result
         
@@ -753,78 +1038,299 @@ async def scrape_single_gti_async(
             'error_detail': str(e)[:200],
             'success': False
         }
+
+
+def scrape_single_gti(
+    gti: str,
+    url: str,
+    title: str,
+    timeout_sec: int = 15,
+) -> Dict[str, Any]:
+    """Scrape a single GTI using Selenium (creates new driver - for backwards compatibility)"""
+    
+    driver = None
+    
+    try:
+        driver = make_driver(headless=True)
+        return scrape_single_gti_with_driver(driver, gti, url, title, timeout_sec)
+        
+    except Exception as e:
+        logger.error(f"Unexpected error for {gti}: {e}")
+        return {
+            'gti': gti,
+            'title': title,
+            'error': 'UNKNOWN',
+            'error_detail': str(e)[:200],
+            'success': False
+        }
     finally:
-        if page:
-            await page.close()
-        if ctx:
-            await ctx.close()
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
 
-async def scrape_all_async(
+def extract_scripts_with_gti(page_source: str) -> List[str]:
+    """Extract script contents that contain GTIs and decode HTML entities"""
+    import html
+    
+    GTI_PATTERN = re.compile(r'amzn1\.dv\.gti\.[0-9a-fA-F-]{36}|B0[A-Z0-9]{8}')
+    
+    scripts = []
+    script_pattern = re.compile(r'<script[^>]*>(.*?)</script>', re.DOTALL | re.IGNORECASE)
+    
+    for match in script_pattern.finditer(page_source):
+        script_content = match.group(1)
+        if GTI_PATTERN.search(script_content):
+            # Decode HTML entities (&#34; -> ", etc.)
+            decoded_content = html.unescape(script_content)
+            scripts.append(decoded_content)
+    
+    return scripts
+
+
+def scrape_all_threaded(
     events: List[Dict[str, str]],
     workers: int = 5,
     retry: int = 2,
+    http_only: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Scrape all GTIs with async workers"""
+    """Scrape all GTIs with multi-pass HTTP retries, then Chrome fallback for stubborn failures"""
     
-    results = []
-    semaphore = asyncio.Semaphore(workers)
-    completed = {'count': 0}
+    completed = {'count': 0, 'lock': threading.Lock()}
     total = len(events)
     
-    async def scrape_with_semaphore(event: Dict[str, str]) -> Dict[str, Any]:
-        async with semaphore:
-            result = None
-            for attempt in range(retry + 1):
-                try:
-                    async with async_playwright() as p:
-                        browser = await p.chromium.launch(headless=True)
-                        result = await scrape_single_gti_async(
-                            browser,
-                            event['gti'],
-                            event['url'],
-                            event['title']
-                        )
-                        await browser.close()
-                    
-                    if result['success'] or result.get('error') == 'STALE_GTI_404':
-                        break
-                    
-                except Exception as e:
-                    if attempt == retry:
-                        logger.error(f"Failed after {retry} retries: {event['gti']}")
-                        result = {
-                            'gti': event['gti'],
-                            'title': event['title'],
-                            'error': 'UNKNOWN',
-                            'error_detail': str(e)[:200],
-                            'success': False
-                        }
-            
-            # Log progress
-            completed['count'] += 1
-            current = completed['count']
-            
-            # Log every GTI for better visibility
-            status = "✓" if result.get('success') else "✗"
-            channel = result.get('channel_name', result.get('error', 'Unknown'))[:30]
-            
-            if current % 5 == 0 or current == total:
-                pct = 100 * current / total
-                logger.info(f"[{current}/{total}] ({pct:.1f}%) {status} {event['title'][:35]:35} | {channel}")
-            
-            return result
+    # Multi-pass strategy: Try HTTP 3 times, then Chrome for failures
+    MAX_HTTP_PASSES = 3
     
-    # Process all events
-    tasks = [scrape_with_semaphore(event) for event in events]
-    results = await asyncio.gather(*tasks)
+    # Track which GTIs to process
+    remaining_events = events.copy()
+    all_results = {}  # gti -> result mapping
+    
+    # HTTP Passes 1-3
+    for http_pass in range(1, MAX_HTTP_PASSES + 1):
+        if not remaining_events:
+            break
+            
+        logger.info(f"\n{'='*80}")
+        logger.info(f"HTTP PASS {http_pass}/{MAX_HTTP_PASSES} - {len(remaining_events)} GTIs remaining")
+        logger.info(f"{'='*80}")
+        
+        pass_results = scrape_pass_http(
+            remaining_events, 
+            workers, 
+            completed, 
+            total
+        )
+        
+        # Separate successes from failures
+        new_failures = []
+        for result in pass_results:
+            gti = result['gti']
+            all_results[gti] = result
+            
+            # Check if this is a real failure that should be retried
+            error = result.get('error')
+            if not result.get('success') and error not in ['STALE_GTI_404']:
+                # Only retry network/bot-detection issues (HTTP 503, timeouts, stub pages)
+                # Don't retry parsing failures (NO_JSON, NO_CHANNEL_REGEX) - Chrome won't help
+                if error in ['TIMEOUT_HTTP', 'NETWORK_ERROR_HTTP', 'NO_SCRIPT_HTTP', 'HTTP_FAILED']:
+                    new_failures.append({
+                        'gti': result['gti'],
+                        'url': f"https://www.amazon.com/gp/video/detail/{result['gti']}",
+                        'title': result['title']
+                    })
+        
+        logger.info(f"Pass {http_pass} complete: {len(pass_results) - len(new_failures)} succeeded, {len(new_failures)} to retry")
+        remaining_events = new_failures
+        
+        # Small delay between passes to avoid triggering rate limits
+        if remaining_events and http_pass < MAX_HTTP_PASSES:
+            logger.info("Waiting 2 seconds before next pass...")
+            import time
+            time.sleep(2)
+    
+    # Chrome fallback for remaining failures (if not in http_only mode)
+    if remaining_events and not http_only:
+        logger.info(f"\n{'='*80}")
+        logger.info(f"CHROME FALLBACK - {len(remaining_events)} stubborn GTIs")
+        logger.info(f"{'='*80}")
+        
+        chrome_results = scrape_pass_chrome(
+            remaining_events,
+            workers,
+            completed,
+            total
+        )
+        
+        for result in chrome_results:
+            gti = result['gti']
+            all_results[gti] = result
+    
+    elif remaining_events and http_only:
+        logger.info(f"\n{len(remaining_events)} GTIs still failed (Chrome disabled with --http-only)")
+    
+    # Convert results dict to list
+    results = [all_results[event['gti']] for event in events]
     
     return results
 
 
-# ==============================================================================
-# DATABASE IMPORT
-# ==============================================================================
+def scrape_pass_http(
+    events: List[Dict[str, str]],
+    workers: int,
+    completed: Dict,
+    total: int
+) -> List[Dict[str, Any]]:
+    """Single pass of HTTP scraping with threading"""
+    
+    results = []
+    pass_completed = {'count': 0, 'lock': threading.Lock()}
+    pass_total = len(events)
+    
+    def scrape_and_log(event: Dict[str, str]) -> Dict[str, Any]:
+        """Scrape a GTI with HTTP and log progress"""
+        # Add 3-second delay between requests to avoid rate limiting
+        import time
+        time.sleep(3)
+        
+        result = scrape_single_gti_http(
+            event['gti'],
+            event['url'],
+            event['title']
+        )
+        
+        # Log progress - track both global and pass-specific
+        with completed['lock']:
+            completed['count'] += 1
+            global_current = completed['count']
+        
+        with pass_completed['lock']:
+            pass_completed['count'] += 1
+            pass_current = pass_completed['count']
+        
+        # Log every 5th GTI
+        status = "✓" if result.get('success') else "✗"
+        channel = result.get('channel_name', result.get('error', 'Unknown'))[:30]
+        title = result.get('title', 'Unknown')[:35]
+        
+        if pass_current % 5 == 0 or pass_current == pass_total:
+            pct = 100 * global_current / total
+            logger.info(f"[{global_current}/{total}] ({pct:.1f}%) {status} ⚡ {title:35} | {channel}")
+        
+        return result
+    
+    # Process with thread pool
+    with ThreadPoolExecutor(max_workers=workers * 2) as executor:
+        futures = [executor.submit(scrape_and_log, event) for event in events]
+        
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                results.append(result)
+            except Exception as e:
+                logger.error(f"Thread execution failed: {e}")
+    
+    return results
+
+
+def scrape_pass_chrome(
+    events: List[Dict[str, str]],
+    workers: int,
+    completed: Dict,
+    total: int
+) -> List[Dict[str, Any]]:
+    """Chrome fallback pass for stubborn failures"""
+    
+    results = []
+    pass_completed = {'count': 0, 'lock': threading.Lock()}
+    pass_total = len(events)
+    
+    # Create driver pool
+    driver_pool = []
+    logger.info(f"Creating driver pool with {workers} Chrome instances...")
+    
+    for i in range(workers):
+        try:
+            logger.info(f"  Creating driver {i+1}/{workers}...")
+            driver = make_driver(headless=True)
+            driver_pool.append(driver)
+            logger.info(f"  ✓ Driver {i+1}/{workers} ready")
+        except Exception as e:
+            logger.error(f"Failed to create driver {i+1}/{workers}: {e}")
+    
+    if not driver_pool:
+        logger.error("Failed to create any Chrome drivers - skipping Chrome fallback")
+        return results
+    
+    logger.info(f"✓ Driver pool ready with {len(driver_pool)} instances")
+    
+    # Semaphore and round-robin index
+    pool_semaphore = threading.Semaphore(len(driver_pool))
+    driver_index = {'next': 0, 'lock': threading.Lock()}
+    
+    def get_next_driver():
+        """Get next available driver from pool (round-robin)"""
+        with driver_index['lock']:
+            idx = driver_index['next']
+            driver_index['next'] = (idx + 1) % len(driver_pool)
+            return driver_pool[idx]
+    
+    def scrape_and_log_chrome(event: Dict[str, str]) -> Dict[str, Any]:
+        """Scrape with Chrome and log progress"""
+        with pool_semaphore:
+            driver = get_next_driver()
+            
+            result = scrape_single_gti_with_driver(
+                driver,
+                event['gti'],
+                event['url'],
+                event['title']
+            )
+            result['method'] = 'chrome'
+        
+        # Log progress - track both global and pass-specific
+        with completed['lock']:
+            completed['count'] += 1
+            global_current = completed['count']
+        
+        with pass_completed['lock']:
+            pass_completed['count'] += 1
+            pass_current = pass_completed['count']
+        
+        status = "✓" if result.get('success') else "✗"
+        channel = result.get('channel_name', result.get('error', 'Unknown'))[:30]
+        title = result.get('title', 'Unknown')[:35]
+        
+        if pass_current % 5 == 0 or pass_current == pass_total:
+            pct = 100 * global_current / total
+            logger.info(f"[{global_current}/{total}] ({pct:.1f}%) {status} 🌐 {title:35} | {channel}")
+        
+        return result
+    
+    # Process with thread pool
+    try:
+        with ThreadPoolExecutor(max_workers=len(driver_pool) * 2) as executor:
+            futures = [executor.submit(scrape_and_log_chrome, event) for event in events]
+            
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    logger.error(f"Chrome scrape failed: {e}")
+    finally:
+        # Clean up drivers
+        logger.info("Closing driver pool...")
+        for i, driver in enumerate(driver_pool):
+            try:
+                driver.quit()
+            except Exception as e:
+                logger.debug(f"Error closing driver {i+1}: {e}")
+    
+    return results
+
 
 def import_to_database(results: List[Dict[str, Any]], db_path: str) -> None:
     """Import scrape results to database"""
@@ -962,7 +1468,8 @@ def extract_gtis_from_db(db_path: str, max_gtis: Optional[int] = None) -> List[D
     # Get current time in UTC
     now = datetime.now(timezone.utc).isoformat()
     
-    # Get ALL playables for future events (not just one per event)
+    # Get ALL playables for UPCOMING events only (starts within next 24 hours, hasn't started yet)
+    # Amazon typically doesn't publish event pages until ~24 hours before start time
     query = """
         SELECT 
             p.title,
@@ -971,10 +1478,16 @@ def extract_gtis_from_db(db_path: str, max_gtis: Optional[int] = None) -> List[D
         JOIN events e ON p.event_id = e.id
         WHERE p.provider = 'aiv' 
             AND p.deeplink_play LIKE '%gti=%'
-            AND (e.start_utc IS NULL OR e.start_utc >= ?)
+            AND (
+                e.start_utc IS NULL 
+                OR (
+                    datetime(e.start_utc) >= datetime('now')  -- Event hasn't started yet
+                    AND datetime(e.start_utc) <= datetime('now', '+24 hours')  -- Starts within 24 hours
+                )
+            )
     """
     
-    cursor.execute(query, (now,))
+    cursor.execute(query)
     rows = cursor.fetchall()
     
     main_gti_pattern = re.compile(r'[?&]gti=(amzn1\.dv\.gti\.[0-9a-f-]{36})')
@@ -1020,15 +1533,16 @@ def extract_gtis_from_db(db_path: str, max_gtis: Optional[int] = None) -> List[D
         if max_gtis and len(events) >= max_gtis:
             break
     
-    # Count how many past events were skipped
+    # Count how many past events were skipped  
     cursor.execute("""
         SELECT COUNT(*)
         FROM playables p
         JOIN events e ON p.event_id = e.id
         WHERE p.provider = 'aiv' 
             AND p.deeplink_play LIKE '%gti=%'
-            AND e.start_utc < ?
-    """, (now,))
+            AND e.start_utc IS NOT NULL
+            AND datetime(e.start_utc) < datetime('now')
+    """)
     skipped_past = cursor.fetchone()[0]
     
     conn.close()
@@ -1051,6 +1565,7 @@ def main():
     parser.add_argument('--no-cache', action='store_true', help='Disable cache')
     parser.add_argument('--bootstrap', action='store_true', help='Force schema update')
     parser.add_argument('--debug-dir', help='Debug output directory')
+    parser.add_argument('--http-only', action='store_true', help='Use HTTP only (no Chrome fallback)')
     
     args = parser.parse_args()
     
@@ -1084,7 +1599,11 @@ def main():
     
     # Scrape
     logger.info(f"\nScraping {len(events)} GTIs with {args.workers} workers...")
-    results = asyncio.run(scrape_all_async(events, args.workers, args.retry))
+    if args.http_only:
+        logger.info("Using HTTP only (Chrome fallback disabled)")
+    else:
+        logger.info("Using fast HTTP requests (Chrome fallback if needed)...")
+    results = scrape_all_threaded(events, args.workers, args.retry, http_only=args.http_only)
     
     # Update cache
     if not args.no_cache:
@@ -1100,6 +1619,8 @@ def main():
     # Summary
     successful = sum(1 for r in results if r.get('success'))
     failed = len(results) - successful
+    http_count = sum(1 for r in results if r.get('method') == 'http')
+    chrome_count = sum(1 for r in results if r.get('method') == 'chrome')
     
     logger.info("\n" + "="*80)
     logger.info("SCRAPE COMPLETE")
@@ -1107,6 +1628,8 @@ def main():
     logger.info(f"Total: {len(results)}")
     logger.info(f"Success: {successful} ({100*successful/len(results):.1f}%)")
     logger.info(f"Failed: {failed}")
+    if http_count or chrome_count:
+        logger.info(f"Method: ⚡ HTTP {http_count} | 🌐 Chrome {chrome_count}")
     logger.info("="*80)
 
 

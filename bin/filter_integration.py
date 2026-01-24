@@ -252,9 +252,8 @@ def apply_amazon_penalty(
     if not amazon_penalty or not playables:
         return playables
     
-    # Treat Amazon Prime Video ("aiv") and Amazon Exclusives ("aiv_exclusive")
     # as "Amazon" for penalty purposes.
-    amazon_services = {"aiv", "aiv_exclusive"}
+    amazon_services = {"aiv", "aiv_aggregator"}
 
     # Check if we have non-Amazon options
     has_non_amazon = any(
@@ -295,47 +294,13 @@ def get_filtered_playables(
     """
     cur = conn.cursor()
 
-    def is_aiv_exclusive_event(eid: str) -> bool:
-        """True when event has an AIV playable and no other *mapped* logical services.
-
-        "mapped" here means logical_service is non-null and non-empty.
-        (This matches your "aiv_exclusive_mapped_only" SQL test.)
-        """
-        try:
-            cur.execute(
-                """
-                SELECT 1
-                  FROM events e
-                 WHERE e.id = ?
-                   AND EXISTS (
-                         SELECT 1 FROM playables p
-                          WHERE p.event_id = e.id AND p.logical_service = 'aiv'
-                   )
-                   AND NOT EXISTS (
-                         SELECT 1 FROM playables p
-                          WHERE p.event_id = e.id
-                            AND p.logical_service IS NOT NULL
-                            AND p.logical_service <> ''
-                            AND p.logical_service <> 'aiv'
-                   )
-                 LIMIT 1
-                """,
-                (eid,),
-            )
-            return cur.fetchone() is not None
-        except Exception:
-            return False
-
     # "Amazon Exclusives" mode: treat AIV playables as a separate logical service
     # but ONLY for events where Amazon Prime Video is the *only* mapped service.
     exclusive_mode = (
         enabled_services
-        and ("aiv_exclusive" in enabled_services)
         and ("aiv" not in enabled_services)
     )
 
-    if exclusive_mode and not is_aiv_exclusive_event(event_id):
-        return []
 
     try:
         cur.execute(
@@ -392,13 +357,6 @@ def get_filtered_playables(
             else:
                 # Fallback: use raw provider
                 playable["logical_service"] = playable["provider"]
-
-            # If the user enabled the special "Amazon Exclusives" service
-            # (and did NOT enable regular Amazon/AIV), relabel AIV playables
-            # to the synthetic service so it behaves like a fully separate
-            # service for filtering and display.
-            if exclusive_mode and playable.get("logical_service") == "aiv":
-                playable["logical_service"] = "aiv_exclusive"
 
             # Filter by enabled services
             if enabled_services:  # If list not empty, filter

@@ -431,6 +431,26 @@ def main():
     ]):
         return 1
 
+    # Step 7e: Scrape Amazon channels (7-day smart cache)
+    # Identifies which Amazon subscription is required for each event
+    # Only re-scrapes GTIs that are stale or haven't been scraped yet
+    if skip_scrape:
+        print("\n" + "=" * 60)
+        print(f"[7e/{total_steps}] Scraping Amazon channels. SKIPPED")
+        print("=" * 60)
+        print("Amazon scraper skipped (--skip-scrape flag)")
+    else:
+        print("\n" + "=" * 60)
+        print(f"[7e/{total_steps}] Scraping Amazon channels (smart cache)")
+        print("=" * 60)
+        # Amazon scrape is non-fatal - don't stop pipeline if it fails
+        # Uses 5 workers for parallel scraping, respects 7-day cache
+        run_step("7e", total_steps, "Scraping Amazon channel requirements", [
+            "python3", "scrape_amazon.py",
+            "--db", str(DB_PATH),
+            "--workers", "5",
+        ], allow_fail=True)
+
         # Step 8: Prefill HTTP deeplinks for any newly-imported playables
     if not run_step("8", total_steps, "Prefilling HTTP deeplinks (http_deeplink_url)", [
         "python3", "migrate_add_adb_lanes.py",

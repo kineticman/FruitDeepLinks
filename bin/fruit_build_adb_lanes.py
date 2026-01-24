@@ -242,56 +242,6 @@ def load_events_for_provider(
     """
     cur = conn.cursor()
 
-    # Synthetic provider: Amazon Exclusives
-    #
-    # "aiv_exclusive" is NOT a real logical_service stored in the playables table.
-    # It represents events where Amazon Prime Video (logical_service='aiv') is the
-    # ONLY mapped streaming option for that event.
-    if provider_code == "aiv_exclusive":
-        if enabled_services and "aiv_exclusive" not in enabled_services:
-            return []
-
-        cur.execute(
-            """
-            SELECT
-                e.id,
-                e.title,
-                e.start_utc,
-                e.end_utc,
-                e.start_ms,
-                e.end_ms,
-                e.classification_json
-            FROM events e
-            WHERE EXISTS (
-                SELECT 1 FROM playables p
-                 WHERE p.event_id = e.id AND p.logical_service = 'aiv'
-            )
-              AND NOT EXISTS (
-                SELECT 1 FROM playables p
-                 WHERE p.event_id = e.id
-                   AND p.logical_service IS NOT NULL
-                   AND p.logical_service <> ''
-                   AND p.logical_service <> 'aiv'
-            )
-            ORDER BY datetime(e.start_utc) ASC
-            """
-        )
-
-        out: List[Dict[str, Any]] = []
-        for (eid, title, start_utc, end_utc, start_ms, end_ms, classification_json) in cur.fetchall():
-            out.append(
-                {
-                    "id": eid,
-                    "title": title,
-                    "start_utc": start_utc,
-                    "end_utc": end_utc,
-                    "start_ms": start_ms,
-                    "end_ms": end_ms,
-                    "classification_json": classification_json,
-                }
-            )
-        return out
-    
     # Get all logical services that map to this ADB provider
     all_logical_services = get_logical_services_for_adb_provider(provider_code)
     
@@ -434,7 +384,6 @@ def build_adb_lanes(db_path: str, provider_filter: Optional[str] = None) -> None
 
         # Only enforce enabled_services when the user explicitly set a non-empty allowlist.
         # Check if ANY of the logical services mapped to this ADB provider are enabled
-        # OR if the provider code itself is enabled (for synthetic providers like aiv_exclusive)
         if enabled_services:
             logical_services = get_logical_services_for_adb_provider(provider_code)
             # Check both logical services AND the provider code itself

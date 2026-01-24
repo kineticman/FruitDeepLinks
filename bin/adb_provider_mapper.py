@@ -18,6 +18,20 @@ ADB_PROVIDER_MAP = {
     'sportscenter': 'sportscenter',  # Keep original mapping
     'sportsonespn': 'sportscenter',  # Legacy ESPN+ code
     
+    # Amazon services -> aiv (all Amazon content uses same ADB lanes)
+    'aiv_prime': 'aiv',
+    'aiv_nba_league_pass': 'aiv',
+    'aiv_peacock': 'aiv',
+    'aiv_dazn': 'aiv',
+    'aiv_fox': 'aiv',
+    'aiv_vix_premium': 'aiv',
+    'aiv_vix': 'aiv',
+    'aiv_fanduel': 'aiv',
+    'aiv_max': 'aiv',
+    'aiv_free': 'aiv',
+    'aiv_aggregator': 'aiv',
+    'aiv': 'aiv',  # Keep original mapping
+    
     # Everything else maps to itself
     # (We only need to specify exceptions to the identity mapping)
 }
@@ -46,11 +60,6 @@ def get_logical_services_for_adb_provider(adb_provider: str) -> List[str]:
     Returns:
         List of logical service codes that map to this provider
     """
-    # Special case: aiv_exclusive is a synthetic ADB provider
-    # Playables are stored as logical_service='aiv' in the database
-    if adb_provider == 'aiv_exclusive':
-        return ['aiv']
-    
     # Build reverse mapping
     services = []
     for logical, adb in ADB_PROVIDER_MAP.items():
