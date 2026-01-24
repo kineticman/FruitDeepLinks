@@ -28,7 +28,9 @@ from __future__ import annotations
 
 import argparse
 import json
+from urllib.parse import urlparse, parse_qs, urljoin
 import os
+HTTP_TIMEOUT = float(os.getenv('AIV_HTTP_TIMEOUT','12'))
 import pickle
 import re
 import sys
@@ -46,6 +48,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException, WebDriverException
 try:
     from webdriver_manager.chrome import ChromeDriverManager
@@ -61,9 +64,15 @@ CACHE_FILE = "data/amazon_gti_cache.pkl"
 CACHE_MAX_AGE_DAYS = 7
 DEBUG_DIR: Optional[str] = None
 
+
 # HTTP Request configuration
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 REQUEST_TIMEOUT = 15
+AIV_CHROME_PAGELOAD_TIMEOUT = int(os.getenv('AIV_CHROME_PAGELOAD_TIMEOUT','25'))
+AIV_CHROME_TASK_TIMEOUT = int(os.getenv('AIV_CHROME_TASK_TIMEOUT','60'))
+AIV_LOG_HEARTBEAT_SECS = int(os.getenv('AIV_LOG_HEARTBEAT_SECS','20'))
+AIV_LOG_EVERY = int(os.getenv('AIV_LOG_EVERY','5'))
+AIV_ALLOW_JSON_FALLBACK = os.getenv('AIV_ALLOW_JSON_FALLBACK','0').strip() in ('1','true','yes')
 
 # Known channel mappings
 CHANNEL_MAPPINGS = {
@@ -546,6 +555,363 @@ def save_cache(cache: Dict[str, Any]) -> None:
         logger.warning(f"Failed to save cache: {e}")
 
 
+
+# ==============================================================================
+# ENTITLEMENT BADGE (AUTHORITATIVE PROVIDER SOURCE)
+# ==============================================================================
+
+def _clean_entitlement_text(s: str) -> str:
+    """Normalize the on-page entitlement string (what the user sees)."""
+    if not s:
+        return ""
+    s = " ".join(str(s).split()).strip()
+    
+    # Strip pricing patterns (e.g. "Subscribe for $18.49/month")
+    # These are fine - benefitId will handle provider detection
+    import re
+    if re.search(r'subscribe for \$\d+\.\d+', s, re.IGNORECASE):
+        return ""  # Return empty so benefitId logic takes over
+    
+    # Normalize common prefixes (keep this conservative — no inference)
+    prefixes = (
+        "Free trial of ",
+        "Free trial with ",
+        "Try ",
+        "Watch with ",
+        "Watch LIVE ",
+        "Watch Live ",
+        "Watch live ",
+        "Start your ",
+        "Start your free trial to ",
+        "Start your free trial with ",
+        "Start your Paramount+ subscription",
+        "Subscribe for $",  # Generic pricing prefix
+    )
+    for p in prefixes:
+        if s.startswith(p):
+            s = s[len(p):].strip()
+            break
+    
+    # Strip trailing punctuation
+    if s.endswith("."):
+        s = s[:-1].strip()
+    
+    return s
+
+
+def _extract_entitlement_from_dom(driver: webdriver.Chrome, timeout_sec: float = 2.0) -> Optional[str]:
+    """
+    Return the visible entitlement/provider string shown on the page hero/watch area.
+
+    This is the single source of truth. If it isn't present, we treat as UNKNOWN (no inference).
+    """
+    selectors = [
+        "span[data-automation-id='entitlement-message']",
+        "span[data-testid='entitlement-message']",
+        # Occasionally wrapped differently; keep conservative.
+        "div[data-testid='entitlement-container'] span",
+    ]
+
+    # Quick retries to allow late-rendered badge to appear
+    deadline = time.time() + max(0.1, float(timeout_sec))
+    last_val = ""
+
+    while time.time() < deadline:
+        for sel in selectors:
+            try:
+                els = driver.find_elements(By.CSS_SELECTOR, sel)
+                for el in els[:3]:
+                    try:
+                        txt = _clean_entitlement_text(el.text)
+                        if txt:
+                            return txt
+                        # Some pages have empty .text but textContent works
+                        txt2 = _clean_entitlement_text(driver.execute_script("return arguments[0].textContent || '';", el))
+                        if txt2:
+                            return txt2
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+
+        # As an extra fallback (still DOM-scoped), querySelector via JS
+        try:
+            js = """
+const el = document.querySelector('span[data-automation-id="entitlement-message"],span[data-testid="entitlement-message"],div[data-testid="entitlement-container"] span');
+return el ? (el.textContent || '') : '';
+"""
+            val = _clean_entitlement_text(driver.execute_script(js) or "")
+            if val:
+                return val
+            last_val = val
+        except Exception:
+            pass
+
+        time.sleep(0.15)
+
+    return _clean_entitlement_text(last_val) or None
+
+
+def _channel_id_from_entitlement(entitlement: str) -> Optional[str]:
+    """
+    Map entitlement text -> amazon_services.amazon_channel_id (when we can do so safely).
+    If unknown, return None and store channel_name only (still useful to user).
+    """
+    if not entitlement:
+        return None
+
+    e = entitlement.strip()
+
+    mapping = {
+        # Prime-ish
+        "Included with Prime": "prime_included",
+        "Prime (with ads)": "prime_included",
+        "Prime": "prime_included",
+        "Join Prime": "prime_premium",
+        "Free with Ads": "prime_free",
+
+        # Channel subscriptions (match seeded amazon_services amazon_channel_id values)
+        "NBA League Pass": "amzn1.dv.channel.7a36cb2b-40e6-40c7-809f-a6cf9b9f0859",
+        "Peacock": "peacockus",
+        "Peacock Premium": "peacockus",
+        "Max": "maxliveeventsus",
+        "DAZN": "daznus",
+        "ViX Premium": "vixplusus",
+        "ViX": "vixus",
+        "FOX One": "amzn1.dv.spid.8cc2a36e-cd1b-d2cb-0e3b-b9ddce868f1d",
+        "FanDuel Sports Network": "FSNOHIFSOH3",
+        "FanDuel": "FSNOHIFSOH3",
+    }
+
+    return mapping.get(e)
+
+
+def _entitlement_flags(entitlement: str) -> Tuple[bool, bool]:
+    """Return (requires_prime, is_free) derived from entitlement text without inference."""
+    e = (entitlement or "").strip()
+    if e == "Free with Ads":
+        return (False, True)
+    if e in ("Included with Prime", "Prime (with ads)", "Prime", "Join Prime"):
+        return (True, False)
+    # For channel subscriptions, we generally require prime to subscribe within Amazon UI
+    # (still not asserting availability, just a reasonable flag for downstream UI).
+    if e:
+        return (True, False)
+    return (False, False)
+
+
+# ==============================================================================
+# ENTITLEMENT CTA LINK (benefitId / signup link) — also authoritative and DOM-scoped
+# ==============================================================================
+
+def _parse_benefit_id(href: str) -> Optional[str]:
+    """Extract benefitId=... from an offers URL (if present)."""
+    if not href:
+        return None
+    try:
+        p = urlparse(href)
+        qs = parse_qs(p.query or "")
+        bid = (qs.get("benefitId") or [None])[0]
+        return bid or None
+    except Exception:
+        return None
+
+
+def _normalize_href(href: str) -> str:
+    if not href:
+        return ""
+    href = href.strip()
+    if href.startswith("//"):
+        return "https:" + href
+    if href.startswith("/"):
+        return "https://www.amazon.com" + href
+    return href
+
+
+def _extract_entitlement_offer_url(driver: webdriver.Chrome) -> Optional[str]:
+    '''
+    Locate the CTA link related to entitlement (offers/signup). Prefer links that include benefitId.
+    Works even when the entitlement badge is missing (regional restriction pages may still show CTA).
+    '''
+    # 1) Try DOM-scoped search near entitlement badge if present
+    selectors = [
+        "span[data-automation-id='entitlement-message']",
+        "span[data-testid='entitlement-message']",
+    ]
+
+    for sel in selectors:
+        try:
+            els = driver.find_elements(By.CSS_SELECTOR, sel)
+        except Exception:
+            els = []
+        if not els:
+            continue
+
+        el = els[0]
+        try:
+            js = """
+const start = arguments[0];
+let n = start;
+let best = '';
+for (let i=0;i<7 && n;i++){
+  const candidates = Array.from(n.querySelectorAll('a[href]')).map(a => a.getAttribute('href') || '').filter(Boolean);
+  for (const href of candidates){
+    if (href.includes('benefitId=')) return href;             // best possible
+    if (!best && (href.includes('/gp/video/offers') || href.includes('watch.amazon.com/offers'))) best = href;
+    if (!best && href.includes('/gp/video/signup')) best = href;
+  }
+  n = n.parentElement;
+}
+return best || '';
+"""
+            href = driver.execute_script(js, el) or ""
+            href = _normalize_href(href)
+            if href:
+                return href
+        except Exception:
+            pass
+
+    # 2) Fallback: global search for offers/signup links (rendered DOM, no regex on HTML)
+    css = (
+        "a[href*='benefitId='],"
+        "a[href*='/gp/video/offers'],"
+        "a[href*='watch.amazon.com/offers'],"
+        "a[href*='/gp/video/signup']"
+    )
+    try:
+        anchors = driver.find_elements(By.CSS_SELECTOR, css)
+    except Exception:
+        anchors = []
+
+    best = ""
+    for a in anchors[:50]:
+        try:
+            href = _normalize_href(a.get_attribute('href') or "")
+        except Exception:
+            href = ""
+        if not href:
+            continue
+        if 'benefitId=' in href:
+            return href
+        if (not best) and ('/gp/video/offers' in href or 'watch.amazon.com/offers' in href):
+            best = href
+        if (not best) and ('/gp/video/signup' in href):
+            best = href
+
+    return best or None
+
+
+    for sel in selectors:
+        try:
+            els = driver.find_elements(By.CSS_SELECTOR, sel)
+        except Exception:
+            els = []
+        if not els:
+            continue
+
+        el = els[0]
+        # Climb a few ancestors and look for a[href] that points to offers/signup
+        try:
+            js = """
+const start = arguments[0];
+let n = start;
+for (let i=0;i<6 && n;i++){
+  // prefer offers/signup links
+  const a = n.querySelector('a[href*="/gp/video/offers"],a[href*="/gp/video/signup"],a[href*="benefitId="],a[href*="watch.amazon.com/offers"]');
+  if (a && a.getAttribute('href')) return a.getAttribute('href');
+  n = n.parentElement;
+}
+return '';
+"""
+            href = driver.execute_script(js, el) or ""
+            href = _normalize_href(href)
+            if href:
+                return href
+        except Exception:
+            pass
+
+        # As a fallback, look for the first visible anchor on the page matching offers/signup
+        try:
+            a = driver.find_elements(By.CSS_SELECTOR, "a[href*='/gp/video/offers'],a[href*='/gp/video/signup'],a[href*='benefitId='],a[href*='watch.amazon.com/offers']")
+            if a:
+                href = _normalize_href(a[0].get_attribute("href") or "")
+                if href:
+                    return href
+        except Exception:
+            pass
+
+    return None
+
+
+def _benefit_id_to_name(bid: str) -> Optional[str]:
+    """Known benefitId -> friendly name (tight mapping only)."""
+    if not bid:
+        return None
+    mapping = {
+        # NBA League Pass
+        "NBALP": "NBA League Pass",
+        "amzn1.dv.channel.7a36cb2b-40e6-40c7-809f-a6cf9b9f0859": "NBA League Pass",
+        
+        # Regional Sports Networks
+        "FSNOHIFSOH3": "FanDuel Sports Network",
+        
+        # National Sports Services
+        "amzn1.dv.spid.8cc2a36e-cd1b-d2cb-0e3b-b9ddce868f1d": "FOX One",
+        
+        # Streaming Services
+        "maxliveeventsus": "Max",
+        "peacockus": "Peacock",
+        "cbsaacf": "Paramount+",
+    }
+    
+    result = mapping.get(bid)
+    
+    # Log unknown benefitIds loudly so we can add them to the mapping
+    if not result:
+        logger.warning(f"🔴 UNKNOWN BENEFIT ID: '{bid}' - Add to mapping in _benefit_id_to_name()")
+    
+    return result
+
+
+
+
+def _normalize_prime_bucket(entitlement_raw: Optional[str]) -> Optional[str]:
+    """Collapse any Prime-only badge variants into a single bucket: 'Prime Exclusive'."""
+    if not entitlement_raw:
+        return None
+    
+    t = entitlement_raw.strip().lower()
+    
+    # All Prime variants → "Prime Exclusive"
+    prime_indicators = ['prime', 'join prime', 'included with']
+    if any(indicator in t for indicator in prime_indicators):
+        return "Prime Exclusive"
+    
+    # Not a Prime-only message - return original text
+    return entitlement_raw.strip()
+def _detect_unavailable_reason(driver: webdriver.Chrome) -> Optional[str]:
+    """
+    When entitlement badge is missing, detect common 'unavailable' messages
+    (regional restriction / unavailable in location) from rendered page text.
+    """
+    try:
+        txt = driver.execute_script("return (document.body && document.body.innerText) ? document.body.innerText : '';") or ""
+        t = " ".join(str(txt).split()).lower()
+    except Exception:
+        t = ""
+
+    if not t:
+        return None
+
+    if "unavailable due to regional restrictions" in t or "regional restrictions" in t:
+        return "REGIONAL_RESTRICTION"
+    if "currently unavailable to watch in your location" in t or "unavailable to watch in your location" in t:
+        return "UNAVAILABLE_IN_LOCATION"
+    if "video is currently unavailable" in t:
+        return "UNAVAILABLE"
+    return None
+
+
 # ==============================================================================
 # SCRAPING LOGIC
 # ==============================================================================
@@ -572,7 +938,7 @@ def clean_channel_name(raw_label: str, channel_id: str) -> str:
     return cleaned if cleaned else 'Unknown'
 
 
-def parse_amazon_json(scripts: List[str], gti: str, title: str) -> Dict[str, Any]:
+def parse_amazon_json(scripts: List[str], gti: str, title: str = '') -> Dict[str, Any]:
     """Parse Amazon JSON from script contents"""
     
     # First try: Parse as JSON
@@ -586,7 +952,7 @@ def parse_amazon_json(scripts: List[str], gti: str, title: str) -> Dict[str, Any
                 'title': title,
                 **provider_info
             }
-            
+
             # If we found valid provider info, return it
             if 'error' not in provider_info or provider_info.get('channel_id'):
                 return result
@@ -623,7 +989,9 @@ def extract_provider_info_regex(text: str, gti: str, title: str) -> Dict[str, An
         'is_free': False,
     }
     
-    # Check for known channel names
+    # Check for known channel names FIRST (before entitled check)
+    # Look for patterns like "Watch with [CHANNEL]" or "[CHANNEL] subscription required"
+    # NOT just searching entire page text
     channel_patterns = {
         'NBA League Pass': 'nba_league_pass',
         'Peacock': 'peacock',
@@ -636,15 +1004,27 @@ def extract_provider_info_regex(text: str, gti: str, title: str) -> Dict[str, An
     }
     
     for name, code in channel_patterns.items():
-        if name in text or name.lower() in text.lower():
-            result['channel_id'] = code
-            result['channel_name'] = name
-            result['subscription_type'] = 'CHANNEL'
-            result['availability'] = 'requires_subscription'
-            break
+        # Look for specific subscription patterns, not just the channel name anywhere
+        subscription_patterns = [
+            f'Watch with {name}',
+            f'watch with {name.lower()}',
+            f'Start your .* free trial of {name}',
+            f'Free trial of {name}',
+            f'{name} subscription',
+        ]
+        
+        # Check if any subscription pattern matches
+        import re
+        for pattern in subscription_patterns:
+            if re.search(pattern, text, re.IGNORECASE):
+                result['channel_id'] = code
+                result['channel_name'] = name
+                result['subscription_type'] = 'CHANNEL'
+                result['availability'] = 'requires_subscription'
+                result['success'] = True
+                return result  # Found channel, done!
     
-    # Check for free/entitled - but be VERY specific about "with ads"
-    # Don't just search entire page text, look for specific patterns
+    # THEN check for free/entitled (Prime exclusives)
     if 'Entitled' in text or 'entitled' in text:
         # Only mark as "Free with Ads" if we see explicit free-with-ads messaging
         # NOT just because "with ads" appears somewhere on the page
@@ -675,12 +1055,7 @@ def extract_provider_info_regex(text: str, gti: str, title: str) -> Dict[str, An
         result['success'] = True
         return result
     
-    # If we found a channel, mark as success
-    if result['channel_id']:
-        result['success'] = True
-        return result
-    
-    # No channel info found
+    # If we got here, no channel info found
     result['error'] = 'NO_CHANNEL_REGEX'
     result['error_detail'] = 'Could not extract channel info from text'
     return result
@@ -1004,30 +1379,122 @@ def scrape_single_gti_with_driver(
             }
         
         time.sleep(2)  # Wait for JS to execute
-        
-        # Extract JSON from page source
-        page_source = driver.page_source
-        scripts_json = extract_scripts_with_gti(page_source)
-        
-        if not scripts_json:
+        # AUTHORITATIVE: read the on-screen entitlement/provider from the DOM.
+        # If it doesn't exist, do NOT infer provider from other page content.
+        entitlement = _extract_entitlement_from_dom(driver=driver, timeout_sec=2.5)
+
+        # CTA link near entitlement (or elsewhere on page as fallback)
+        offer_url = _extract_entitlement_offer_url(driver)
+        benefit_id = _parse_benefit_id(offer_url or "")
+
+        resolved_name = _benefit_id_to_name(benefit_id) if benefit_id else None
+
+        if benefit_id:
+            # Determine channel name based on what we have
+            if resolved_name:
+                # Known provider via benefitId
+                channel_name = resolved_name
+            elif entitlement:
+                # Unknown benefitId but we have badge text - use that
+                channel_name = _normalize_prime_bucket(entitlement) or entitlement
+                logger.info(f"Unknown benefitId '{benefit_id}' with entitlement '{entitlement}' - using badge text")
+            else:
+                # benefitId exists but no badge and unknown mapping - treat as error
+                channel_name = "Amazon Error"
+                logger.error(f"❌ GTI {gti}: benefitId '{benefit_id}' found but no entitlement badge - cannot classify")
+                return {
+                    'gti': gti,
+                    'url': url,
+                    'title': title,
+                    'method': 'CHROME',
+                    'http_status': http_status,
+                    'channel_name': 'Amazon Error',
+                    'channel_id': benefit_id,
+                    'subscription_type': 'UNKNOWN_PROVIDER',
+                    'availability': 'unknown',
+                    'requires_prime': False,
+                    'is_free': False,
+                    'success': False,
+                    'entitlement_raw': entitlement,
+                    'offer_url': offer_url,
+                    'benefit_id': benefit_id,
+                    'error': 'UNKNOWN_PROVIDER_NO_BADGE',
+                    'error_detail': f'benefitId {benefit_id} not in mapping and no entitlement badge to use',
+                }
+            
+            requires_prime, is_free = _entitlement_flags(entitlement or "")
             return {
                 'gti': gti,
+                'url': url,
                 'title': title,
-                'error': 'NO_SCRIPT',
-                'error_detail': 'No script tags with GTI found',
-                'success': False
+                'method': 'CHROME',
+                'http_status': http_status,
+                'channel_name': channel_name,
+                'channel_id': benefit_id,
+                'subscription_type': 'ENTITLEMENT_OFFER_LINK',
+                'availability': 'entitlement_offer_link',
+                'requires_prime': requires_prime,
+                'is_free': is_free,
+                'success': True,
+                'entitlement_raw': entitlement,
+                'offer_url': offer_url,
+                'benefit_id': benefit_id,
             }
-        
-        # Parse JSON
-        result = parse_amazon_json(scripts_json, gti, title)
-        result['http_status'] = http_status
-        
-        if 'error' not in result:
-            result['success'] = True
-        else:
-            result['success'] = False
-        
-        return result
+
+        if entitlement:
+            channel_id = _channel_id_from_entitlement(entitlement or "")
+            requires_prime, is_free = _entitlement_flags(entitlement or "")
+            
+            # Determine final channel name
+            channel_name = _normalize_prime_bucket(entitlement) or entitlement
+            
+            # Log if we're using raw badge text that doesn't match known providers
+            known_providers = {
+                'Prime Exclusive', 'NBA League Pass', 'FanDuel Sports Network', 
+                'FOX One', 'Peacock', 'Max', 'Paramount+', 'Amazon Error', 'STALE_GTI_404'
+            }
+            if channel_name not in known_providers:
+                logger.warning(f"⚠️ Unknown channel name from badge: '{channel_name}' (entitlement='{entitlement}') | GTI={gti}")
+            
+            return {
+                'gti': gti,
+                'url': url,
+                'title': title,
+                'method': 'CHROME',
+                'http_status': http_status,
+                'channel_name': channel_name,
+                'channel_id': channel_id,
+                'subscription_type': 'ENTITLEMENT_BADGE',
+                'availability': 'entitlement_badge',
+                'requires_prime': requires_prime,
+                'is_free': is_free,
+                'success': True,
+                'entitlement_raw': entitlement,
+                'offer_url': offer_url,
+                'benefit_id': None,
+            }
+
+        unavailable_reason = _detect_unavailable_reason(driver)
+        return {
+
+            'gti': gti,
+            'title': title,
+            'url': url,
+            'method': 'CHROME',
+            'success': False,
+
+            # Bucket unknown/unavailable cases
+            'channel_name': 'Amazon Error',
+            'channel_id': 'amazon_error',
+
+            # Keep reason + diagnostics for later tightening
+            'error': unavailable_reason or 'NO_ENTITLEMENT_BADGE',
+            'error_detail': 'Entitlement badge/link not found in DOM (refusing to infer provider)',
+            'http_status': http_status,
+            'unavailable_reason': unavailable_reason,
+            'offer_url': offer_url,
+        }
+        # Chrome DOM is the single source of truth - no JSON fallback
         
     except Exception as e:
         logger.error(f"Unexpected error for {gti}: {e}")
@@ -1102,7 +1569,7 @@ def scrape_all_threaded(
     total = len(events)
     
     # Multi-pass strategy: Try HTTP 3 times, then Chrome for failures
-    MAX_HTTP_PASSES = 3
+    MAX_HTTP_PASSES = int(os.getenv('AIV_HTTP_PASSES','3'))
     
     # Track which GTIs to process
     remaining_events = events.copy()
@@ -1172,7 +1639,7 @@ def scrape_all_threaded(
         logger.info(f"\n{len(remaining_events)} GTIs still failed (Chrome disabled with --http-only)")
     
     # Convert results dict to list
-    results = [all_results[event['gti']] for event in events]
+    results = [all_results.get(event['gti'], {'gti': event['gti'], 'title': event.get('title',''), 'url': event.get('url',''), 'success': False, 'error': 'MISSING_RESULT', 'error_detail': 'No result recorded (worker crash)'}) for event in events]
     
     return results
 
@@ -1498,7 +1965,7 @@ def extract_gtis_from_db(db_path: str, max_gtis: Optional[int] = None) -> List[D
     used_main = 0
     
     for title, deeplink in rows:
-        # Try broadcast GTI first (for live events)
+        # Extract broadcast GTIs first (they seem to have better success rate than old main GTIs)
         broadcast_match = broadcast_gti_pattern.search(deeplink)
         if broadcast_match:
             gti = broadcast_match.group(1)
@@ -1514,7 +1981,7 @@ def extract_gtis_from_db(db_path: str, max_gtis: Optional[int] = None) -> List[D
                 if max_gtis and len(events) >= max_gtis:
                     break
         
-        # Also get main GTI if present
+        # Also extract main GTI (but it might be stale in database)
         main_match = main_gti_pattern.search(deeplink)
         if main_match:
             gti = main_match.group(1)
@@ -1551,8 +2018,110 @@ def extract_gtis_from_db(db_path: str, max_gtis: Optional[int] = None) -> List[D
         logger.info(f"✓ Skipped {skipped_past} past playables")
     
     logger.info(f"✓ Extracted {used_broadcast} broadcast GTIs, {used_main} main GTIs")
+    logger.info(f"  Note: ~20-30% of GTIs may 404 (unpublished feeds or stale GTIs)")
     
     return list(events.values())
+
+
+# ==============================================================================
+# DEBUG REPORT EXPORT (Optional)
+# ==============================================================================
+
+def export_debug_report(results: List[Dict[str, Any]], out_path: str, db_path: Optional[str] = None) -> str:
+    """
+    Export a human-friendly debugging report for the current run.
+
+    - Always includes Amazon detail URL (so you can eyeball in browser)
+    - Captures the raw entitlement badge text (channel_name) we stored
+    - Writes CSV (recommended) or JSON if out_path ends with .json
+    """
+    out_path = str(out_path)
+    Path(os.path.dirname(out_path) or ".").mkdir(parents=True, exist_ok=True)
+
+    # Normalize URL in case older results store dp_url/amazon_url
+    def _get(o: Dict[str, Any], *keys: str) -> Any:
+        for k in keys:
+            if k in o and o[k] not in (None, ""):
+                return o[k]
+        return None
+
+    rows = []
+    for r in results:
+        gti = _get(r, "gti")
+        url = _get(r, "url", "dp_url", "amazon_url")
+        if not url and gti:
+            url = f"https://www.amazon.com/gp/video/detail/{gti}"
+
+        rows.append({
+            "success": _get(r, "success"),  # Move success to front for easy filtering
+            "title": _get(r, "title"),
+            "gti": gti,
+            "url": url,
+            "channel_name": _get(r, "channel_name"),
+            "entitlement_raw": _get(r, "entitlement_raw"),
+            "benefit_id": _get(r, "benefit_id"),
+            "offer_url": _get(r, "offer_url"),
+            "error": _get(r, "error"),
+            "error_detail": _get(r, "error_detail"),
+            "unavailable_reason": _get(r, "unavailable_reason"),
+            "subscription_type": _get(r, "subscription_type"),
+            "method": _get(r, "method"),
+            "http_status": _get(r, "http_status"),
+            "channel_id": _get(r, "channel_id"),
+            "availability": _get(r, "availability"),
+            "requires_prime": _get(r, "requires_prime"),
+            "is_free": _get(r, "is_free"),
+        })
+
+    # Add a small summary header at the top of the file (CSV comments) for quick scanning
+    provider_counts = defaultdict(int)
+    for r in results:
+        provider_counts[str(_get(r, "channel_name") or "UNKNOWN")] += 1
+
+    summary_lines = [
+        f"# Generated: {datetime.now(timezone.utc).isoformat()}",
+        f"# DB: {db_path or ''}",
+        f"# Total: {len(results)}",
+        f"# Success: {sum(1 for r in results if r.get('success'))}",
+        f"# Failed: {sum(1 for r in results if not r.get('success'))}",
+        "# Providers:",
+    ]
+    for k, v in sorted(provider_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:50]:
+        summary_lines.append(f"#   {k}: {v}")
+
+    if out_path.lower().endswith(".json"):
+        payload = {
+            "generated_utc": datetime.now(timezone.utc).isoformat(),
+            "db_path": db_path,
+            "summary": {
+                "total": len(results),
+                "success": sum(1 for r in results if r.get('success')),
+                "failed": sum(1 for r in results if not r.get('success')),
+                "providers": dict(sorted(provider_counts.items(), key=lambda kv: (-kv[1], kv[0]))),
+            },
+            "rows": rows,
+        }
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        return out_path
+
+    # CSV
+    import csv
+    fieldnames = list(rows[0].keys()) if rows else [
+        "success","title","gti","url","channel_name","entitlement_raw","benefit_id","offer_url",
+        "error","error_detail","unavailable_reason","subscription_type","method","http_status",
+        "channel_id","availability","requires_prime","is_free"
+    ]
+
+    with open(out_path, "w", newline="", encoding="utf-8") as f:
+        for line in summary_lines:
+            f.write(line + "\n")
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for row in rows:
+            w.writerow(row)
+
+    return out_path
 
 
 def main():
@@ -1566,12 +2135,22 @@ def main():
     parser.add_argument('--bootstrap', action='store_true', help='Force schema update')
     parser.add_argument('--debug-dir', help='Debug output directory')
     parser.add_argument('--http-only', action='store_true', help='Use HTTP only (no Chrome fallback)')
+    parser.add_argument('--report', help='Export a debug report at end (.csv or .json). If a directory is provided, a timestamped CSV will be created. Defaults to auto-generate in data/')
+    parser.add_argument('--no-report', dest='report', action='store_false', help='Disable auto-report generation')
     
     args = parser.parse_args()
     
     # Bootstrap database
+    try:
+        stop_heartbeat.set()
+    except Exception:
+        pass
     logger.info("="*80)
     logger.info("AMAZON CHANNEL SCRAPER")
+    try:
+        stop_heartbeat.set()
+    except Exception:
+        pass
     logger.info("="*80)
     bootstrap_database(args.db, force=args.bootstrap)
     
@@ -1624,14 +2203,50 @@ def main():
     
     logger.info("\n" + "="*80)
     logger.info("SCRAPE COMPLETE")
+    try:
+        stop_heartbeat.set()
+    except Exception:
+        pass
     logger.info("="*80)
     logger.info(f"Total: {len(results)}")
     logger.info(f"Success: {successful} ({100*successful/len(results):.1f}%)")
     logger.info(f"Failed: {failed}")
     if http_count or chrome_count:
         logger.info(f"Method: ⚡ HTTP {http_count} | 🌐 Chrome {chrome_count}")
-    logger.info("="*80)
 
+    # Auto-generate debug report (unless explicitly disabled)
+    if args.report is False:
+        # User explicitly disabled with --no-report (we'll add this flag)
+        pass
+    else:
+        # Default: auto-generate timestamped report in data/
+        if args.report:
+            rp = args.report
+        else:
+            # Auto-generate default report
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            rp = f"data/amazon_scrape_{ts}.csv"
+        
+        # If user passed a directory, create a timestamped file inside it
+        if rp.endswith("/") or rp.endswith("\\") or (os.path.isdir(rp)):
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            rp = os.path.join(rp, f"amazon_debug_report_{ts}.csv")
+        else:
+            # If no extension, default to csv
+            if not (rp.lower().endswith(".csv") or rp.lower().endswith(".json")):
+                rp = rp + ".csv"
+        
+        try:
+            outp = export_debug_report(results, rp, db_path=args.db)
+            logger.info(f"✓ Debug report exported: {outp}")
+        except Exception as e:
+            logger.error(f"Failed to export debug report: {e}")
+
+    try:
+        stop_heartbeat.set()
+    except Exception:
+        pass
+    logger.info("="*80)
 
 if __name__ == '__main__':
     main()
