@@ -771,7 +771,9 @@ for (let i=0;i<7 && n;i++){
   for (const href of candidates){
     if (href.includes('benefitId=')) return href;             // best possible
     if (!best && (href.includes('/gp/video/offers') || href.includes('watch.amazon.com/offers'))) best = href;
-    if (!best && href.includes('/gp/video/signup')) best = href;
+    // Skip generic Prime signup links - we want provider-specific links
+    // Generic: /gp/video/signup/ref=atv_nb_join_prime (no benefitId, no cGTI)
+    // Provider-specific will have benefitId or at least cGTI parameter
   }
   n = n.parentElement;
 }
@@ -785,11 +787,12 @@ return best || '';
             pass
 
     # 2) Fallback: global search for offers/signup links (rendered DOM, no regex on HTML)
+    # Prioritize links with benefitId, then /offers links
+    # Skip generic Prime signup links without benefitId
     css = (
         "a[href*='benefitId='],"
         "a[href*='/gp/video/offers'],"
-        "a[href*='watch.amazon.com/offers'],"
-        "a[href*='/gp/video/signup']"
+        "a[href*='watch.amazon.com/offers']"
     )
     try:
         anchors = driver.find_elements(By.CSS_SELECTOR, css)
@@ -808,52 +811,8 @@ return best || '';
             return href
         if (not best) and ('/gp/video/offers' in href or 'watch.amazon.com/offers' in href):
             best = href
-        if (not best) and ('/gp/video/signup' in href):
-            best = href
 
     return best or None
-
-
-    for sel in selectors:
-        try:
-            els = driver.find_elements(By.CSS_SELECTOR, sel)
-        except Exception:
-            els = []
-        if not els:
-            continue
-
-        el = els[0]
-        # Climb a few ancestors and look for a[href] that points to offers/signup
-        try:
-            js = """
-const start = arguments[0];
-let n = start;
-for (let i=0;i<6 && n;i++){
-  // prefer offers/signup links
-  const a = n.querySelector('a[href*="/gp/video/offers"],a[href*="/gp/video/signup"],a[href*="benefitId="],a[href*="watch.amazon.com/offers"]');
-  if (a && a.getAttribute('href')) return a.getAttribute('href');
-  n = n.parentElement;
-}
-return '';
-"""
-            href = driver.execute_script(js, el) or ""
-            href = _normalize_href(href)
-            if href:
-                return href
-        except Exception:
-            pass
-
-        # As a fallback, look for the first visible anchor on the page matching offers/signup
-        try:
-            a = driver.find_elements(By.CSS_SELECTOR, "a[href*='/gp/video/offers'],a[href*='/gp/video/signup'],a[href*='benefitId='],a[href*='watch.amazon.com/offers']")
-            if a:
-                href = _normalize_href(a[0].get_attribute("href") or "")
-                if href:
-                    return href
-        except Exception:
-            pass
-
-    return None
 
 
 def _benefit_id_to_name(bid: str) -> Optional[str]:
@@ -909,6 +868,34 @@ def _normalize_prime_bucket(entitlement_raw: Optional[str]) -> Optional[str]:
     
     # Not a Prime-only message - return original text
     return entitlement_raw.strip()
+
+
+def _normalize_service_name(badge_text: str) -> str:
+    """Extract service name from complex badge text patterns."""
+    if not badge_text:
+        return badge_text
+    
+    # Pattern: "Peacock Premium Plus" → "Peacock"
+    if 'peacock premium plus' in badge_text.lower():
+        return "Peacock"
+    
+    # Pattern: "Subscribe to ViX Premium or ViX Gratis" → "ViX"
+    import re
+    vix_match = re.search(r'Subscribe to (ViX (?:Premium|Gratis)|ViX)', badge_text, re.IGNORECASE)
+    if vix_match:
+        return "ViX"
+    
+    # Pattern: "Subscribe to X or Y" → extract first service name
+    or_match = re.search(r'Subscribe to ([A-Za-z+ ]+) or', badge_text)
+    if or_match:
+        service = or_match.group(1).strip()
+        # If it contains "Premium", strip it
+        service = re.sub(r'\s+Premium$', '', service, flags=re.IGNORECASE)
+        return service
+    
+    return badge_text
+
+
 def _detect_unavailable_reason(driver: webdriver.Chrome) -> Optional[str]:
     """
     When entitlement badge is missing, detect common 'unavailable' messages
@@ -1465,8 +1452,11 @@ def scrape_single_gti_with_driver(
             channel_id = _channel_id_from_entitlement(entitlement or "")
             requires_prime, is_free = _entitlement_flags(entitlement or "")
             
-            # Determine final channel name
-            channel_name = _normalize_prime_bucket(entitlement) or entitlement
+            # Determine final channel name with normalization
+            channel_name = _normalize_prime_bucket(entitlement)
+            if not channel_name or channel_name == entitlement:
+                # Not Prime, try service name extraction
+                channel_name = _normalize_service_name(entitlement)
             
             # Log if we're using raw badge text that doesn't match known providers
             known_providers = {
@@ -1957,8 +1947,8 @@ def extract_gtis_from_db(db_path: str, max_gtis: Optional[int] = None) -> List[D
     # Get current time in UTC
     now = datetime.now(timezone.utc).isoformat()
     
-    # Get ALL playables for UPCOMING events only (starts within next 24 hours, hasn't started yet)
-    # Amazon typically doesn't publish event pages until ~24 hours before start time
+    # Get ALL playables for UPCOMING events only (starts within next 48 hours, hasn't started yet)
+    # Amazon typically doesn't publish event pages until ~24-48 hours before start time
     query = """
         SELECT 
             p.title,
@@ -1971,7 +1961,7 @@ def extract_gtis_from_db(db_path: str, max_gtis: Optional[int] = None) -> List[D
                 e.start_utc IS NULL 
                 OR (
                     datetime(e.start_utc) >= datetime('now')  -- Event hasn't started yet
-                    AND datetime(e.start_utc) <= datetime('now', '+24 hours')  -- Starts within 24 hours
+                    AND datetime(e.start_utc) <= datetime('now', '+48 hours')  -- Starts within 48 hours
                 )
             )
     """
