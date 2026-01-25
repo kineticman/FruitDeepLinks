@@ -54,6 +54,7 @@ def migrate_amazon_playables(db_path: str):
     updated = 0
     not_found = 0
     already_correct = 0
+    debug_vix = []  # Track ViX playables for debugging
     
     for playable_id, deeplink_play, deeplink_open, current_logical_service in playables:
         # Extract GTI
@@ -64,10 +65,14 @@ def migrate_amazon_playables(db_path: str):
             continue
         
         # Look up logical_service from amazon_channels + amazon_services
+        # Try matching on channel_id first, then fall back to channel_name
         cur.execute("""
-            SELECT s.logical_service
+            SELECT s.logical_service, ac.channel_name
             FROM amazon_channels ac
-            JOIN amazon_services s ON ac.channel_id = s.amazon_channel_id
+            JOIN amazon_services s ON (
+                (ac.channel_id IS NOT NULL AND ac.channel_id = s.amazon_channel_id)
+                OR (ac.channel_id IS NULL AND ac.channel_name = s.display_name)
+            )
             WHERE ac.gti = ? AND ac.is_stale = 0
             LIMIT 1
         """, (gti,))
@@ -76,6 +81,17 @@ def migrate_amazon_playables(db_path: str):
         
         if row and row[0]:
             new_logical_service = row[0]
+            channel_name = row[1]
+            
+            # Debug: Track ViX updates
+            if 'vix' in channel_name.lower():
+                debug_vix.append({
+                    'playable_id': playable_id,
+                    'gti': gti,
+                    'channel_name': channel_name,
+                    'old': current_logical_service,
+                    'new': new_logical_service
+                })
             
             if new_logical_service != current_logical_service:
                 # Update the playable
@@ -97,6 +113,17 @@ def migrate_amazon_playables(db_path: str):
     print(f"✓ Already correct: {already_correct} playables")
     print(f"⚠ No mapping found: {not_found} playables (left as aiv_aggregator)")
     print()
+    
+    # Debug: Show ViX playables
+    if debug_vix:
+        print("DEBUG - ViX Playables Found:")
+        print("-"*80)
+        for v in debug_vix:
+            print(f"  GTI: {v['gti']}")
+            print(f"  Channel: {v['channel_name']}")
+            print(f"  Old: {v['old']} -> New: {v['new']}")
+            print(f"  Playable: {v['playable_id'][:50]}...")
+            print()
     
     # Show breakdown of logical_services after migration
     cur.execute("""

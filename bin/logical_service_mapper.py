@@ -333,7 +333,8 @@ def get_all_logical_services_with_counts(conn: sqlite3.Connection) -> Dict[str, 
             p.deeplink_open,
             p.playable_url,
             p.event_id,
-            p.service_name
+            p.service_name,
+            p.logical_service
         FROM playables p
         JOIN events e ON p.event_id = e.id
         WHERE e.end_utc > datetime('now')
@@ -354,16 +355,21 @@ def get_all_logical_services_with_counts(conn: sqlite3.Connection) -> Dict[str, 
         playable_url = row[3]
         event_id = row[4]
         service_name = row[5]
+        logical_service = row[6]  # Use pre-calculated logical_service if available
         
-        service_code = get_logical_service_for_playable(
-            provider=provider,
-            deeplink_play=deeplink_play,
-            deeplink_open=deeplink_open,
-            playable_url=playable_url,
-            event_id=event_id,
-            conn=conn,
-            service_name=service_name
-        )
+        # Use stored logical_service if available, otherwise calculate it
+        if logical_service:
+            service_code = logical_service
+        else:
+            service_code = get_logical_service_for_playable(
+                provider=provider,
+                deeplink_play=deeplink_play,
+                deeplink_open=deeplink_open,
+                playable_url=playable_url,
+                event_id=event_id,
+                conn=conn,
+                service_name=service_name
+            )
         
         service_counts[service_code] = service_counts.get(service_code, 0) + 1
         
