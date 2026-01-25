@@ -369,15 +369,27 @@ async function loadProviders() {
     const r = await fetch("/api/filters");
     const data = await r.json();
     const providers = (data.filters && data.filters.providers) ? data.filters.providers : [];
+    const amazonServices = (data.filters && data.filters.amazon_services) ? data.filters.amazon_services : [];
     const sel = document.getElementById("provider");
     const keep = sel.value;
     sel.innerHTML = '<option value="">All providers</option>';
+    
+    // Add regular providers
     for (const p of providers) {
       const opt = document.createElement("option");
       opt.value = p.scheme;
       opt.textContent = `${p.name} (${p.count})`;
       sel.appendChild(opt);
     }
+    
+    // Add Amazon services
+    for (const p of amazonServices) {
+      const opt = document.createElement("option");
+      opt.value = p.scheme;
+      opt.textContent = `${p.name} (${p.count})`;
+      sel.appendChild(opt);
+    }
+    
     sel.value = keep;
   } catch (e) {
     console.warn("provider load failed", e);
