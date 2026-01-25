@@ -1393,6 +1393,14 @@ def scrape_single_gti_with_driver(
         # CTA link near entitlement (or elsewhere on page as fallback)
         offer_url = _extract_entitlement_offer_url(driver)
         benefit_id = _parse_benefit_id(offer_url or "")
+        
+        # SMART RETRY: If no badge/offer found, wait for DOM to fully render then retry
+        if not entitlement and not offer_url:
+            import time
+            time.sleep(2.5)  # Wait for lazy-loaded JavaScript content
+            entitlement = _extract_entitlement_from_dom(driver=driver, timeout_sec=2.5)
+            offer_url = _extract_entitlement_offer_url(driver)
+            benefit_id = _parse_benefit_id(offer_url or "")
 
         resolved_name = _benefit_id_to_name(benefit_id) if benefit_id else None
 
