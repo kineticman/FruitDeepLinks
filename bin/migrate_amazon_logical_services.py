@@ -65,15 +65,13 @@ def migrate_amazon_playables(db_path: str):
             continue
         
         # Look up logical_service from amazon_channels + amazon_services
-        # Try matching on channel_id first, then fall back to channel_name
         cur.execute("""
-            SELECT s.logical_service, ac.channel_name
+            SELECT s.logical_service, ac.channel_name, ac.channel_id
             FROM amazon_channels ac
-            JOIN amazon_services s ON (
-                (ac.channel_id IS NOT NULL AND ac.channel_id = s.amazon_channel_id)
-                OR (ac.channel_id IS NULL AND ac.channel_name = s.display_name)
-            )
-            WHERE ac.gti = ? AND ac.is_stale = 0
+            JOIN amazon_services s ON ac.channel_id = s.amazon_channel_id
+            WHERE ac.gti = ? 
+              AND ac.is_stale = 0
+              AND ac.channel_id IS NOT NULL
             LIMIT 1
         """, (gti,))
         

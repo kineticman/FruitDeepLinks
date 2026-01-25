@@ -1918,6 +1918,25 @@ def import_to_database(results: List[Dict[str, Any]], db_path: str) -> None:
     
     logger.info(f"✓ Imported: {inserted} new, {updated} updated, {stale} stale")
     
+    # Check for unmapped channels (channels not in amazon_services)
+    cursor.execute("""
+        SELECT DISTINCT ac.channel_id, ac.channel_name, COUNT(*) as gti_count
+        FROM amazon_channels ac
+        LEFT JOIN amazon_services s ON ac.channel_id = s.amazon_channel_id
+        WHERE ac.is_stale = 0 
+          AND ac.channel_id IS NOT NULL
+          AND s.service_id IS NULL
+        GROUP BY ac.channel_id, ac.channel_name
+        ORDER BY gti_count DESC
+    """)
+    
+    unmapped = cursor.fetchall()
+    if unmapped:
+        logger.warning(f"⚠ Found {len(unmapped)} unmapped channel(s) - add to amazon_services table:")
+        for row in unmapped:
+            channel_id, channel_name, count = row
+            logger.warning(f"  {channel_id} ({channel_name}): {count} GTIs")
+    
     # Show stats
     cursor.execute("""
         SELECT 
