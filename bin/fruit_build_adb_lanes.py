@@ -192,11 +192,10 @@ def should_include_event(classification_json: str, disabled_sports: Sequence[str
     if league_vals and any(norm(v) in dl for v in league_vals):
         return False
 
-    raw_low = cj.lower()
-    if any(x and x in raw_low for x in ds):
-        return False
-    if any(x and x in raw_low for x in dl):
-        return False
+    # Don't do raw substring matching - it's too aggressive and filters out
+    # events where the disabled term appears anywhere in the JSON
+    # (e.g., "Basketball" in "Basketball Association")
+    # This now matches the behavior of filter_integration.py used by direct output
 
     return True
 
