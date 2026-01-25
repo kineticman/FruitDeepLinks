@@ -1396,7 +1396,6 @@ def scrape_single_gti_with_driver(
         
         # SMART RETRY: If no badge/offer found, wait for DOM to fully render then retry
         if not entitlement and not offer_url:
-            import time
             time.sleep(2.5)  # Wait for lazy-loaded JavaScript content
             entitlement = _extract_entitlement_from_dom(driver=driver, timeout_sec=2.5)
             offer_url = _extract_entitlement_offer_url(driver)
