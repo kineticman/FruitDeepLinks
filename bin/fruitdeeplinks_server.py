@@ -426,7 +426,8 @@ def get_available_filters():
                     display_name = get_logical_service_display_name(service_code)
                     
                     # Separate Amazon services from regular providers
-                    if service_code.startswith('aiv_'):
+                    # Include both 'aiv' (generic/legacy) and 'aiv_*' (specific services)
+                    if service_code == 'aiv' or service_code.startswith('aiv_'):
                         amazon_services.append(
                             {
                                 "scheme": service_code,
