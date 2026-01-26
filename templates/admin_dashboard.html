@@ -41,6 +41,8 @@ margin-right: 10px;
 .btn:disabled { background: #475569; cursor: not-allowed; }
 .btn-secondary { background: #64748b; }
 .btn-secondary:hover { background: #475569; }
+.btn-danger { background: #dc2626; }
+.btn-danger:hover { background: #b91c1c; }
 .log-container {
 background: #0f172a;
 border: 1px solid #334155;
@@ -127,6 +129,12 @@ color: #e2e8f0;
 <div id="refresh-status" style="margin-bottom: 15px;">Loading...</div>
 <button class="btn" onclick="triggerRefresh(false)" id="btn-refresh"> Full Refresh</button>
 <button class="btn btn-secondary" onclick="triggerRefresh(true)" id="btn-refresh-skip"> Skip Scrape</button>
+
+<div style="margin-top:15px; padding-top:15px; border-top:1px solid #334155;">
+<h3 style="font-size:15px; margin-bottom:8px;">Database Management</h3>
+<button class="btn btn-danger" onclick="wipeEventData()" id="btn-wipe-db">🗑️ Wipe Event Data</button>
+<p style="font-size:12px; color:#94a3b8; margin-top:8px;">Clears all events, playables, and lanes. Preserves filters and settings.</p>
+</div>
 
 <div style="margin-top:15px; padding-top:15px; border-top:1px solid #334155;">
 <h3 style="font-size:15px; margin-bottom:8px;">Auto Refresh</h3>
@@ -396,6 +404,73 @@ container.innerHTML = data.logs.map(log =>
 `<div class="log-line">${log}</div>`
 ).join('');
 container.scrollTop = container.scrollHeight;
+}
+
+async function wipeEventData() {
+try {
+const confirmed = confirm(
+'⚠️ WARNING: This will DELETE all event data!\n\n' +
+'This will clear:\n' +
+'• All events and playables\n' +
+'• All lanes (Fruit Lanes, ADB Lanes)\n' +
+'• Apple & ESPN cached data\n' +
+'• Amazon scraped channels\n\n' +
+'This will PRESERVE:\n' +
+'✓ Filter settings\n' +
+'✓ User preferences\n' +
+'✓ ADB configuration\n' +
+'✓ Amazon service definitions\n\n' +
+'Are you sure you want to continue?'
+);
+
+if (!confirmed) return;
+
+const doubleCheck = confirm(
+'⚠️ FINAL CONFIRMATION\n\n' +
+'This action cannot be undone!\n\n' +
+'Type YES in the next prompt to proceed.'
+);
+
+if (!doubleCheck) return;
+
+const verification = prompt('Type YES (in capitals) to confirm:');
+if (verification !== 'YES') {
+alert('Wipe cancelled - verification failed');
+return;
+}
+
+document.getElementById('btn-wipe-db').disabled = true;
+document.getElementById('btn-wipe-db').textContent = '⏳ Wiping...';
+
+const res = await fetch('/api/wipe-event-data', {
+method: 'POST',
+headers: {'Content-Type': 'application/json'}
+});
+
+if (!res.ok) {
+const data = await res.json().catch(() => ({}));
+alert(data.error || 'Failed to wipe event data');
+document.getElementById('btn-wipe-db').disabled = false;
+document.getElementById('btn-wipe-db').textContent = '🗑️ Wipe Event Data';
+return;
+}
+
+const result = await res.json();
+alert('✅ Event data wiped successfully!\n\n' + 
+'Cleared:\n' + 
+`• ${result.events_deleted || 0} events\n` +
+`• ${result.playables_deleted || 0} playables\n` +
+`• ${result.lanes_deleted || 0} lanes\n\n` +
+'Settings and filters preserved.');
+
+loadStatus();
+document.getElementById('btn-wipe-db').disabled = false;
+document.getElementById('btn-wipe-db').textContent = '🗑️ Wipe Event Data';
+} catch (err) {
+alert('Error wiping event data: ' + err.message);
+document.getElementById('btn-wipe-db').disabled = false;
+document.getElementById('btn-wipe-db').textContent = '🗑️ Wipe Event Data';
+}
 }
 
 // Initialize

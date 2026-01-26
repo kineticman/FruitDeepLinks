@@ -2431,6 +2431,172 @@ def api_apply_filters():
     return jsonify({"status": "started"})
 
 
+@app.route("/api/wipe-event-data", methods=["POST"])
+def api_wipe_event_data():
+    """
+    Wipe all event data from databases while preserving settings/filters.
+    
+    Preserves:
+    - user_preferences (filter settings)
+    - provider_lanes (ADB configuration)
+    - amazon_services (service definitions)
+    - amazon_playable_overrides (manual overrides)
+    
+    Wipes:
+    - events, playables, event_images (event data)
+    - lanes, lane_events, adb_lanes (lane schedules)
+    - amazon_channels, amazon_channel_history (scraped data)
+    - Entire apple_events.db and espn_graph.db (cache databases)
+    """
+    if refresh_status["running"]:
+        return jsonify({"error": "Cannot wipe while refresh is running"}), 409
+    
+    def run_wipe():
+        refresh_status["running"] = True
+        refresh_status["current_step"] = "Wiping event data..."
+        log("Starting database wipe (preserving settings)", "INFO")
+        
+        stats = {
+            "events_deleted": 0,
+            "playables_deleted": 0,
+            "lanes_deleted": 0,
+            "errors": []
+        }
+        
+        try:
+            # Wipe fruit_events.db tables (preserving settings)
+            fruit_db = Path(DB_PATH)
+            if fruit_db.exists():
+                log(f"Wiping event data from {fruit_db}", "INFO")
+                conn = sqlite3.connect(str(fruit_db))
+                cur = conn.cursor()
+                
+                try:
+                    # Enable foreign keys for CASCADE behavior
+                    cur.execute("PRAGMA foreign_keys = ON")
+                    
+                    # Count before deletion
+                    cur.execute("SELECT COUNT(*) FROM events")
+                    stats["events_deleted"] = cur.fetchone()[0]
+                    
+                    cur.execute("SELECT COUNT(*) FROM playables")
+                    stats["playables_deleted"] = cur.fetchone()[0]
+                    
+                    cur.execute("SELECT COUNT(*) FROM lanes")
+                    lane_count = cur.fetchone()[0]
+                    cur.execute("SELECT COUNT(*) FROM adb_lanes")
+                    adb_lane_count = cur.fetchone()[0]
+                    stats["lanes_deleted"] = lane_count + adb_lane_count
+                    
+                    # Wipe event data tables
+                    log("Deleting events (CASCADE will handle playables, event_images)...", "INFO")
+                    cur.execute("DELETE FROM events")
+                    
+                    # Explicitly delete playables and event_images (defensive, in case CASCADE doesn't fire)
+                    log("Deleting playables and event_images...", "INFO")
+                    cur.execute("DELETE FROM playables")
+                    cur.execute("DELETE FROM event_images")
+                    
+                    log("Deleting lanes and lane_events...", "INFO")
+                    cur.execute("DELETE FROM lane_events")
+                    cur.execute("DELETE FROM lanes")
+                    
+                    log("Deleting ADB lanes...", "INFO")
+                    cur.execute("DELETE FROM adb_lanes")
+                    
+                    log("Deleting Amazon scraped data...", "INFO")
+                    cur.execute("DELETE FROM amazon_channels")
+                    cur.execute("DELETE FROM amazon_channel_history")
+                    
+                    # Reset sqlite_sequence for auto-increment tables
+                    cur.execute("DELETE FROM sqlite_sequence WHERE name IN ('adb_lanes', 'amazon_channel_history')")
+                    
+                    conn.commit()
+                    log(f"✅ Wiped {stats['events_deleted']} events, {stats['playables_deleted']} playables, {stats['lanes_deleted']} lanes", "INFO")
+                    
+                    # Compact database (must be outside transaction)
+                    log("Compacting database (VACUUM)...", "INFO")
+                    cur.execute("VACUUM")
+                    log("✅ Database compacted", "INFO")
+                    
+                except Exception as e:
+                    conn.rollback()
+                    error_msg = f"Error wiping fruit_events.db: {str(e)}"
+                    log(error_msg, "ERROR")
+                    stats["errors"].append(error_msg)
+                finally:
+                    conn.close()
+            
+            # Wipe apple_events.db entirely (it's just a cache)
+            apple_db = fruit_db.parent / "apple_events.db"
+            if apple_db.exists():
+                log(f"Wiping entire cache database: {apple_db}", "INFO")
+                try:
+                    conn = sqlite3.connect(str(apple_db))
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM apple_events")
+                    conn.commit()
+                    conn.close()
+                    log("✅ Wiped apple_events.db cache", "INFO")
+                except Exception as e:
+                    error_msg = f"Error wiping apple_events.db: {str(e)}"
+                    log(error_msg, "WARNING")
+                    stats["errors"].append(error_msg)
+            
+            # Wipe espn_graph.db entirely (it's just a cache)
+            espn_db = fruit_db.parent / "espn_graph.db"
+            if espn_db.exists():
+                log(f"Wiping entire cache database: {espn_db}", "INFO")
+                try:
+                    conn = sqlite3.connect(str(espn_db))
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM events")
+                    cur.execute("DELETE FROM feeds")
+                    conn.commit()
+                    conn.close()
+                    log("✅ Wiped espn_graph.db cache", "INFO")
+                except Exception as e:
+                    error_msg = f"Error wiping espn_graph.db: {str(e)}"
+                    log(error_msg, "WARNING")
+                    stats["errors"].append(error_msg)
+            
+            if stats["errors"]:
+                refresh_status["last_status"] = "completed_with_errors"
+                log(f"⚠️ Wipe completed with {len(stats['errors'])} errors", "WARNING")
+            else:
+                refresh_status["last_status"] = "success"
+                log("✅ Database wipe completed successfully!", "INFO")
+            
+        except Exception as e:
+            refresh_status["last_status"] = "error"
+            error_msg = f"Fatal wipe error: {str(e)}"
+            log(error_msg, "ERROR")
+            stats["errors"].append(error_msg)
+        
+        finally:
+            refresh_status["running"] = False
+            refresh_status["current_step"] = None
+            refresh_status["last_run"] = datetime.now().isoformat()
+            
+            # Store stats for the response
+            refresh_status["last_wipe_stats"] = stats
+    
+    # Run wipe in background thread
+    thread = threading.Thread(target=run_wipe, daemon=True)
+    thread.start()
+    
+    # Wait a moment for initial stats
+    time.sleep(0.5)
+    
+    return jsonify({
+        "status": "started",
+        "events_deleted": refresh_status.get("last_wipe_stats", {}).get("events_deleted", 0),
+        "playables_deleted": refresh_status.get("last_wipe_stats", {}).get("playables_deleted", 0),
+        "lanes_deleted": refresh_status.get("last_wipe_stats", {}).get("lanes_deleted", 0),
+        "errors": refresh_status.get("last_wipe_stats", {}).get("errors", [])
+    })
+
+
 # ==================== Filters APIs ====================
 @app.route("/filters")
 def filters_page():
