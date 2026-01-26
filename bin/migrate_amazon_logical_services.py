@@ -65,13 +65,16 @@ def migrate_amazon_playables(db_path: str):
             continue
         
         # Look up logical_service from amazon_channels + amazon_services
+        # Try matching on channel_id first, then fall back to channel_name
         cur.execute("""
-            SELECT s.logical_service, ac.channel_name, ac.channel_id
+            SELECT s.logical_service, ac.channel_name
             FROM amazon_channels ac
-            JOIN amazon_services s ON ac.channel_id = s.amazon_channel_id
-            WHERE ac.gti = ? 
-              AND ac.is_stale = 0
-              AND ac.channel_id IS NOT NULL
+            JOIN amazon_services s ON (
+                (ac.channel_id IS NOT NULL AND ac.channel_id = s.amazon_channel_id)
+                OR (ac.channel_id IS NULL AND ac.channel_name = s.display_name)
+                OR (ac.channel_id = 'peacock' AND s.amazon_channel_id = 'peacockus')
+            )
+            WHERE ac.gti = ? AND ac.is_stale = 0
             LIMIT 1
         """, (gti,))
         
@@ -90,6 +93,16 @@ def migrate_amazon_playables(db_path: str):
                     'old': current_logical_service,
                     'new': new_logical_service
                 })
+            
+            # Debug: Track Peacock updates for troubleshooting
+            if 'peacock' in channel_name.lower() and playable_id.startswith('tvs.sbd.12962:amzn1.dv.gti.1aa56f32'):
+                print(f"DEBUG - Found Peacock playable:")
+                print(f"  playable_id: {playable_id}")
+                print(f"  GTI: {gti}")
+                print(f"  channel_name: {channel_name}")
+                print(f"  current: {current_logical_service}")
+                print(f"  new: {new_logical_service}")
+                print(f"  will_update: {new_logical_service != current_logical_service}")
             
             if new_logical_service != current_logical_service:
                 # Update the playable

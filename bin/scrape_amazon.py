@@ -936,13 +936,9 @@ def clean_channel_name(raw_label: str, channel_id: str) -> str:
     cleaned = cleaned.replace('Watch with ', '').strip()
     cleaned = cleaned.replace('{lineBreak}', ' ').strip()
     
-    # Special cases
-    if channel_id == 'prime_premium':
-        return 'Amazon Prime'
-    elif channel_id == 'prime_included':
-        return 'Included with Prime'
-    elif channel_id == 'prime_free':
-        return 'Free with Ads'
+    # Special cases - normalize all Prime variants to "Prime Exclusive"
+    if channel_id in ('prime_premium', 'prime_included', 'prime_free'):
+        return 'Prime Exclusive'
     
     return cleaned if cleaned else 'Unknown'
 
@@ -1057,7 +1053,7 @@ def extract_provider_info_regex(text: str, gti: str, title: str) -> Dict[str, An
         else:
             # Default to "Included with Prime" for Prime exclusives
             result['channel_id'] = 'prime_included'
-            result['channel_name'] = 'Included with Prime'
+            result['channel_name'] = 'Prime Exclusive'  # Normalized from "Included with Prime"
         result['requires_prime'] = True
         result['subscription_type'] = 'PRIME'
         result['availability'] = 'entitled'
@@ -1198,7 +1194,7 @@ def extract_provider_info(data: Dict[str, Any], main_gti: str) -> Dict[str, Any]
                     return result
         
         result['channel_id'] = 'prime_included'
-        result['channel_name'] = 'Included with Prime'
+        result['channel_name'] = 'Prime Exclusive'  # Normalized from "Included with Prime"
         result['requires_prime'] = True
         result['subscription_type'] = 'PRIME'
         result['availability'] = 'entitled'
@@ -1862,6 +1858,15 @@ def import_to_database(results: List[Dict[str, Any]], db_path: str) -> None:
             is_new = existing is None
             was_stale = existing[1] if existing else False
             
+            # Defensive normalization: ensure channel_name is normalized even from cache
+            channel_name = result.get('channel_name', '')
+            if channel_name in ('Included with Prime', 'Join Prime', 'Prime (with ads)'):
+                channel_name = 'Prime Exclusive'
+            elif channel_name == 'Subscribe to ViX Premium or ViX Gratis':
+                channel_name = 'ViX'
+            elif channel_name == 'Peacock Premium Plus':
+                channel_name = 'Peacock'
+            
             cursor.execute("""
                 INSERT INTO amazon_channels (
                     gti, gti_type, channel_id, channel_name, availability,
@@ -1887,7 +1892,7 @@ def import_to_database(results: List[Dict[str, Any]], db_path: str) -> None:
                 gti,
                 gti_type,
                 result.get('channel_id'),
-                result.get('channel_name'),
+                channel_name,  # Use normalized name
                 result.get('availability'),
                 result.get('subscription_type'),
                 1 if result.get('requires_prime') else 0,
