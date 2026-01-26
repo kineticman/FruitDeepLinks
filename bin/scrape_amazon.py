@@ -458,6 +458,7 @@ def bootstrap_database(db_path: str, force: bool = False) -> None:
                     ('aiv_wnba_league_pass', 'WNBA League Pass', 'wnbalp', 'aiv_wnba', 1, 0, NULL, 22),
                     
                     -- Streaming Services
+                    -- Note: peacockus is primary, but 'peacock' (no suffix) also exists
                     ('aiv_peacock', 'Peacock', 'peacockus', 'aiv_peacock', 1, 0, 7.99, 30),
                     ('aiv_max', 'Max', 'maxliveeventsus', 'aiv_max', 1, 0, NULL, 40),
                     ('aiv_paramount_plus', 'Paramount+', 'cbsaacf', 'aiv_paramount_plus', 1, 0, NULL, 45),
@@ -836,6 +837,7 @@ def _benefit_id_to_name(bid: str) -> Optional[str]:
         # Streaming Services
         "maxliveeventsus": "Max",
         "peacockus": "Peacock",
+        "peacock": "Peacock",  # Variant without 'us' suffix
         "cbsaacf": "Paramount+",
         "daznus": "DAZN",
         "vixus": "ViX",
@@ -1917,25 +1919,6 @@ def import_to_database(results: List[Dict[str, Any]], db_path: str) -> None:
     conn.commit()
     
     logger.info(f"✓ Imported: {inserted} new, {updated} updated, {stale} stale")
-    
-    # Check for unmapped channels (channels not in amazon_services)
-    cursor.execute("""
-        SELECT DISTINCT ac.channel_id, ac.channel_name, COUNT(*) as gti_count
-        FROM amazon_channels ac
-        LEFT JOIN amazon_services s ON ac.channel_id = s.amazon_channel_id
-        WHERE ac.is_stale = 0 
-          AND ac.channel_id IS NOT NULL
-          AND s.service_id IS NULL
-        GROUP BY ac.channel_id, ac.channel_name
-        ORDER BY gti_count DESC
-    """)
-    
-    unmapped = cursor.fetchall()
-    if unmapped:
-        logger.warning(f"⚠ Found {len(unmapped)} unmapped channel(s) - add to amazon_services table:")
-        for row in unmapped:
-            channel_id, channel_name, count = row
-            logger.warning(f"  {channel_id} ({channel_name}): {count} GTIs")
     
     # Show stats
     cursor.execute("""
