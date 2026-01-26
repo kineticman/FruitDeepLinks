@@ -2446,6 +2446,7 @@ def api_wipe_event_data():
     - events, playables, event_images (event data)
     - lanes, lane_events, adb_lanes (lane schedules)
     - amazon_channels, amazon_channel_history (scraped data)
+    - amazon_gti_cache.pkl (Amazon scraper cache file)
     - Entire apple_events.db and espn_graph.db (cache databases)
     """
     if refresh_status["running"]:
@@ -2526,6 +2527,18 @@ def api_wipe_event_data():
                     stats["errors"].append(error_msg)
                 finally:
                     conn.close()
+            
+            # Delete Amazon GTI cache file
+            amazon_cache = fruit_db.parent / "amazon_gti_cache.pkl"
+            if amazon_cache.exists():
+                log(f"Deleting Amazon GTI cache: {amazon_cache}", "INFO")
+                try:
+                    amazon_cache.unlink()
+                    log("✅ Deleted Amazon GTI cache", "INFO")
+                except Exception as e:
+                    error_msg = f"Error deleting Amazon cache: {str(e)}"
+                    log(error_msg, "WARNING")
+                    stats["errors"].append(error_msg)
             
             # Wipe apple_events.db entirely (it's just a cache)
             apple_db = fruit_db.parent / "apple_events.db"
