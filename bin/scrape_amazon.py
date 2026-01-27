@@ -26,6 +26,30 @@ Features:
 
 from __future__ import annotations
 
+def _resolve_data_dir() -> str:
+    """Return an absolute data directory path.
+
+    In the Docker container, we want reports/cache under /app/data (mounted).
+    When running locally, fall back to a repo-relative ./data directory.
+    """
+    container_data = "/app/data"
+    try:
+        if os.path.isdir(container_data):
+            return container_data
+    except Exception:
+        pass
+
+    # Try repo-relative ./data (one level up from this file)
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        local_data = os.path.join(os.path.dirname(here), "data")
+        os.makedirs(local_data, exist_ok=True)
+        return local_data
+    except Exception:
+        # Last resort: CWD ./data
+        local_data = os.path.join(os.getcwd(), "data")
+        os.makedirs(local_data, exist_ok=True)
+        return local_data
 import argparse
 import json
 from urllib.parse import urlparse, parse_qs, urljoin
@@ -1780,7 +1804,7 @@ def scrape_pass_http(
         return result
     
     # Process with thread pool
-    with ThreadPoolExecutor(max_workers=workers * 2) as executor:
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(scrape_and_log, event) for event in events]
         
         for future in as_completed(futures):
@@ -1885,7 +1909,7 @@ def scrape_pass_chrome(
     
     # OPTIMIZATION: Process with thread pool (2x pool size for parallelism while drivers are busy)
     try:
-        with ThreadPoolExecutor(max_workers=workers * 2) as executor:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [executor.submit(scrape_and_log_chrome, event) for event in events]
             
             for future in as_completed(futures):
@@ -2338,8 +2362,7 @@ def main():
         else:
             # Auto-generate default report
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            rp = f"data/amazon_scrape_{ts}.csv"
-        
+            rp = os.path.join(_resolve_data_dir(), f"amazon_scrape_{ts}.csv")
         # If user passed a directory, create a timestamped file inside it
         if rp.endswith("/") or rp.endswith("\\") or (os.path.isdir(rp)):
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
