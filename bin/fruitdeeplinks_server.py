@@ -185,6 +185,45 @@ def get_db_connection():
     return sqlite3.connect(str(DB_PATH))
 
 
+def _expand_enabled_services_for_amazon(conn: sqlite3.Connection, enabled_services: list) -> list:
+    """Expand enabled services for Amazon wildcard behavior.
+
+    Historically we stored a single 'aiv' master toggle in enabled_services.
+    But playables use sub-service schemes like 'aiv_aggregator', 'aiv_vix_premium', etc.
+
+    To keep backward compatibility, treat 'aiv' as enabling all 'aiv_*' schemes
+    that exist in the database.
+    """
+    try:
+        if not enabled_services or "aiv" not in enabled_services:
+            return enabled_services
+
+        expanded = set(enabled_services)
+
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT logical_service
+            FROM playables
+            WHERE provider='aiv'
+              AND logical_service IS NOT NULL
+              AND logical_service LIKE 'aiv_%'
+            """
+        )
+        for (ls,) in cur.fetchall():
+            if ls:
+                expanded.add(ls)
+
+        # Ensure the aggregator bucket is covered if present historically
+        expanded.add("aiv_aggregator")
+
+        return sorted(expanded)
+    except Exception:
+        # Fail safe: never break selection on expansion issues
+        return enabled_services
+
+
+
 def _load_raw_preferences():
     """
     Load raw key/value prefs from user_preferences table (no JSON decoding).
@@ -800,10 +839,11 @@ def get_event_link_info(conn, event_id, uid_col, primary_deeplink_col, full_deep
         except Exception:
             prefs = {"enabled_services": []}
         enabled_services = prefs.get("enabled_services", [])
+        enabled_services_for_resolution = _expand_enabled_services_for_amazon(conn, enabled_services)
 
         # Try best deeplink for event
         try:
-            candidate = get_best_deeplink_for_event(conn, event_id, enabled_services)
+            candidate = get_best_deeplink_for_event(conn, event_id, enabled_services_for_resolution)
         except Exception:
             candidate = None
         if candidate:
@@ -2072,11 +2112,12 @@ def api_event_detail(event_id):
             try:
                 prefs = load_user_preferences(conn)
                 enabled_services = prefs.get("enabled_services", [])
+                enabled_services_for_resolution = _expand_enabled_services_for_amazon(conn, enabled_services)
                 amazon_master_enabled = prefs.get("amazon_master_enabled", True)
 
                 deeplink = None
                 try:
-                    deeplink = get_best_deeplink_for_event(conn, event_id, enabled_services)
+                    deeplink = get_best_deeplink_for_event(conn, event_id, enabled_services_for_resolution)
                 except Exception:
                     deeplink = None
 
@@ -2084,7 +2125,7 @@ def api_event_detail(event_id):
                 try:
                     from filter_integration import get_filtered_playables
                     filtered = get_filtered_playables(
-                        conn, event_id, enabled_services,
+                        conn, event_id, enabled_services_for_resolution,
                         amazon_master_enabled=amazon_master_enabled
                     )
                     if filtered:
@@ -2691,6 +2732,7 @@ def api_selection_examples():
             prefs = get_user_preferences()
         
         enabled_services = prefs.get("enabled_services", [])
+        enabled_services_for_resolution = _expand_enabled_services_for_amazon(conn, enabled_services)
         priority_map = prefs.get("service_priorities", {})
         amazon_penalty = prefs.get("amazon_penalty", True)
         amazon_master_enabled = prefs.get("amazon_master_enabled", True)
@@ -2754,7 +2796,7 @@ def api_selection_examples():
                 
                 # Get filtered playables (with user preferences) to determine winner
                 filtered_playables = get_filtered_playables(
-                    conn, event_id, enabled_services, priority_map, amazon_penalty, 
+                    conn, event_id, enabled_services_for_resolution, priority_map, amazon_penalty, 
                     language_preference="en", amazon_master_enabled=amazon_master_enabled
                 )
                 
