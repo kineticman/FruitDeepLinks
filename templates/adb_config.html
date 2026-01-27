@@ -104,6 +104,8 @@ margin-right: 10px;
 .btn-secondary:hover { background: #475569; }
 .btn-success { background: #22c55e; }
 .btn-success:hover { background: #16a34a; }
+.btn-danger { background: #ef4444; }
+.btn-danger:hover { background: #dc2626; }
 
 .loading { color: #fbbf24; }
 .status-message {
@@ -177,6 +179,7 @@ Each enabled provider gets dedicated virtual channels that can be tuned via ADB 
 <th style="min-width: 120px; text-align: right;">Events Available</th>
 <th style="min-width: 120px; text-align: center;">ADB Enabled</th>
 <th style="min-width: 140px;">Lane Count</th>
+<th style="min-width: 110px; text-align: center;">Actions</th>
 </tr>
 </thead>
 <tbody id="provider-lanes-tbody"></tbody>
@@ -239,7 +242,33 @@ statusEl.style.display = 'none';
 }, 5000);
 }
 
+async function deleteProviderLane(providerCode) {
+try {
+const code = (providerCode || '').trim();
+if (!code) return;
+
+if (!confirm(`Delete provider "${code}" from ADB provider lane config?\n\nThis removes the saved config row. If the provider appears again in future playables, it can re-appear automatically.`)) {
+return;
+}
+
+const res = await fetch(`/api/provider_lanes/${encodeURIComponent(code)}`, { method: 'DELETE' });
+if (!res.ok) {
+const data = await res.json().catch(() => ({}));
+throw new Error(data.error || `HTTP ${res.status}`);
+}
+
+showStatus(`🗑️ Deleted provider "${code}"`, 'success');
+await loadProviderLanes();
+await loadIntegrationFiles();
+
+} catch (err) {
+console.error('Failed to delete provider lane:', err);
+showStatus('Error deleting provider: ' + err.message, 'error');
+}
+}
+
 async function loadProviderLanes() {
+
 try {
 const loading = document.getElementById('provider-lanes-loading');
 const empty = document.getElementById('provider-lanes-empty');
@@ -294,6 +323,19 @@ min="0" max="50"
 data-provider="${p.provider_code}"
 class="adb-lane-count-input"
 value="${p.adb_lane_count || 0}">
+
+</td>
+<td style="text-align: center;">
+${(() => {
+const ec = p.event_count || 0;
+const fc = p.future_event_count || 0;
+const pc = p.playable_count || 0;
+const enabled = !!p.adb_enabled;
+const isStale = (ec === 0 && fc === 0 && pc === 0);
+// Only allow delete for fully-stale rows AND not enabled (avoid surprises)
+if (!isStale || enabled) return '<span style="color: #64748b; font-size: 12px;">—</span>';
+return `<button class="btn btn-danger" onclick="deleteProviderLane('${p.provider_code}')">Delete</button>`;
+})()}
 </td>
 </tr>
 `;

@@ -2987,6 +2987,65 @@ def get_provider_lane_stats(conn: sqlite3.Connection) -> list[dict]:
     return sorted(filtered_services.values(), key=lambda x: (-x["event_count"], x["name"]))
 
 
+
+# Provider lane code aliases (legacy -> canonical)
+# This prevents stale/legacy codes from lingering in provider_lanes UI/config.
+PROVIDER_LANE_ALIASES = {
+    # Old Kayo provider code -> canonical logical_service
+    "kayo": "kayo_web",
+}
+
+def _migrate_provider_lane_aliases(conn: sqlite3.Connection) -> None:
+    """One-time-ish migration to keep provider_lanes rows on canonical codes.
+
+    If a legacy code exists (e.g., 'kayo') and the canonical code doesn't, move
+    the saved config (adb_enabled/adb_lane_count) over, then delete the legacy row.
+    Also attempts to update adb_lanes.provider_code if that table exists.
+    """
+    try:
+        cur = conn.cursor()
+        for legacy, canonical in PROVIDER_LANE_ALIASES.items():
+            if legacy == canonical:
+                continue
+
+            cur.execute(
+                "SELECT provider_code, adb_enabled, adb_lane_count, created_at, updated_at "
+                "FROM provider_lanes WHERE provider_code = ?",
+                (legacy,),
+            )
+            legacy_row = cur.fetchone()
+            if not legacy_row:
+                continue
+
+            cur.execute("SELECT 1 FROM provider_lanes WHERE provider_code = ? LIMIT 1", (canonical,))
+            canonical_exists = cur.fetchone() is not None
+
+            if not canonical_exists:
+                # Move legacy settings to canonical row
+                cur.execute(
+                    "INSERT INTO provider_lanes (provider_code, adb_enabled, adb_lane_count, created_at, updated_at) "
+                    "VALUES (?, ?, ?, COALESCE(?, datetime('now')), datetime('now'))",
+                    (canonical, legacy_row[1], legacy_row[2], legacy_row[3]),
+                )
+
+            # Update adb_lanes if present
+            try:
+                cur.execute("UPDATE adb_lanes SET provider_code = ? WHERE provider_code = ?", (canonical, legacy))
+            except Exception:
+                pass
+
+            # Remove legacy row
+            cur.execute("DELETE FROM provider_lanes WHERE provider_code = ?", (legacy,))
+
+        conn.commit()
+    except Exception as e:
+        # Don't break the API if migration fails
+        try:
+            log(f"provider_lanes alias migration skipped/failed: {e}", "WARNING")
+        except Exception:
+            pass
+
+
 @app.route("/api/provider_lanes", methods=["GET", "POST"])
 def api_provider_lanes():
     """
@@ -3003,6 +3062,9 @@ def api_provider_lanes():
         )
 
     conn.row_factory = sqlite3.Row
+
+    # Keep provider_lanes on canonical provider codes (aliases)
+    _migrate_provider_lane_aliases(conn)
     try:
         if request.method == "GET":
             # Use enhanced stats function that shows event counts
@@ -3047,6 +3109,8 @@ def api_provider_lanes():
             if not isinstance(item, dict):
                 continue
             code = (item.get("provider_code") or "").strip()
+            # Normalize legacy provider codes to canonical
+            code = PROVIDER_LANE_ALIASES.get(code, code)
             if not code:
                 continue
 
@@ -3078,6 +3142,47 @@ def api_provider_lanes():
         return jsonify({"status": "success", "updated": updated})
     finally:
         conn.close()
+
+
+
+@app.route("/api/provider_lanes/<provider_code>", methods=["DELETE"])
+def api_delete_provider_lane(provider_code):
+    """Delete a provider from provider_lanes (and any associated adb_lanes rows).
+
+    Intended to clean up stale/removed providers (e.g., deprecated synthetic providers).
+    """
+    code = (provider_code or "").strip()
+    if not code:
+        return jsonify({"status": "error", "error": "Missing provider_code"}), 400
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({"status": "error", "error": "Database not found"}), 500
+
+    try:
+        cur = conn.cursor()
+
+        # Delete lane mapping rows if present
+        try:
+            cur.execute("DELETE FROM adb_lanes WHERE provider_code = ?", (code,))
+        except Exception:
+            # adb_lanes table may not exist in some deployments
+            pass
+
+        cur.execute("DELETE FROM provider_lanes WHERE provider_code = ?", (code,))
+        deleted = cur.rowcount or 0
+        conn.commit()
+
+        if deleted == 0:
+            return jsonify({"status": "not_found", "provider_code": code}), 404
+
+        log(f"Deleted provider_lanes entry for {code}", "INFO")
+        return jsonify({"status": "success", "provider_code": code, "deleted": deleted})
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.route("/api/lane/<int:lane_number>/deeplink")

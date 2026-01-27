@@ -311,6 +311,36 @@ Configure each provider as a separate Custom Channels source in Channels DVR:
 <span class="tag tag-post">POST</span>
 <code>/api/provider_lanes</code>
 </div>
+<div class="endpoint-line">
+<span class="tag tag-danger">DELETE</span>
+<code>/api/provider_lanes/&lt;provider_code&gt;</code>
+</div>
+<p class="description">
+<strong>Admin cleanup endpoint.</strong> Deletes a saved provider row from <code>provider_lanes</code> and (if present) any associated rows in <code>adb_lanes</code>.
+This is meant for removing stale/retired provider codes (e.g., legacy or experimental providers that are no longer generated).
+</p>
+<div class="params">
+<div><span class="param-name">provider_code</span>: Provider code to remove (example: <code>https</code>, <code>kayo</code>)</div>
+<div><strong>Returns:</strong> <code>{"status":"success","provider_code":"...","deleted":1}</code> or <code>{"status":"not_found",...}</code></div>
+</div>
+<pre># Delete a stale provider row
+curl -X DELETE "$BASE/api/provider_lanes/https" | jq
+
+# Example not found
+curl -X DELETE "$BASE/api/provider_lanes/does_not_exist" | jq</pre>
+<div class="note">
+<div class="note-title">Safety behavior</div>
+This endpoint only deletes the <em>saved config row</em>. If that provider ever appears again in future playables, it can reappear in the provider list the next time provider stats are rebuilt.
+</div>
+<div class="note">
+<div class="note-title">Provider code aliases (migration)</div>
+Some provider codes are considered legacy aliases and are automatically normalized/migrated to a canonical code. Example:
+<ul style="margin: 8px 0 0 20px; padding: 0;">
+  <li><code>kayo</code> → <code>kayo_web</code></li>
+</ul>
+If a legacy row exists in <code>provider_lanes</code>, the server will move its saved settings to the canonical provider code and remove the legacy row.
+</div>
+</div>
 <p class="description">
 View or update per-provider ADB lane configuration. Control which providers are enabled for ADB lanes and how many lanes each gets.
 </p>
