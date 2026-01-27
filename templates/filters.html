@@ -545,9 +545,13 @@ function renderPriorities() {
 const container = document.getElementById('priority-list');
 const loading = document.getElementById('priority-loading');
 
-// Get only enabled services
-const enabledServices = availableFilters.providers.filter(p => 
-currentPreferences.enabled_services.includes(p.scheme)
+// Get only enabled services (include Amazon sub-services too)
+const allPriorityServices = [
+  ...(availableFilters.providers || []),
+  ...(availableFilters.amazon_services || []),
+];
+const enabledServices = allPriorityServices.filter(p =>
+  currentPreferences.enabled_services.includes(p.scheme)
 );
 
 if (enabledServices.length === 0) {
