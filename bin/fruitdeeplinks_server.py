@@ -56,8 +56,27 @@ except ImportError:
 try:
     from logical_service_mapper import (
         get_all_logical_services_with_counts,
-        get_service_display_name as get_logical_service_display_name,
+        get_service_display_name as _ls_get_service_display_name,
     )
+
+    # Friendly display names for Amazon logical_service codes (aiv_*)
+    _AMAZON_SERVICE_DISPLAY_NAMES = {
+        "aiv_aggregator": "Amazon - Unknown",
+        "aiv_prime": "Amazon - Prime Exclusive",
+        "aiv_peacock": "Amazon - Peacock",
+        "aiv_max": "Amazon - Max",
+        "aiv_fox_one": "Amazon - FOX One",
+        "aiv_nba_league_pass": "Amazon - NBA League Pass",
+        "aiv_wnba_league_pass": "Amazon - WNBA League Pass",
+        "aiv_vix_premium": "Amazon - ViX Premium",
+        "aiv_vix": "Amazon - ViX",
+        "aiv_fanduel": "Amazon - FanDuel Sports Network",
+        "aiv_dazn": "Amazon - DAZN",
+        "aiv_willow": "Amazon - Willow",
+    }
+
+    def get_logical_service_display_name(service_code: str) -> str:
+        return _AMAZON_SERVICE_DISPLAY_NAMES.get(service_code, _ls_get_service_display_name(service_code))
 
     LOGICAL_SERVICES_AVAILABLE = True
 except ImportError:
@@ -2941,7 +2960,7 @@ def get_provider_lane_stats(conn: sqlite3.Connection) -> list[dict]:
         from adb_provider_mapper import get_adb_provider_code
         
         for code, info in services.items():
-            adb_code = get_adb_provider_code(code)
+            adb_code = code if (code == 'aiv' or code.startswith('aiv_')) else get_adb_provider_code(code)
             
             if adb_code not in adb_aggregated:
                 # Initialize with this service's data

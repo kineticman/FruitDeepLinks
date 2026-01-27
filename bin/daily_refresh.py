@@ -437,30 +437,48 @@ def main():
     ]):
         return 1
 
-    # Step 7e: Scrape Amazon channels (7-day smart cache)
-    # Identifies which Amazon subscription is required for each event
-    # Only re-scrapes GTIs that are stale or haven't been scraped yet
+    # Step 7e: Scrape Amazon channels (Playwright, headless)
+    # Identifies which Amazon subscription is required for each event.
+    # Uses amazon2.py (Playwright) which is dramatically more stable than the legacy Selenium scraper.
+    #
+    # Defaults match our proven-good manual run:
+    #   python3 amazon2.py --db ... --max 175 --workers 3 --timeout-ms 30000 --retries 1
+    #
+    # Env knobs (optional):
+    #   AMAZON_MAX:         max GTIs to process (default 175)
+    #   AMAZON_WORKERS:     concurrency (default 3)
+    #   AMAZON_TIMEOUT_MS:  per-request timeout ms (default 30000)
+    #   AMAZON_RETRIES:     retry count (default 1)
+    #   FRUIT_AMAZON_DEBUG_CSV_KEEP: keep last N amazon_scrape_*.csv files in /app/data (default 3; 0 keeps all)
     if skip_scrape:
         print("\n" + "=" * 60)
         print(f"[7e/{total_steps}] Scraping Amazon channels. SKIPPED")
         print("=" * 60)
         print("Amazon scraper skipped (--skip-scrape flag)")
     else:
+        amazon_max = os.getenv("AMAZON_MAX", "175")
+        amazon_workers = os.getenv("AMAZON_WORKERS", "3")
+        amazon_timeout_ms = os.getenv("AMAZON_TIMEOUT_MS", "30000")
+        amazon_retries = os.getenv("AMAZON_RETRIES", "1")
+        amazon_keep_debug = int(os.getenv("FRUIT_AMAZON_DEBUG_CSV_KEEP", "3") or "3")
+
         print("\n" + "=" * 60)
-        print(f"[7e/{total_steps}] Scraping Amazon channels (Chrome only)")
+        print(f"[7e/{total_steps}] Scraping Amazon channels (Playwright headless)")
         print("=" * 60)
+
         # Amazon scrape is non-fatal - don't stop pipeline if it fails
-        # Uses 5 workers for parallel scraping, respects 7-day cache
-        # AIV_HTTP_PASSES=0 skips HTTP fast passes and goes straight to Chrome
-        run_step("7e", total_steps, "Scraping Amazon channel requirements", [
-            "python3", "scrape_amazon.py",
+        run_step("7e", total_steps, "Scraping Amazon channel requirements (Playwright)", [
+            "python3", "amazon2.py",
             "--db", str(DB_PATH),
-            "--workers", "5",
-        ], allow_fail=True, env={"AIV_HTTP_PASSES": "0"})
-        
+            "--max", str(amazon_max),
+            "--workers", str(amazon_workers),
+            "--timeout-ms", str(amazon_timeout_ms),
+            "--retries", str(amazon_retries),
+        ], allow_fail=True)
+
         # Step 7e-migrate: Update logical_service on existing Amazon playables
-        # This ensures all playables have correct logical_service based on amazon_channels mapping
-        # Safe to run repeatedly - only updates playables that don't match current mapping
+        # This ensures all playables have correct logical_service based on amazon_channels mapping.
+        # Safe to run repeatedly - only updates playables that don't match current mapping.
         print("\n" + "=" * 60)
         print(f"[7e-migrate/{total_steps}] Updating Amazon playable logical services")
         print("=" * 60)
@@ -468,6 +486,29 @@ def main():
             "python3", "migrate_amazon_logical_services.py",
             str(DB_PATH),
         ], allow_fail=True)
+
+        # Step 7e-cleanup: Retain only the most recent amazon debug CSVs
+        # (amazon2.py writes /app/data/amazon_scrape_*.csv)
+        if amazon_keep_debug > 0:
+            try:
+                import glob
+                debug_dir = str(DB_PATH.parent)
+                files = sorted(
+                    glob.glob(os.path.join(debug_dir, "amazon_scrape_*.csv")),
+                    key=lambda p: os.path.getmtime(p),
+                    reverse=True,
+                )
+                for f in files[amazon_keep_debug:]:
+                    try:
+                        os.remove(f)
+                        print(f"[7e-cleanup] Removed old debug CSV: {f}")
+                    except Exception as e:
+                        print(f"[7e-cleanup] Failed to remove {f}: {e}")
+            except Exception as e:
+                print(f"[7e-cleanup] Debug CSV cleanup failed: {e}")
+
+
+
 
         # Step 8: Prefill HTTP deeplinks for any newly-imported playables
     if not run_step("8", total_steps, "Prefilling HTTP deeplinks (http_deeplink_url)", [

@@ -1,163 +1,257 @@
 #!/usr/bin/env python3
 """
-migrate_amazon_logical_services.py - Update existing Amazon playables with correct logical_service
+migrate_amazon_logical_services.py
 
-This script updates all playables with provider='aiv' to have the correct logical_service
-based on the amazon_channels and amazon_services mapping.
+Purpose
+-------
+Normalize Amazon (AIV) playables in fruit_events.db so that playables.logical_service
+reflects the correct Amazon sub-channel (e.g., aiv_peacock, aiv_fox_one, aiv_nba_league_pass).
+
+Key idea
+--------
+The reliable join key is the broadcast GTI embedded in the deeplink:
+  broadcast=amzn1.dv.gti.<uuid>
+That broadcast GTI maps directly to amazon_channels.gti (populated by the Amazon scraper).
+
+This script:
+1) Extracts broadcast GTIs from playables.deeplink_play / deeplink_open for provider='aiv'
+2) Looks up amazon_channels rows for those GTIs (preferring non-stale rows)
+3) Normalizes amazon_channels.channel_id / channel_name into canonical aiv_* logical services
+4) Updates playables.logical_service accordingly; leaves unmapped as aiv_aggregator
+
+Notes
+-----
+- Does NOT try to infer sports/league (e.g., NHL). It only maps based on Amazon channel metadata.
+- Designed to work with a 48-hour scrape window: if a GTI isn't in amazon_channels, it stays aggregator.
 """
 
+from __future__ import annotations
+
+import argparse
+import datetime as _dt
+import re
 import sqlite3
 import sys
-import re
-from datetime import datetime
+from typing import Dict, Optional, Tuple
 
-def extract_gti_from_deeplink(deeplink: str):
-    """Extract GTI from Amazon deeplink"""
-    if not deeplink:
-        return None
-    
-    # Try broadcast GTI first
-    match = re.search(r'broadcast=(amzn1\.dv\.gti\.[0-9a-f-]{36})', deeplink)
-    if match:
-        return match.group(1)
-    
-    # Fall back to main GTI
-    match = re.search(r'[?&]gti=(amzn1\.dv\.gti\.[0-9a-f-]{36})', deeplink)
-    if match:
-        return match.group(1)
-    
+
+BROADCAST_RX = re.compile(r"broadcast=(amzn1\.dv\.gti\.[^&\s]+)", re.IGNORECASE)
+
+
+def utcnow_iso() -> str:
+    return _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def extract_broadcast_gti(deeplink_play: Optional[str], deeplink_open: Optional[str]) -> Optional[str]:
+    for s in (deeplink_play, deeplink_open):
+        if not s:
+            continue
+        m = BROADCAST_RX.search(s)
+        if m:
+            return m.group(1)
     return None
 
 
-def migrate_amazon_playables(db_path: str):
-    """Update all Amazon playables with correct logical_service"""
-    
+def normalize_service(channel_id: Optional[str], channel_name: Optional[str]) -> Optional[str]:
+    """
+    Convert a raw amazon_channels.channel_id + channel_name into canonical aiv_* logical_service.
+    Returns None if unknown (caller should keep as aiv_aggregator).
+    """
+    cid = (channel_id or "").strip()
+    cname = (channel_name or "").strip()
+
+    # Some scrapes yield Amazon internal identifiers like:
+    # - amzn1.dv.channel.<uuid>
+    # - amzn1.dv.spid.<uuid>
+    # In those cases, the channel_name is usually the best signal.
+    # Some scrapes yield benefit ids like peacockus, daznus, vixplusus, maxliveeventsus, etc.
+
+    # First: direct known benefit ids / canonical ids
+    cid_l = cid.lower()
+
+    direct_map = {
+        "aiv_nba_league_pass": "aiv_nba_league_pass",
+        "aiv_wnba_league_pass": "aiv_wnba_league_pass",
+        "aiv_fox_one": "aiv_fox_one",
+        "aiv_peacock": "aiv_peacock",
+        "aiv_max": "aiv_max",
+        "aiv_dazn": "aiv_dazn",
+        "aiv_vix_premium": "aiv_vix_premium",
+        "aiv_vix_gratis": "aiv_vix",  # if you use aiv_vix lane
+        "aiv_fanduel": "aiv_fanduel",
+        "aiv_willow": "aiv_willow",
+        "aiv_prime": "aiv_prime",
+        "prime_included": "aiv_prime",  # normalize
+        "aiv_prime_included": "aiv_prime",
+        "aiv_prime_free": "aiv_free",
+        "aiv_join_prime": "aiv_prime",
+        "vixplusus": "aiv_vix_premium",
+        "peacockus": "aiv_peacock",
+        "daznus": "aiv_dazn",
+        "maxliveeventsus": "aiv_max",
+    }
+    if cid_l in direct_map:
+        return direct_map[cid_l]
+
+    # Channel name normalization (covers amzn1.dv.channel.*, amzn1.dv.spid.*, free trials, etc.)
+    name_l = cname.lower()
+
+    # Treat "Free trial of X" as X
+    if "nba league pass" in name_l:
+        return "aiv_nba_league_pass"
+    if "wnba league pass" in name_l:
+        return "aiv_wnba_league_pass"
+    if "fox one" in name_l:
+        return "aiv_fox_one"
+    if "peacock" in name_l:
+        # "Peacock Premium Plus" etc.
+        return "aiv_peacock"
+    if name_l == "max" or "max" in name_l:
+        # handle "Subscribe for $18.49/month" -> this is Max live events benefitId sometimes
+        # Prefer Max if channel_id hinted it, otherwise only if name mentions Max
+        if "subscribe for" in name_l and "max" not in name_l:
+            # this is ambiguous; only map if cid was maxliveeventsus (handled above)
+            return None
+        return "aiv_max"
+    if "dazn" in name_l:
+        return "aiv_dazn"
+    if "vix premium" in name_l:
+        return "aiv_vix_premium"
+    if name_l == "vix" or "vix" in name_l:
+        return "aiv_vix"
+    if "fanduel sports network" in name_l:
+        return "aiv_fanduel"
+    if "willow" in name_l:
+        return "aiv_willow"
+    if "prime" in name_l and "join" not in name_l:
+        # "Prime Included" / "Prime Exclusive"
+        return "aiv_prime"
+
+    return None
+
+
+def migrate(db_path: str) -> int:
+    print("=" * 80)
+    print("MIGRATING AMAZON PLAYABLES TO CORRECT LOGICAL SERVICES (broadcast GTI join)")
+    print("=" * 80)
+    print()
+
     conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    
-    print("="*80)
-    print("MIGRATING AMAZON PLAYABLES TO CORRECT LOGICAL SERVICES")
-    print("="*80)
-    print()
-    
-    # Get all Amazon playables
+
+    # Ensure amazon_channels exists
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='amazon_channels'")
+    if not cur.fetchone():
+        raise SystemExit("amazon_channels table not found. Run the Amazon scraper first.")
+
+    # Load amazon_channels mapping (prefer non-stale)
     cur.execute("""
-        SELECT playable_id, deeplink_play, deeplink_open, logical_service
-        FROM playables
-        WHERE provider = 'aiv'
+        SELECT gti, channel_id, channel_name, is_stale
+        FROM amazon_channels
     """)
-    
-    playables = cur.fetchall()
-    print(f"Found {len(playables)} Amazon playables")
-    print()
-    
-    updated = 0
-    not_found = 0
-    already_correct = 0
-    debug_vix = []  # Track ViX playables for debugging
-    
-    for playable_id, deeplink_play, deeplink_open, current_logical_service in playables:
-        # Extract GTI
-        gti = extract_gti_from_deeplink(deeplink_play or deeplink_open)
-        
+    ac_rows = cur.fetchall()
+
+    # Build mapping gti -> best row
+    by_gti: Dict[str, sqlite3.Row] = {}
+    for r in ac_rows:
+        gti = (r["gti"] or "").strip()
         if not gti:
-            not_found += 1
             continue
-        
-        # Look up logical_service from amazon_channels + amazon_services
-        # Try matching on channel_id first, then fall back to channel_name
-        cur.execute("""
-            SELECT s.logical_service, ac.channel_name
-            FROM amazon_channels ac
-            JOIN amazon_services s ON (
-                (ac.channel_id IS NOT NULL AND ac.channel_id = s.amazon_channel_id)
-                OR (ac.channel_id IS NULL AND ac.channel_name = s.display_name)
-                OR (ac.channel_id = 'peacock' AND s.amazon_channel_id = 'peacockus')
-            )
-            WHERE ac.gti = ? AND ac.is_stale = 0
-            LIMIT 1
-        """, (gti,))
-        
-        row = cur.fetchone()
-        
-        if row and row[0]:
-            new_logical_service = row[0]
-            channel_name = row[1]
-            
-            # Debug: Track ViX updates
-            if 'vix' in channel_name.lower():
-                debug_vix.append({
-                    'playable_id': playable_id,
-                    'gti': gti,
-                    'channel_name': channel_name,
-                    'old': current_logical_service,
-                    'new': new_logical_service
-                })
-            
-            # Debug: Track Peacock updates for troubleshooting
-            if 'peacock' in channel_name.lower() and playable_id.startswith('tvs.sbd.12962:amzn1.dv.gti.1aa56f32'):
-                print(f"DEBUG - Found Peacock playable:")
-                print(f"  playable_id: {playable_id}")
-                print(f"  GTI: {gti}")
-                print(f"  channel_name: {channel_name}")
-                print(f"  current: {current_logical_service}")
-                print(f"  new: {new_logical_service}")
-                print(f"  will_update: {new_logical_service != current_logical_service}")
-            
-            if new_logical_service != current_logical_service:
-                # Update the playable
-                cur.execute("""
-                    UPDATE playables
-                    SET logical_service = ?
-                    WHERE playable_id = ?
-                """, (new_logical_service, playable_id))
-                updated += 1
-            else:
-                already_correct += 1
-        else:
-            # No mapping found - leave as aiv_aggregator
-            not_found += 1
-    
-    conn.commit()
-    
-    print(f"✓ Updated: {updated} playables")
-    print(f"✓ Already correct: {already_correct} playables")
-    print(f"⚠ No mapping found: {not_found} playables (left as aiv_aggregator)")
-    print()
-    
-    # Debug: Show ViX playables
-    if debug_vix:
-        print("DEBUG - ViX Playables Found:")
-        print("-"*80)
-        for v in debug_vix:
-            print(f"  GTI: {v['gti']}")
-            print(f"  Channel: {v['channel_name']}")
-            print(f"  Old: {v['old']} -> New: {v['new']}")
-            print(f"  Playable: {v['playable_id'][:50]}...")
-            print()
-    
-    # Show breakdown of logical_services after migration
+        prev = by_gti.get(gti)
+        if prev is None:
+            by_gti[gti] = r
+            continue
+        # Prefer non-stale
+        prev_stale = int(prev["is_stale"] or 0)
+        r_stale = int(r["is_stale"] or 0)
+        if prev_stale == 1 and r_stale == 0:
+            by_gti[gti] = r
+
+    # Pull candidate playables
     cur.execute("""
-        SELECT logical_service, COUNT(*) as count
+        SELECT rowid, event_id, provider, logical_service, deeplink_play, deeplink_open
         FROM playables
-        WHERE provider = 'aiv'
-        GROUP BY logical_service
-        ORDER BY count DESC
+        WHERE provider='aiv'
     """)
-    
-    print("Logical service breakdown after migration:")
-    print("-"*80)
-    for logical_service, count in cur.fetchall():
-        print(f"  {logical_service or '(null)':30s} {count:4d} playables")
-    
+    plays = cur.fetchall()
+    print(f"Found {len(plays)} Amazon playables")
+
+    updated = 0
+    already = 0
+    no_broadcast = 0
+    no_match = 0
+    unmapped = 0
+
+    # Update in a transaction
+    now = utcnow_iso()
+    conn.execute("BEGIN")
+
+    for r in plays:
+        rowid = r["rowid"]
+        current_ls = (r["logical_service"] or "").strip() or "aiv_aggregator"
+        bgti = extract_broadcast_gti(r["deeplink_play"], r["deeplink_open"])
+        if not bgti:
+            no_broadcast += 1
+            continue
+
+        ac = by_gti.get(bgti)
+        if not ac:
+            no_match += 1
+            continue
+
+        new_ls = normalize_service(ac["channel_id"], ac["channel_name"])
+        if not new_ls:
+            unmapped += 1
+            continue
+
+        if new_ls == current_ls:
+            already += 1
+            continue
+
+        conn.execute(
+            "UPDATE playables SET logical_service=? WHERE rowid=?",
+            (new_ls, rowid),
+        )
+        updated += 1
+
+    conn.commit()
+
     print()
-    print("="*80)
+    print(f"Updated: {updated}")
+    print(f"Already correct: {already}")
+    print(f"No broadcast GTI: {no_broadcast}")
+    print(f"Broadcast GTI not in amazon_channels: {no_match}")
+    print(f"Unmapped channel metadata: {unmapped}")
+    print()
+
+    # Breakdown after migration
+    print("Logical service breakdown after migration:")
+    print("-" * 80)
+    cur.execute("""
+        SELECT COALESCE(NULLIF(TRIM(logical_service),''),'aiv_aggregator') AS ls,
+               COUNT(*) AS playables
+        FROM playables
+        WHERE provider='aiv'
+        GROUP BY 1
+        ORDER BY playables DESC
+    """)
+    for row in cur.fetchall():
+        print(f"  {row['ls']:<30s} {row['playables']} playables")
+
+    print()
+    print("=" * 80)
     print("MIGRATION COMPLETE")
-    print("="*80)
-    
-    conn.close()
+    print("=" * 80)
+    return 0
 
 
-if __name__ == '__main__':
-    db_path = sys.argv[1] if len(sys.argv) > 1 else "/app/data/fruit_events.db"
-    migrate_amazon_playables(db_path)
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Migrate Amazon AIV playables to correct logical_service")
+    ap.add_argument("db", help="Path to fruit_events.db (e.g. /app/data/fruit_events.db)")
+    args = ap.parse_args()
+    return migrate(args.db)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
