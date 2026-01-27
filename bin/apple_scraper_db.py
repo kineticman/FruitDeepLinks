@@ -777,6 +777,9 @@ def main():
                     help="Disable hybrid optimization (use pure Selenium)")
     args = ap.parse_args()
 
+    # Always cleanup old shelf-upgrade failure dumps (even if no failures this run)
+    cleanup_failed_shelf_upgrade_logs(Path(args.db).resolve().parent, keep_days=3, verbose=False)
+
     db_path = Path(args.db)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     
