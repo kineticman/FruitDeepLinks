@@ -64,6 +64,42 @@ def get_auth_path() -> Path:
 def get_db_path() -> Path:
     return get_project_root() / "data" / "apple_events.db"
 
+
+# ------------------------------ Cleanup helpers ------------------------------
+def cleanup_failed_shelf_upgrade_logs(directory: Path, *, keep_days: int = 3, verbose: bool = True) -> int:
+    """
+    Delete old failed_shelf_upgrades_*.json files in `directory`.
+
+    Policy: keep only the most recent `keep_days` of files (based on mtime). Everything older is deleted.
+
+    Returns: number of files deleted
+    """
+    try:
+        directory = Path(directory)
+        if not directory.exists():
+            return 0
+
+        now = time.time()
+        cutoff = now - (keep_days * 86400)
+
+        deleted = 0
+        for p in directory.glob("failed_shelf_upgrades_*.json"):
+            try:
+                if p.stat().st_mtime < cutoff:
+                    p.unlink()
+                    deleted += 1
+                    if verbose:
+                        print(f"  [cleanup] deleted old shelf-upgrade log: {p}")
+            except Exception as e:
+                if verbose:
+                    print(f"  [cleanup] could not delete {p}: {e}")
+
+        return deleted
+    except Exception as e:
+        if verbose:
+            print(f"  [cleanup] failed: {e}")
+        return 0
+
 # ------------------------------ Database ------------------------------
 def init_database(db_path: Path):
     """Initialize SQLite database with schema for scraped Apple TV events"""
@@ -873,6 +909,11 @@ def main():
                     )
                     out_path.write_text(json.dumps(failed_upgrades, indent=2))
                     print(f"  (details saved to: {out_path})")
+
+                    # Cleanup older debug dumps (keep only 3 days)
+                    deleted = cleanup_failed_shelf_upgrade_logs(out_path.parent, keep_days=3, verbose=False)
+                    if deleted:
+                        print(f"  [cleanup] removed {deleted} old failed_shelf_upgrades_*.json file(s)")
                 except Exception as e:
                     print(f"  (could not write failure details JSON: {e})")
         
