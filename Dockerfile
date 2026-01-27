@@ -35,6 +35,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# --- Playwright browsers (Chromium) ---
+# NOTE: Playwright uses its own bundled browsers by default.
+RUN python3 -m playwright install-deps chromium \
+ && python3 -m playwright install chromium
+
 # --- App code ---
 COPY bin ./bin
 COPY templates ./templates
