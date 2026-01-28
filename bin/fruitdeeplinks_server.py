@@ -18,6 +18,15 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from collections import deque
 
+# Ensure this script's directory (/app/bin) is always on sys.path so local helpers
+# like adb_provider_mapper.py can be imported even when running from a different CWD.
+try:
+    _BIN_DIR = str(Path(__file__).parent)
+    if _BIN_DIR not in sys.path:
+        sys.path.insert(0, _BIN_DIR)
+except Exception:
+    pass
+
 from flask import (
     Flask,
     jsonify,
@@ -3008,7 +3017,7 @@ def get_provider_lane_stats(conn: sqlite3.Connection) -> list[dict]:
                 # Initialize with this service's data
                 adb_aggregated[adb_code] = {
                     "provider_code": adb_code,
-                    "name": info["name"] if adb_code == code else adb_code.upper(),
+                    "name": ("Amazon (All AIV)" if adb_code == "aiv" else (info["name"] if adb_code == code else adb_code.upper())),
                     "event_count": 0,
                     "playable_count": 0,
                     "future_event_count": 0,
@@ -3041,8 +3050,43 @@ def get_provider_lane_stats(conn: sqlite3.Connection) -> list[dict]:
         filtered_services = adb_aggregated
                 
     except ImportError:
-        # If mapper not available, show all services
-        filtered_services = services
+        # If mapper not available, at minimum collapse Amazon logical services (aiv_*)
+        # into a single ADB provider 'aiv' so the UI doesn't explode into many Amazon rows.
+        amazon_agg = None
+        filtered_services = {}
+        for code, info in services.items():
+            if code == 'aiv' or str(code).startswith('aiv_'):
+                if amazon_agg is None:
+                    amazon_agg = {
+                        'provider_code': 'aiv',
+                        'name': 'Amazon (All AIV)',
+                        'event_count': 0,
+                        'playable_count': 0,
+                        'future_event_count': 0,
+                        'adb_enabled': 0,
+                        'adb_lane_count': 0,
+                        'created_at': None,
+                        'updated_at': None,
+                    }
+                amazon_agg['event_count'] += int(info.get('event_count', 0) or 0)
+                amazon_agg['playable_count'] += int(info.get('playable_count', 0) or 0)
+                amazon_agg['future_event_count'] += int(info.get('future_event_count', 0) or 0)
+                # Prefer canonical 'aiv' config if present; otherwise take any enabled/lanes as a hint
+                if code == 'aiv':
+                    amazon_agg['adb_enabled'] = int(info.get('adb_enabled', 0) or 0)
+                    amazon_agg['adb_lane_count'] = int(info.get('adb_lane_count', 0) or 0)
+                    amazon_agg['created_at'] = info.get('created_at')
+                    amazon_agg['updated_at'] = info.get('updated_at')
+                else:
+                    amazon_agg['adb_enabled'] = max(int(amazon_agg['adb_enabled']), int(info.get('adb_enabled', 0) or 0))
+                    amazon_agg['adb_lane_count'] = max(int(amazon_agg['adb_lane_count']), int(info.get('adb_lane_count', 0) or 0))
+                continue
+
+            filtered_services[code] = info
+
+        if amazon_agg is not None:
+            filtered_services['aiv'] = amazon_agg
+
     
     # Sort by event count (descending), then by name
     return sorted(filtered_services.values(), key=lambda x: (-x["event_count"], x["name"]))
