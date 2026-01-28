@@ -3002,7 +3002,7 @@ def get_provider_lane_stats(conn: sqlite3.Connection) -> list[dict]:
         from adb_provider_mapper import get_adb_provider_code
         
         for code, info in services.items():
-            adb_code = code if (code == 'aiv' or code.startswith('aiv_')) else get_adb_provider_code(code)
+            adb_code = 'aiv' if (code == 'aiv' or code.startswith('aiv_')) else get_adb_provider_code(code)
             
             if adb_code not in adb_aggregated:
                 # Initialize with this service's data
@@ -3056,6 +3056,20 @@ PROVIDER_LANE_ALIASES = {
     "kayo": "kayo_web",
 }
 
+def _normalize_provider_lane_code(code: str) -> str:
+    """Normalize provider_lanes/adb_lanes provider codes.
+
+    - Applies explicit aliases (e.g., 'kayo' -> 'kayo_web')
+    - Collapses Amazon sub-services (aiv_*) into the single ADB provider 'aiv'
+      so the ADB UI and export treat Amazon as one service.
+    """
+    code = (code or "").strip()
+    if not code:
+        return ""
+    code = PROVIDER_LANE_ALIASES.get(code, code)
+    if code.startswith("aiv_"):
+        return "aiv"
+    return code
 def _migrate_provider_lane_aliases(conn: sqlite3.Connection) -> None:
     """One-time-ish migration to keep provider_lanes rows on canonical codes.
 
@@ -3097,6 +3111,54 @@ def _migrate_provider_lane_aliases(conn: sqlite3.Connection) -> None:
 
             # Remove legacy row
             cur.execute("DELETE FROM provider_lanes WHERE provider_code = ?", (legacy,))
+
+        # Collapse any Amazon sub-services (aiv_*) into the single ADB provider 'aiv'
+        try:
+            cur.execute(
+                "SELECT provider_code, adb_enabled, adb_lane_count FROM provider_lanes WHERE provider_code LIKE 'aiv_%' AND provider_code != 'aiv'"
+            )
+            legacy_rows = cur.fetchall()
+            if legacy_rows:
+                # Ensure canonical row exists
+                cur.execute(
+                    "SELECT adb_enabled, adb_lane_count FROM provider_lanes WHERE provider_code='aiv'"
+                )
+                existing = cur.fetchone()
+                existing_enabled = int(existing[0]) if existing else 0
+                existing_lanes = int(existing[1]) if existing else 0
+
+                merged_enabled = existing_enabled
+                merged_lanes = existing_lanes
+
+                for legacy_code, adb_enabled, adb_lane_count in legacy_rows:
+                    merged_enabled = max(merged_enabled, int(adb_enabled or 0))
+                    merged_lanes = max(merged_lanes, int(adb_lane_count or 0))
+
+                if existing:
+                    cur.execute(
+                        "UPDATE provider_lanes SET adb_enabled=?, adb_lane_count=?, updated_at=datetime('now') WHERE provider_code='aiv'",
+                        (merged_enabled, merged_lanes),
+                    )
+                else:
+                    cur.execute(
+                        "INSERT INTO provider_lanes (provider_code, adb_enabled, adb_lane_count, created_at, updated_at) VALUES ('aiv', ?, ?, datetime('now'), datetime('now'))",
+                        (merged_enabled, merged_lanes),
+                    )
+
+                # Delete legacy rows
+                cur.execute(
+                    "DELETE FROM provider_lanes WHERE provider_code LIKE 'aiv_%' AND provider_code != 'aiv'"
+                )
+
+                # Also normalize adb_lanes rows if present
+                try:
+                    cur.execute(
+                        "UPDATE adb_lanes SET provider_code='aiv' WHERE provider_code LIKE 'aiv_%' AND provider_code != 'aiv'"
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         conn.commit()
     except Exception as e:
@@ -3171,7 +3233,7 @@ def api_provider_lanes():
                 continue
             code = (item.get("provider_code") or "").strip()
             # Normalize legacy provider codes to canonical
-            code = PROVIDER_LANE_ALIASES.get(code, code)
+            code = _normalize_provider_lane_code(code)
             if not code:
                 continue
 
@@ -3212,7 +3274,7 @@ def api_delete_provider_lane(provider_code):
 
     Intended to clean up stale/removed providers (e.g., deprecated synthetic providers).
     """
-    code = (provider_code or "").strip()
+    code = _normalize_provider_lane_code(provider_code)
     if not code:
         return jsonify({"status": "error", "error": "Missing provider_code"}), 400
 
@@ -3225,7 +3287,10 @@ def api_delete_provider_lane(provider_code):
 
         # Delete lane mapping rows if present
         try:
-            cur.execute("DELETE FROM adb_lanes WHERE provider_code = ?", (code,))
+            if code == "aiv":
+                cur.execute("DELETE FROM adb_lanes WHERE provider_code = ? OR provider_code LIKE 'aiv_%'", (code,))
+            else:
+                cur.execute("DELETE FROM adb_lanes WHERE provider_code = ?", (code,))
         except Exception:
             # adb_lanes table may not exist in some deployments
             pass
