@@ -6,6 +6,7 @@ Orchestrates the full pipeline: scrape -> import -> plan -> export
 """
 
 import os
+import argparse
 import sys
 import subprocess
 import sqlite3
@@ -76,18 +77,215 @@ def _write_apple_import_stamp(apple_db_path: Path):
 
 
 
-def run_step(step_num, total_steps, description, command, allow_fail: bool = False):
+def _sqlite_bloat_stats(db_path: Path) -> dict:
+    """Return lightweight SQLite bloat stats (safe to call frequently)."""
+    try:
+        size = db_path.stat().st_size if db_path.exists() else 0
+    except Exception:
+        size = 0
+
+    stats = {
+        "size_bytes": size,
+        "journal_mode": None,
+        "page_size": None,
+        "page_count": None,
+        "freelist_count": None,
+        "freelist_ratio": 0.0,
+    }
+
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        cur = conn.cursor()
+        cur.execute("PRAGMA busy_timeout=5000;")
+        stats["journal_mode"] = cur.execute("PRAGMA journal_mode;").fetchone()[0]
+        stats["page_size"] = cur.execute("PRAGMA page_size;").fetchone()[0]
+        stats["page_count"] = cur.execute("PRAGMA page_count;").fetchone()[0]
+        stats["freelist_count"] = cur.execute("PRAGMA freelist_count;").fetchone()[0]
+        conn.close()
+
+        pc = stats["page_count"] or 0
+        fl = stats["freelist_count"] or 0
+        stats["freelist_ratio"] = (fl / pc) if pc else 0.0
+    except Exception:
+        # Non-fatal; return what we have
+        pass
+
+    return stats
+
+
+
+def _vacuum_stamp_path(db_path: Path, label: str) -> Path:
+    # Store stamp next to the DB so it works both in-container and on-host mounts
+    safe = "".join(ch if ch.isalnum() else "_" for ch in label)
+    return db_path.parent / f".last_vacuum_{safe}.txt"
+
+
+def _current_iso_week_key() -> str:
+    # Example: "2026-W05"
+    y, w, _ = datetime.now().isocalendar()
+    return f"{y}-W{w:02d}"
+
+
+def _already_vacuumed_this_week(db_path: Path, label: str) -> bool:
+    stamp = _vacuum_stamp_path(db_path, label)
+    try:
+        if not stamp.exists():
+            return False
+        val = stamp.read_text(encoding="utf-8").strip()
+        return val == _current_iso_week_key()
+    except Exception:
+        return False
+
+
+def _write_vacuum_stamp(db_path: Path, label: str) -> None:
+    stamp = _vacuum_stamp_path(db_path, label)
+    try:
+        stamp.write_text(_current_iso_week_key() + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
+
+def _vacuum_if_needed(
+    db_path: Path,
+    label: str,
+    *,
+    min_free_pages: int = 5000,
+    min_free_ratio: float = 0.30,
+    extreme_free_ratio: float = 0.60,
+    run_on_weekday: int = 6,  # Monday=0 ... Sunday=6
+) -> bool:
+    """
+    Vacuum conditionally:
+      - Always prints bloat stats
+      - VACUUM only on scheduled weekday (default Sunday), unless bloat is extreme
+      - Skips quickly if DB is busy (won't stall the pipeline)
+    """
+    stats = _sqlite_bloat_stats(db_path)
+    pc = stats.get("page_count") or 0
+    fl = stats.get("freelist_count") or 0
+    ratio = float(stats.get("freelist_ratio") or 0.0)
+
+    print(
+        f"[db-maint] {label}: size={stats.get('size_bytes')} journal={stats.get('journal_mode')} "
+        f"pages={pc} freelist={fl} ratio={ratio:.2f}"
+    )
+
+    if pc == 0:
+        return False
+
+    needs = (fl >= min_free_pages) and (ratio >= min_free_ratio)
+    extreme = ratio >= extreme_free_ratio
+
+    if not needs:
+        return False
+
+    today = datetime.now().weekday()
+    if (today != run_on_weekday) and (not extreme):
+        print(f"[db-maint] {label}: bloat high but not scheduled day; skipping VACUUM.")
+        return False
+
+
+    # Prevent repeated VACUUMs if daily_refresh is run multiple times in the same week
+    # (unless we're in an "extreme bloat" rescue path).
+    if (not extreme) and _already_vacuumed_this_week(db_path, label):
+        print(f"[db-maint] {label}: already vacuumed this week ({_current_iso_week_key()}); skipping.")
+        return False
+
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        cur = conn.cursor()
+        cur.execute("PRAGMA busy_timeout=5000;")
+
+        # Try to acquire an exclusive lock quickly; if we can't, bail.
+        try:
+            cur.execute("BEGIN EXCLUSIVE;")
+            cur.execute("ROLLBACK;")  # end txn; VACUUM cannot run inside a transaction
+        except sqlite3.OperationalError as e:
+            print(f"[db-maint] {label}: DB busy; skipping VACUUM ({e})")
+            conn.close()
+            return False
+
+        # Safe even if journal_mode=delete; helps if this ever flips to WAL.
+        try:
+            cur.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        except Exception:
+            pass
+
+        t0 = time.time()
+        cur.execute("VACUUM;")
+        # VACUUM runs in autocommit mode; no explicit commit needed
+        conn.close()
+        dt = time.time() - t0
+
+        after = _sqlite_bloat_stats(db_path)
+        print(f"[db-maint] {label}: VACUUM done in {dt:.1f}s. size_after={after.get('size_bytes')}")
+        _write_vacuum_stamp(db_path, label)
+        return True
+    except Exception as e:
+        print(f"[db-maint] {label}: VACUUM failed (non-fatal): {e}")
+        return False
+
+
+def _vacuum_now(db_path: Path, label: str) -> bool:
+    """Force VACUUM immediately (still skips if DB is busy)."""
+    before = _sqlite_bloat_stats(db_path)
+    print(f"[db-maint] {label}: FORCE vacuum requested. size={before.get('size_bytes')} "
+          f"journal={before.get('journal_mode')} pages={before.get('page_count')} "
+          f"freelist={before.get('freelist_count')} ratio={before.get('freelist_ratio'):.2f}")
+
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        cur = conn.cursor()
+        cur.execute("PRAGMA busy_timeout=5000;")
+
+        try:
+            cur.execute("BEGIN EXCLUSIVE;")
+            cur.execute("ROLLBACK;")  # end txn; VACUUM cannot run inside a transaction
+        except sqlite3.OperationalError as e:
+            print(f"[db-maint] {label}: DB busy; skipping FORCE VACUUM ({e})")
+            conn.close()
+            return False
+
+        try:
+            cur.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        except Exception:
+            pass
+
+        t0 = time.time()
+        cur.execute("VACUUM;")
+        # VACUUM runs in autocommit mode; no explicit commit needed
+        conn.close()
+        dt = time.time() - t0
+
+        after = _sqlite_bloat_stats(db_path)
+        print(f"[db-maint] {label}: FORCE VACUUM done in {dt:.1f}s. "
+              f"size_before={before.get('size_bytes')} size_after={after.get('size_bytes')}")
+        _write_vacuum_stamp(db_path, label)
+        return True
+    except Exception as e:
+        print(f"[db-maint] {label}: FORCE VACUUM failed (non-fatal): {e}")
+        return False
+
+
+def run_step(step_num, total_steps, description, command, allow_fail: bool = False, env: dict = None):
     """Run a pipeline step and handle errors"""
     print(f"\n{'=' * 60}")
     print(f"[{step_num}/{total_steps}] {description}")
     print(f"{'=' * 60}")
 
     try:
+        # Merge custom env vars with current environment
+        step_env = os.environ.copy()
+        if env:
+            step_env.update(env)
+        
         subprocess.run(
             command,
             check=True,
             cwd=BIN_DIR,
             capture_output=False,
+            env=step_env,
         )
         print(f"[OK] Step {step_num} complete")
         return True
@@ -111,7 +309,46 @@ def _is_nonempty_json_object(path: Path) -> bool:
         return False
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="FruitDeepLinks daily refresh pipeline")
+    parser.add_argument(
+        "--vacuum-only",
+        nargs="?",
+        const="both",
+        default=None,
+        choices=["apple", "fruit", "both"],
+        help="Run SQLite VACUUM immediately for the selected DB (apple, fruit, both) and exit without running the pipeline.",
+    )
+    parser.add_argument(
+        "--bloat-stats-only",
+        nargs="?",
+        const="both",
+        default=None,
+        choices=["apple", "fruit", "both"],
+        help="Print SQLite bloat stats for the selected DB (apple, fruit, both) and exit.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.bloat_stats_only is not None:
+        target = args.bloat_stats_only
+        if target in ("apple", "both"):
+            s = _sqlite_bloat_stats(APPLE_DB_PATH)
+            print(f"[db-maint] apple_events.db: size={s.get('size_bytes')} journal={s.get('journal_mode')} "
+                  f"pages={s.get('page_count')} freelist={s.get('freelist_count')} ratio={s.get('freelist_ratio'):.2f}")
+        if target in ("fruit", "both"):
+            s = _sqlite_bloat_stats(DB_PATH)
+            print(f"[db-maint] fruit_events.db: size={s.get('size_bytes')} journal={s.get('journal_mode')} "
+                  f"pages={s.get('page_count')} freelist={s.get('freelist_count')} ratio={s.get('freelist_ratio'):.2f}")
+        return 0
+
+    if args.vacuum_only is not None:
+        target = args.vacuum_only
+        if target in ("apple", "both"):
+            _vacuum_now(APPLE_DB_PATH, "apple_events.db")
+        if target in ("fruit", "both"):
+            _vacuum_now(DB_PATH, "fruit_events.db")
+        return 0
+
     start_time = datetime.now()
     print("\n" + "=" * 60)
     print("FruitDeepLinks Daily Refresh")
@@ -336,6 +573,23 @@ def main():
     except Exception as e:
         print(f"Step 6a failed (non-fatal): {e}")
 
+    # Step 6b: Optional DB maintenance (VACUUM Apple DB when bloated)
+    db_maint_enabled = os.getenv("DB_MAINTENANCE", "true").lower() not in ("0", "false", "no")
+    if db_maint_enabled:
+        run_on_weekday = int(os.getenv("DB_VACUUM_WEEKDAY", "6"))  # 6 = Sunday
+        min_free_pages = int(os.getenv("DB_VACUUM_MIN_FREE_PAGES", "5000"))
+        min_free_ratio = float(os.getenv("DB_VACUUM_MIN_FREE_RATIO", "0.30"))
+        extreme_free_ratio = float(os.getenv("DB_VACUUM_EXTREME_FREE_RATIO", "0.60"))
+
+        _vacuum_if_needed(
+            APPLE_DB_PATH,
+            "apple_events.db",
+            min_free_pages=min_free_pages,
+            min_free_ratio=min_free_ratio,
+            extreme_free_ratio=extreme_free_ratio,
+            run_on_weekday=run_on_weekday,
+        )
+
     # Step 7: Import Kayo events
     kayo_json = OUT_DIR / "kayo_raw.json"
     if kayo_json.exists():
@@ -349,7 +603,7 @@ def main():
         print(f"\n[7/{total_steps}] Kayo data not found at {kayo_json}, skipping ingest")
 
     # Step 7b: Scrape ESPN Watch Graph (skippable, runs after Apple TV import)
-    espn_days = os.getenv("ESPN_DAYS", "14")
+    espn_days = os.getenv("ESPN_DAYS", "7")
     espn_db = DATA_DIR / "espn_graph.db"
     
     if skip_scrape:
@@ -430,6 +684,88 @@ def main():
         "--db", str(DB_PATH),
     ]):
         return 1
+
+    # Step 7e: Scrape Amazon channels (Playwright, headless)
+    # Identifies which Amazon subscription is required for each event.
+    # Uses amazon2.py (Playwright) which is dramatically more stable than the legacy Selenium scraper.
+    #
+    # Defaults are horizon + cache (recommended):
+    #   python3 amazon2.py --db ... --horizon-hours 72 --past-hours 6 --rescrape-hours 48 --max 350 --workers 3 --timeout-ms 30000 --retries 1
+    #
+    # Env knobs (optional):
+    #   AMAZON_MAX:               hard safety cap on GTIs to process (default 350; applied after horizon+cache)
+#   AMAZON_HORIZON_HOURS:     only consider events starting within next N hours (default 72)
+#   AMAZON_PAST_HOURS:        include events that ended within last N hours (default 6)
+#   AMAZON_RESCRAPE_HOURS:    skip GTIs scraped successfully within last N hours (default 48)
+    #   AMAZON_WORKERS:     concurrency (default 3)
+    #   AMAZON_TIMEOUT_MS:  per-request timeout ms (default 30000)
+    #   AMAZON_RETRIES:     retry count (default 1)
+    #   FRUIT_AMAZON_DEBUG_CSV_KEEP: keep last N amazon_scrape_*.csv files in /app/data (default 3; 0 keeps all)
+    if skip_scrape:
+        print("\n" + "=" * 60)
+        print(f"[7e/{total_steps}] Scraping Amazon channels. SKIPPED")
+        print("=" * 60)
+        print("Amazon scraper skipped (--skip-scrape flag)")
+    else:
+        amazon_max = os.getenv("AMAZON_MAX", "350")  # safety cap (after horizon+cache)
+        amazon_horizon_hours = os.getenv("AMAZON_HORIZON_HOURS", "72")
+        amazon_past_hours = os.getenv("AMAZON_PAST_HOURS", "6")
+        amazon_rescrape_hours = os.getenv("AMAZON_RESCRAPE_HOURS", "48")
+        amazon_workers = os.getenv("AMAZON_WORKERS", "3")
+        amazon_timeout_ms = os.getenv("AMAZON_TIMEOUT_MS", "30000")
+        amazon_retries = os.getenv("AMAZON_RETRIES", "1")
+        amazon_keep_debug = int(os.getenv("FRUIT_AMAZON_DEBUG_CSV_KEEP", "3") or "3")
+
+        print("\n" + "=" * 60)
+        print(f"[7e/{total_steps}] Scraping Amazon channels (Playwright headless)")
+        print("=" * 60)
+
+        # Amazon scrape is non-fatal - don't stop pipeline if it fails
+        run_step("7e", total_steps, "Scraping Amazon channel requirements (Playwright)", [
+            "python3", "amazon2.py",
+            "--db", str(DB_PATH),
+            "--max", str(amazon_max),
+            "--horizon-hours", str(amazon_horizon_hours),
+            "--past-hours", str(amazon_past_hours),
+            "--rescrape-hours", str(amazon_rescrape_hours),
+            "--workers", str(amazon_workers),
+            "--timeout-ms", str(amazon_timeout_ms),
+            "--retries", str(amazon_retries),
+        ], allow_fail=True)
+
+        # Step 7e-migrate: Update logical_service on existing Amazon playables
+        # This ensures all playables have correct logical_service based on amazon_channels mapping.
+        # Safe to run repeatedly - only updates playables that don't match current mapping.
+        print("\n" + "=" * 60)
+        print(f"[7e-migrate/{total_steps}] Updating Amazon playable logical services")
+        print("=" * 60)
+        run_step("7e-migrate", total_steps, "Migrating Amazon logical services", [
+            "python3", "migrate_amazon_logical_services.py",
+            str(DB_PATH),
+        ], allow_fail=True)
+
+        # Step 7e-cleanup: Retain only the most recent amazon debug CSVs
+        # (amazon2.py writes /app/data/amazon_scrape_*.csv)
+        if amazon_keep_debug > 0:
+            try:
+                import glob
+                debug_dir = str(DB_PATH.parent)
+                files = sorted(
+                    glob.glob(os.path.join(debug_dir, "amazon_scrape_*.csv")),
+                    key=lambda p: os.path.getmtime(p),
+                    reverse=True,
+                )
+                for f in files[amazon_keep_debug:]:
+                    try:
+                        os.remove(f)
+                        print(f"[7e-cleanup] Removed old debug CSV: {f}")
+                    except Exception as e:
+                        print(f"[7e-cleanup] Failed to remove {f}: {e}")
+            except Exception as e:
+                print(f"[7e-cleanup] Debug CSV cleanup failed: {e}")
+
+
+
 
         # Step 8: Prefill HTTP deeplinks for any newly-imported playables
     if not run_step("8", total_steps, "Prefilling HTTP deeplinks (http_deeplink_url)", [
@@ -517,6 +853,23 @@ def main():
         print("\n" + "=" * 60)
         print("Skipping Channels DVR refresh: CHANNELS_DVR_IP not set.")
         print("=" * 60)
+
+    # Step 99: Optional DB maintenance (VACUUM fruit_events.db when bloated)
+    db_maint_enabled = os.getenv("DB_MAINTENANCE", "true").lower() not in ("0", "false", "no")
+    if db_maint_enabled:
+        run_on_weekday = int(os.getenv("DB_VACUUM_WEEKDAY", "6"))  # 6 = Sunday
+        min_free_pages = int(os.getenv("DB_VACUUM_MIN_FREE_PAGES", "5000"))
+        min_free_ratio = float(os.getenv("DB_VACUUM_MIN_FREE_RATIO", "0.30"))
+        extreme_free_ratio = float(os.getenv("DB_VACUUM_EXTREME_FREE_RATIO", "0.60"))
+
+        _vacuum_if_needed(
+            DB_PATH,
+            "fruit_events.db",
+            min_free_pages=min_free_pages,
+            min_free_ratio=min_free_ratio,
+            extreme_free_ratio=extreme_free_ratio,
+            run_on_weekday=run_on_weekday,
+        )
 
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()

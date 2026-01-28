@@ -2,21 +2,23 @@
 """
 fruit_enrich_espn.py - Enrich Apple TV ESPN events with ESPN Watch Graph IDs
 
-This script matches Apple TV ESPN playables with ESPN Watch Graph events using
-the program.id field, then adds espn_graph_id to playables for FireTV deeplinks.
+OPTIMIZED VERSION with:
+- Corrected SQL JSON extraction using json_each
+- Progress indicators
+- Faster batch processing
 
 Usage:
   python fruit_enrich_espn.py
   python fruit_enrich_espn.py --fruit-db data/fruit_events.db --espn-db data/espn_graph.db
   python fruit_enrich_espn.py --dry-run
-  python fruit_enrich_espn.py --skip-enrich  # Skip enrichment (for use with --skip-scrape)
+  python fruit_enrich_espn.py --skip-enrich
 """
 
 import argparse
-import json
 import sqlite3
 import sys
-from typing import Dict, List, Optional
+import time
+from typing import Dict, List
 
 
 def _log(msg: str) -> None:
@@ -28,17 +30,13 @@ def ensure_espn_graph_id_column(fruit_db: str) -> None:
     conn = sqlite3.connect(fruit_db)
     cursor = conn.cursor()
     
-    # Check if column exists
     cursor.execute("PRAGMA table_info(playables)")
     columns = [row[1] for row in cursor.fetchall()]
     
     if 'espn_graph_id' not in columns:
         _log("Adding espn_graph_id column to playables table...")
         cursor.execute("ALTER TABLE playables ADD COLUMN espn_graph_id TEXT")
-        
-        # Add index for performance
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_playables_espn_graph ON playables(espn_graph_id)")
-        
         conn.commit()
         _log("✅ Column added successfully")
     else:
@@ -51,60 +49,44 @@ def get_apple_espn_playables(fruit_db: str) -> List[Dict]:
     """
     Get all ESPN playables from Apple TV with their externalId values.
     
+    OPTIMIZED: Uses SQLite json_each to properly extract externalId from playables JSON.
+    
     Returns list of dicts with:
-      - event_id: Apple TV event ID
       - playable_id: Playable ID in database
-      - external_id: ESPN's program ID (from playables JSON)
+      - external_id: ESPN's program ID (UUID from playables JSON)
       - title: Event title for logging
-      - start_utc: Event start time
     """
+    _log("⚡ Using optimized SQL JSON extraction with json_each...")
+    
     conn = sqlite3.connect(fruit_db)
     cursor = conn.cursor()
     
+    # CORRECTED: Use json_each to iterate through playables object
+    # This handles the colon-separated keys properly
     cursor.execute("""
         SELECT 
-            e.id as event_id,
+            p.playable_id,
+            json_extract(pe.value, '$.externalId') as external_id,
             e.title,
             e.start_utc,
-            e.raw_attributes_json,
-            p.playable_id,
-            p.service_name
-        FROM events e
-        JOIN playables p ON e.id = p.event_id
-        WHERE p.provider IN ('sportscenter', 'espn', 'espn+')
+            e.id as event_id
+        FROM playables p
+        JOIN events e ON p.event_id = e.id,
+        json_each(json_extract(e.raw_attributes_json, '$.playables')) pe
+        WHERE p.provider = 'sportscenter'
+          AND pe.key = p.playable_id
+          AND json_extract(pe.value, '$.externalId') IS NOT NULL
     """)
     
     results = []
-    
     for row in cursor.fetchall():
-        event_id = row[0]
-        title = row[1]
-        start_utc = row[2]
-        raw_json = row[3]
-        playable_id = row[4]
-        
-        # Parse raw_attributes to get all externalIds from playables
-        if raw_json:
-            try:
-                raw_attrs = json.loads(raw_json)
-                playables_dict = raw_attrs.get('playables', {})
-                
-                # Each playable has an externalId
-                for pid, playable_data in playables_dict.items():
-                    if pid == playable_id:  # Match the specific playable
-                        external_id = playable_data.get('externalId')
-                        if external_id:
-                            results.append({
-                                'event_id': event_id,
-                                'playable_id': playable_id,
-                                'external_id': external_id,
-                                'title': title,
-                                'start_utc': start_utc
-                            })
-                            break
-            except json.JSONDecodeError:
-                _log(f"Warning: Could not parse raw_attributes for event {event_id}")
-                continue
+        results.append({
+            'playable_id': row[0],
+            'external_id': row[1],
+            'title': row[2],
+            'start_utc': row[3],
+            'event_id': row[4]
+        })
     
     conn.close()
     
@@ -116,12 +98,7 @@ def get_espn_graph_events(espn_db: str) -> Dict[str, Dict]:
     """
     Get ESPN Watch Graph events indexed by program_id.
     
-    Returns dict where key is program_id and value is:
-      - id: ESPN Watch Graph ID
-      - feed_url: Primary feed URL (contains playback ID)
-      - airing_id: ESPN airing ID (may be None)
-      - simulcast_airing_id: ESPN simulcast ID (may be None)
-      - name: Event name
+    Returns dict where key is program_id and value contains ESPN event details.
     """
     try:
         conn = sqlite3.connect(espn_db)
@@ -134,7 +111,6 @@ def get_espn_graph_events(espn_db: str) -> Dict[str, Dict]:
     
     cursor = conn.cursor()
     
-    # Check if table exists
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events'")
     if not cursor.fetchone():
         _log(f"❌ Error: No 'events' table found in {espn_db}")
@@ -164,7 +140,7 @@ def get_espn_graph_events(espn_db: str) -> Dict[str, Dict]:
             'airing_id': row[2],
             'simulcast_airing_id': row[3],
             'title': row[4],
-            'feed_url': row[5]  # Feed URL from feeds table
+            'feed_url': row[5]
         }
     
     conn.close()
@@ -188,12 +164,14 @@ def enrich_playables(fruit_db: str, espn_db: str, dry_run: bool = False, skip_en
     _log("ESPN ENRICHMENT - Matching Apple TV with ESPN Watch Graph")
     _log("="*80)
     
-    # Ensure column exists
     if not dry_run:
         ensure_espn_graph_id_column(fruit_db)
     
     _log("\nStep 1: Loading Apple TV ESPN playables...")
+    start_time = time.time()
     apple_playables = get_apple_espn_playables(fruit_db)
+    load_time = time.time() - start_time
+    _log(f"⏱️  Loaded in {load_time:.2f} seconds")
     
     if not apple_playables:
         _log("⚠️  No ESPN playables found in Apple TV database")
@@ -201,7 +179,10 @@ def enrich_playables(fruit_db: str, espn_db: str, dry_run: bool = False, skip_en
         return
     
     _log("\nStep 2: Loading ESPN Watch Graph events...")
+    start_time = time.time()
     espn_events = get_espn_graph_events(espn_db)
+    load_time = time.time() - start_time
+    _log(f"⏱️  Loaded in {load_time:.2f} seconds")
     
     if not espn_events:
         _log("⚠️  No ESPN events found in ESPN Watch Graph database")
@@ -210,37 +191,41 @@ def enrich_playables(fruit_db: str, espn_db: str, dry_run: bool = False, skip_en
     _log("\nStep 3: Matching playables using program.id...")
     _log("-"*80)
     
+    start_time = time.time()
     matched = 0
     unmatched = 0
-    unmatched_details = []  # Track unmatched for debugging
-    updates_to_apply = []  # Batch updates for massive performance improvement
+    unmatched_details = []
+    updates_to_apply = []
     
-    # Process all matches first (no DB operations in loop = fast!)
-    for playable in apple_playables:
+    total = len(apple_playables)
+    last_progress = 0
+    
+    for idx, playable in enumerate(apple_playables, 1):
         external_id = playable['external_id']
+        
+        # Progress indicator every 10%
+        progress = int((idx / total) * 100)
+        if progress >= last_progress + 10:
+            _log(f"🔄 Progress: {progress}% ({idx}/{total}) - {matched} matched, {unmatched} unmatched")
+            last_progress = progress
         
         if external_id in espn_events:
             espn_event = espn_events[external_id]
             
-            # Extract playback ID from feed URL (the actual working ID!)
-            # FROM: https://www.espn.com/watch/player/_/id/187c6919-eb2a-4cd8-9ec5-127b4fb41c8b
-            # TO:   187c6919-eb2a-4cd8-9ec5-127b4fb41c8b
+            # Extract playback ID from feed URL
             espn_playback_id = None
             
             if espn_event.get('feed_url'):
                 try:
-                    # Extract playback ID from feed URL
                     feed_url = espn_event['feed_url']
                     if '/id/' in feed_url:
                         espn_playback_id = feed_url.split('/id/')[-1]
-                        # Clean any query parameters
                         espn_playback_id = espn_playback_id.split('?')[0].split('#')[0]
                 except Exception as e:
                     _log(f"⚠️ Warning: Could not extract playback ID from {feed_url}: {e}")
             
-            # Fallback to event ID format if no feed URL (shouldn't happen, but defensive)
+            # Fallback to event ID format
             if not espn_playback_id and espn_event.get('id'):
-                # Extract middle UUID from espn-watch:UUID:hash format
                 try:
                     parts = espn_event['id'].split(':')
                     if len(parts) >= 2:
@@ -249,26 +234,17 @@ def enrich_playables(fruit_db: str, espn_db: str, dry_run: bool = False, skip_en
                     pass
             
             if espn_playback_id:
-                # Store the PLAYBACK ID, not the event ID!
-                # This is the critical fix - use feed URL playback ID
-                espn_graph_id = f"espn-watch:{espn_playback_id}"
-                
-                # Add to batch update list
-                updates_to_apply.append((espn_graph_id, playable['playable_id']))
-                
+                # Store just the UUID, not the espn-watch: prefix
+                espn_graph_id = espn_playback_id
+                updates_to_apply.append((espn_graph_id, playable['event_id'], playable['playable_id']))
                 matched += 1
                 
-                # Log first 5 matches for verification
+                # Log first 5 matches
                 if matched <= 5:
                     _log(f"✅ Match #{matched}: {playable['title'][:60]}")
                     _log(f"   program.id:     {external_id}")
                     _log(f"   ESPN Graph ID:  {espn_graph_id}")
                     _log(f"   FireTV URL:     https://www.espn.com/watch/player/_/id/{espn_graph_id}")
-                
-                if dry_run and matched <= 10:
-                    _log(f"[DRY-RUN] Would match: {playable['title'][:50]}")
-                    _log(f"          Apple playable: {playable['playable_id']}")
-                    _log(f"          ESPN Graph ID:  {espn_graph_id}")
             else:
                 _log(f"⚠️  Match found but no usable ESPN ID: {playable['title'][:50]}")
                 unmatched += 1
@@ -281,28 +257,35 @@ def enrich_playables(fruit_db: str, espn_db: str, dry_run: bool = False, skip_en
                 'start_utc': playable.get('start_utc', 'Unknown')
             })
             
-            # Log first 3 unmatched for debugging
+            # Log first 3 unmatched
             if unmatched <= 3:
                 _log(f"❌ No match: {playable['title'][:60]}")
                 _log(f"   program.id: {external_id}")
     
-    # Apply all updates in a single batch transaction (FAST!)
+    match_time = time.time() - start_time
+    _log(f"\n⏱️  Matching completed in {match_time:.2f} seconds")
+    
+    # Apply batch update
     updated = 0
     if not dry_run and updates_to_apply:
         _log(f"\n💾 Applying {len(updates_to_apply)} updates in batch...")
+        start_time = time.time()
+        
         conn = sqlite3.connect(fruit_db)
         cursor = conn.cursor()
         
         cursor.executemany("""
             UPDATE playables 
             SET espn_graph_id = ?
-            WHERE playable_id = ?
+            WHERE event_id = ? AND playable_id = ?
         """, updates_to_apply)
         
         updated = cursor.rowcount
         conn.commit()
         conn.close()
-        _log(f"✅ Batch update complete - {updated} playables updated")
+        
+        update_time = time.time() - start_time
+        _log(f"✅ Batch update complete in {update_time:.2f} seconds - {updated} playables updated")
     elif dry_run:
         updated = len(updates_to_apply)
     
@@ -322,7 +305,7 @@ def enrich_playables(fruit_db: str, espn_db: str, dry_run: bool = False, skip_en
     else:
         _log(f"\n✅ Successfully enriched {updated} ESPN playables with FireTV-compatible IDs")
     
-    # Write unmatched events to file for debugging
+    # Write unmatched events to file
     if unmatched_details:
         debug_file = "espn_unmatched_debug.txt"
         with open(debug_file, 'w', encoding='utf-8') as f:
@@ -340,20 +323,9 @@ def enrich_playables(fruit_db: str, espn_db: str, dry_run: bool = False, skip_en
                 f.write(f"   Start Time: {event['start_utc']}\n")
                 f.write(f"   Apple program.id: {event['program_id']}\n")
                 f.write(f"   Playable ID: {event['playable_id']}\n\n")
-            
-            f.write("="*80 + "\n")
-            f.write("DEBUGGING TIPS:\n")
-            f.write("="*80 + "\n\n")
-            f.write("1. Check if these events exist in ESPN Watch Graph:\n")
-            f.write(f"   sqlite3 data/espn_graph.db \"SELECT title FROM events WHERE title LIKE '%[event name]%'\"\n\n")
-            f.write("2. Check program_id in ESPN database:\n")
-            f.write(f"   sqlite3 data/espn_graph.db \"SELECT COUNT(*) FROM events WHERE program_id = '[program_id]'\"\n\n")
-            f.write("3. See what ESPN has for similar events:\n")
-            f.write(f"   sqlite3 data/espn_graph.db \"SELECT title, program_id FROM events WHERE title LIKE '%football%' LIMIT 10\"\n\n")
         
-        _log(f"\n📝 Wrote unmatched events to: {debug_file}")
+        _log(f"\n🔍 Wrote unmatched events to: {debug_file}")
     
-    # Recommendations
     if unmatched > 0:
         _log("\n💡 Tips for improving match rate:")
         _log("   - ESPN Watch Graph might not have all events yet")

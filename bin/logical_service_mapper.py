@@ -4,6 +4,8 @@ logical_service_mapper.py - Map web playables to logical services
 
 This module provides the core logic for breaking down the "Web" provider
 into distinct logical services based on URL host and content metadata.
+
+NOW INCLUDES: Amazon channel enrichment via amazon_channels table
 """
 
 import sqlite3
@@ -36,7 +38,6 @@ SERVICE_DISPLAY_NAMES = {
     'peacocktv': 'Peacock',
     'pplus': 'Paramount+',
     'aiv': 'Prime Video',
-    'aiv_exclusive': 'Amazon Exclusives',
     'gametime': 'NBA',
     'cbssportsapp': 'CBS Sports',
     'cbstve': 'CBS',
@@ -69,6 +70,23 @@ SERVICE_DISPLAY_NAMES = {
     'apple_nhl': 'Apple NHL',
     'apple_other': 'Apple TV+',
     
+    # Amazon-hosted services (NEW)
+    'aiv_prime': 'Amazon - Prime Exclusive',
+    'aiv_nba_league_pass': 'Amazon - NBA League Pass',
+    'aiv_peacock': 'Amazon - Peacock',
+    'aiv_dazn': 'Amazon - DAZN',
+    'aiv_fox': 'Amazon - FOX One',
+    'aiv_vix_premium': 'Amazon - ViX Premium',
+    'aiv_vix': 'Amazon - ViX',
+    'aiv_fanduel': 'Amazon - FanDuel Sports Network',
+    'aiv_max': 'Amazon - Max',
+    'aiv_paramount_plus': 'Amazon - Paramount+',
+    'aiv_willow': 'Amazon - Willow TV',
+    'aiv_wnba': 'Amazon - WNBA League Pass',
+    'aiv_squash': 'Amazon - SquashTV',
+    'aiv_free': 'Amazon - Free with Ads',
+    'aiv_aggregator': 'Amazon - Unknown',
+    
     # Fallback
     'https': 'Web - Other',
     'http': 'Web - Other',
@@ -82,6 +100,32 @@ def extract_host_from_url(url: str) -> Optional[str]:
         return parsed.netloc.lower()
     except:
         return None
+
+
+def extract_gti_from_deeplink(deeplink: str) -> Optional[str]:
+    """Extract GTI from Amazon deeplink (broadcast or main)
+    
+    Amazon deeplinks contain GTIs in two places:
+    - broadcast= parameter (preferred - specific to live event)
+    - gti= parameter (fallback - series/show page)
+    """
+    if not deeplink:
+        return None
+    
+    try:
+        # Try broadcast GTI first (for live events)
+        broadcast_match = re.search(r'broadcast=(amzn1\.dv\.gti\.[0-9a-f-]{36})', deeplink)
+        if broadcast_match:
+            return broadcast_match.group(1)
+        
+        # Fall back to main GTI
+        main_match = re.search(r'[?&]gti=(amzn1\.dv\.gti\.[0-9a-f-]{36})', deeplink)
+        if main_match:
+            return main_match.group(1)
+    except Exception:
+        pass
+    
+    return None
 
 
 def get_league_from_event(conn: sqlite3.Connection, event_id: str) -> Optional[str]:
@@ -120,6 +164,59 @@ def get_league_from_event(conn: sqlite3.Connection, event_id: str) -> Optional[s
         return None
 
 
+def get_amazon_service_for_playable(
+    conn: sqlite3.Connection,
+    deeplink_play: Optional[str],
+    deeplink_open: Optional[str]
+) -> Optional[str]:
+    """Get Amazon service from amazon_channels table
+    
+    Args:
+        conn: Database connection
+        deeplink_play: Play deeplink URL
+        deeplink_open: Open deeplink URL
+    
+    Returns:
+        Logical service code (e.g., 'aiv_nba_league_pass') or None if not found
+    """
+    # Extract GTI from deeplink
+    gti = extract_gti_from_deeplink(deeplink_play or deeplink_open or '')
+    
+    if not gti:
+        return None
+    
+    try:
+        # Check if amazon_channels table exists
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='amazon_channels'
+        """)
+        if not cur.fetchone():
+            cur.close()
+            return None
+        
+        # Query for service mapping
+        cur.execute("""
+            SELECT s.logical_service
+            FROM amazon_channels ac
+            JOIN amazon_services s ON ac.channel_id = s.amazon_channel_id
+            WHERE ac.gti = ? AND ac.is_stale = 0
+        """, (gti,))
+        
+        row = cur.fetchone()
+        cur.close()
+        
+        if row and row[0]:
+            return row[0]
+    except Exception as e:
+        # Silently fail if amazon_channels not available
+        # This allows graceful degradation for deployments without scraper
+        pass
+    
+    return None
+
+
 def get_logical_service_for_playable(
     provider: str,
     deeplink_play: Optional[str],
@@ -138,11 +235,11 @@ def get_logical_service_for_playable(
         deeplink_open: Open deeplink URL
         playable_url: Playable URL
         event_id: Event ID (needed for Apple TV league lookup)
-        conn: Database connection (needed for Apple TV league lookup)
+        conn: Database connection (needed for Apple TV league lookup and Amazon enrichment)
         service_name: Service name from playables table (used for ESPN differentiation)
     
     Returns:
-        Logical service code (e.g., 'espn_linear', 'espn_plus', 'peacock_web', 'pplus', etc.)
+        Logical service code (e.g., 'espn_linear', 'espn_plus', 'aiv_nba_league_pass', etc.)
     """
     # ESPN: differentiate linear TV channels from streaming services
     if provider == 'sportscenter':
@@ -156,6 +253,18 @@ def get_logical_service_for_playable(
                 return 'espn_linear'
         # Fallback if no service_name
         return 'sportscenter'
+    
+    # Amazon: enrich with channel data (NEW)
+    if provider == 'aiv':
+        if conn:
+            # Try to get specific Amazon service from scraper data
+            amazon_service = get_amazon_service_for_playable(conn, deeplink_play, deeplink_open)
+            if amazon_service:
+                return amazon_service
+        
+        # Fallback: unknown Amazon = aggregator
+        # This maintains current behavior for unmapped/404 content
+        return 'aiv_aggregator'
     
     # Kayo provider: map to kayo_web
     if provider == 'kayo':
@@ -224,7 +333,8 @@ def get_all_logical_services_with_counts(conn: sqlite3.Connection) -> Dict[str, 
             p.deeplink_open,
             p.playable_url,
             p.event_id,
-            p.service_name
+            p.service_name,
+            p.logical_service
         FROM playables p
         JOIN events e ON p.event_id = e.id
         WHERE e.end_utc > datetime('now')
@@ -232,7 +342,7 @@ def get_all_logical_services_with_counts(conn: sqlite3.Connection) -> Dict[str, 
     
     # CRITICAL FIX: Fetch ALL rows first before processing
     # This prevents SQLite lock when get_logical_service_for_playable 
-    # calls get_league_from_event which creates another cursor
+    # calls get_league_from_event or get_amazon_service_for_playable which create another cursor
     all_rows = cur.fetchall()
     
     service_counts = {}
@@ -245,16 +355,21 @@ def get_all_logical_services_with_counts(conn: sqlite3.Connection) -> Dict[str, 
         playable_url = row[3]
         event_id = row[4]
         service_name = row[5]
+        logical_service = row[6]  # Use pre-calculated logical_service if available
         
-        service_code = get_logical_service_for_playable(
-            provider=provider,
-            deeplink_play=deeplink_play,
-            deeplink_open=deeplink_open,
-            playable_url=playable_url,
-            event_id=event_id,
-            conn=conn,
-            service_name=service_name
-        )
+        # Use stored logical_service if available, otherwise calculate it
+        if logical_service:
+            service_code = logical_service
+        else:
+            service_code = get_logical_service_for_playable(
+                provider=provider,
+                deeplink_play=deeplink_play,
+                deeplink_open=deeplink_open,
+                playable_url=playable_url,
+                event_id=event_id,
+                conn=conn,
+                service_name=service_name
+            )
         
         service_counts[service_code] = service_counts.get(service_code, 0) + 1
         
@@ -263,13 +378,6 @@ def get_all_logical_services_with_counts(conn: sqlite3.Connection) -> Dict[str, 
             event_services[event_id] = set()
         event_services[event_id].add(service_code)
     
-    # Compute Amazon Exclusives: events that ONLY have 'aiv' and no other services
-    aiv_exclusive_count = sum(1 for services in event_services.values() 
-                               if services == {'aiv'})
-    
-    if aiv_exclusive_count > 0:
-        service_counts['aiv_exclusive'] = aiv_exclusive_count
-    
     return service_counts
 
 
@@ -277,6 +385,8 @@ def get_logical_service_priority(service_code: str) -> int:
     """
     Get priority for service (lower = higher priority).
     Used for selecting best playable when multiple options available.
+    
+    NEW: Amazon services now have granular priorities instead of blanket penalty
     """
     PRIORITY_MAP = {
         # Premium sports services (highest priority)
@@ -291,11 +401,18 @@ def get_logical_service_priority(service_code: str) -> int:
         'pplus': 4,
         'max': 5,
         
+        # Amazon services (NEW - granular priorities)
+        'aiv_free': 1,               # Free content - same as ESPN+
+        'aiv_prime': 4,              # True Prime content - same as Paramount+
+        'aiv_peacock': 5,            # Compete with direct Peacock (web)
+        'aiv_max': 5,                # Compete with direct Max
+        
         # Sports-specific
         'cbssportsapp': 6,
         'cbstve': 7,
         'nbcsportstve': 8,
         'foxone': 9,
+        'aiv_fox': 9,                # FOX on Amazon - same as direct
         'fsapp': 10,
         
         # Apple services
@@ -307,26 +424,30 @@ def get_logical_service_priority(service_code: str) -> int:
         
         # Niche/specialty
         'dazn': 16,
+        'aiv_dazn': 16,              # DAZN on Amazon - same as direct
         'open.dazn.com': 17,
         'f1tv': 18,
         'kayo_web': 19,  # Kayo Sports (Australia)
         'marquee': 20,   # Marquee Sports Network (Chicago regional)
         'vixapp': 21,
+        'aiv_vix_premium': 21,       # ViX on Amazon - same as direct
+        'aiv_vix': 21,
+        'aiv_fanduel': 22,           # FanDuel Sports Network
         'nflctv': 22,
         'watchtru': 23,
         'watchtnt': 24,
         'watchtbs': 25,  # TBS - College sports, MLB, NBA
         
         # League-specific services (direct subscriptions)
-        'nba': 26,        # NBA League Pass
+        'nba': 26,        # NBA League Pass (direct)
+        'aiv_nba_league_pass': 26,  # NBA League Pass on Amazon - SAME priority as direct
         'gametime': 26,   # NBA app (same priority as League Pass)
         'mlb': 26,        # MLB.TV
         'nhl': 26,        # NHL.TV / NHL Power Play
         
-        # Amazon aggregator services (deprioritized - often redirect to other services)
-        # These should only be used when no direct service deeplink is available
-        'aiv': 27,        # Amazon Prime Video (was 4, now 27)
-        'aiv_exclusive': 27,  # Amazon Exclusives (synthetic service)
+        # Amazon aggregator/unknown (deprioritized)
+        'aiv': 27,                   # Old generic Amazon (deprecated)
+        'aiv_aggregator': 27,        # Unknown Amazon content - penalized
         
         # Generic web (lowest priority)
         'https': 30,
@@ -339,12 +460,27 @@ def get_logical_service_priority(service_code: str) -> int:
 if __name__ == '__main__':
     """Test the logical service mapper"""
     print("="*80)
-    print("LOGICAL SERVICE MAPPER - TEST")
+    print("LOGICAL SERVICE MAPPER - TEST (with Amazon enrichment)")
     print("="*80)
     print()
     
     DB_PATH = "/app/data/fruit_events.db"
     conn = sqlite3.connect(DB_PATH)
+    
+    # Check if Amazon tables exist
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT name FROM sqlite_master 
+        WHERE type='table' AND name='amazon_channels'
+    """)
+    has_amazon = cur.fetchone() is not None
+    cur.close()
+    
+    if has_amazon:
+        print("✓ Amazon channel data available")
+    else:
+        print("⚠ Amazon channel data NOT available (will use aggregator fallback)")
+    print()
     
     print("Analyzing all playables and mapping to logical services...")
     print()
@@ -358,7 +494,32 @@ if __name__ == '__main__':
     for service_code, count in sorted(service_counts.items(), key=lambda x: -x[1]):
         display_name = get_service_display_name(service_code)
         priority = get_logical_service_priority(service_code)
-        print(f"  {service_code:20s} | {display_name:25s} | {count:4d} playables | priority: {priority:2d}")
+        print(f"  {service_code:25s} | {display_name:30s} | {count:4d} playables | priority: {priority:2d}")
+    
+    print()
+    print("="*80)
+    
+    # Show breakdown of Amazon services specifically
+    amazon_services = {k: v for k, v in service_counts.items() 
+                      if k.startswith('aiv')}
+    
+    if amazon_services:
+        print("AMAZON SERVICES BREAKDOWN:")
+        print("-"*80)
+        total_amazon = sum(amazon_services.values())
+        for service_code, count in sorted(amazon_services.items(), key=lambda x: -x[1]):
+            display_name = get_service_display_name(service_code)
+            priority = get_logical_service_priority(service_code)
+            pct = 100 * count / total_amazon if total_amazon > 0 else 0
+            print(f"  {display_name:30s} {count:4d} ({pct:5.1f}%) | priority: {priority:2d}")
+        print(f"\n  Total Amazon Playables: {total_amazon}")
+        
+        # Calculate how many are properly mapped vs aggregator
+        mapped = sum(v for k, v in amazon_services.items() if k not in ('aiv', 'aiv_aggregator'))
+        aggregator = sum(v for k, v in amazon_services.items() if k in ('aiv', 'aiv_aggregator'))
+        if total_amazon > 0:
+            print(f"  Mapped to specific services: {mapped} ({100*mapped/total_amazon:.1f}%)")
+            print(f"  Aggregator/unknown: {aggregator} ({100*aggregator/total_amazon:.1f}%)")
     
     print()
     print("="*80)

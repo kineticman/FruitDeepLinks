@@ -137,6 +137,18 @@ color: #94a3b8;
 .toc a:hover {
 color: #38bdf8;
 }
+.tag-danger {
+background: #7f1d1d;
+border-color: #dc2626;
+color: #fca5a5;
+}
+.danger-card {
+border: 2px solid #7f1d1d;
+background: #0f0a0a;
+}
+.danger-card h2 {
+color: #ef4444;
+}
 </style>
 </head>
 <body>
@@ -298,6 +310,36 @@ Configure each provider as a separate Custom Channels source in Channels DVR:
 <div class="endpoint-line">
 <span class="tag tag-post">POST</span>
 <code>/api/provider_lanes</code>
+</div>
+<div class="endpoint-line">
+<span class="tag tag-danger">DELETE</span>
+<code>/api/provider_lanes/&lt;provider_code&gt;</code>
+</div>
+<p class="description">
+<strong>Admin cleanup endpoint.</strong> Deletes a saved provider row from <code>provider_lanes</code> and (if present) any associated rows in <code>adb_lanes</code>.
+This is meant for removing stale/retired provider codes (e.g., legacy or experimental providers that are no longer generated).
+</p>
+<div class="params">
+<div><span class="param-name">provider_code</span>: Provider code to remove (example: <code>https</code>, <code>kayo</code>)</div>
+<div><strong>Returns:</strong> <code>{"status":"success","provider_code":"...","deleted":1}</code> or <code>{"status":"not_found",...}</code></div>
+</div>
+<pre># Delete a stale provider row
+curl -X DELETE "$BASE/api/provider_lanes/https" | jq
+
+# Example not found
+curl -X DELETE "$BASE/api/provider_lanes/does_not_exist" | jq</pre>
+<div class="note">
+<div class="note-title">Safety behavior</div>
+This endpoint only deletes the <em>saved config row</em>. If that provider ever appears again in future playables, it can reappear in the provider list the next time provider stats are rebuilt.
+</div>
+<div class="note">
+<div class="note-title">Provider code aliases (migration)</div>
+Some provider codes are considered legacy aliases and are automatically normalized/migrated to a canonical code. Example:
+<ul style="margin: 8px 0 0 20px; padding: 0;">
+  <li><code>kayo</code> → <code>kayo_web</code></li>
+</ul>
+If a legacy row exists in <code>provider_lanes</code>, the server will move its saved settings to the canonical provider code and remove the legacy row.
+</div>
 </div>
 <p class="description">
 View or update per-provider ADB lane configuration. Control which providers are enabled for ADB lanes and how many lanes each gets.
@@ -722,6 +764,75 @@ curl "$BASE/api/logs?count=100"
 
 # Stream live logs (SSE)
 curl -N "$BASE/api/logs/stream"</pre>
+</div>
+
+<div class="card danger-card">
+<h2>⚠️ Wipe Event Data (ADVANCED - DESTRUCTIVE)</h2>
+<div class="endpoint-line">
+<span class="tag tag-danger">POST</span>
+<code>/api/wipe-event-data</code>
+</div>
+<p class="description">
+<strong style="color: #ef4444;">DANGER:</strong> Permanently deletes all event data while preserving settings and filters. 
+This operation cannot be undone. Use with extreme caution.
+</p>
+<div class="note" style="background: #450a0a; border-color: #dc2626;">
+<div class="note-title" style="color: #fca5a5;">⚠️ What Gets DELETED</div>
+<ul style="margin: 8px 0 0 20px; padding: 0; color: #fecaca;">
+<li>All events, playables, event_images (main event data)</li>
+<li>All lanes, lane_events, adb_lanes (virtual channel schedules)</li>
+<li>Amazon scraped channels and history</li>
+<li>Amazon GTI cache file (amazon_gti_cache.pkl)</li>
+<li>Apple TV events cache (apple_events.db)</li>
+<li>ESPN graph cache (espn_graph.db)</li>
+</ul>
+</div>
+<div class="note" style="background: #064e3b; border-color: #10b981;">
+<div class="note-title" style="color: #6ee7b7;">✅ What Gets PRESERVED</div>
+<ul style="margin: 8px 0 0 20px; padding: 0; color: #a7f3d0;">
+<li>User filter preferences (enabled_services, disabled_sports, disabled_leagues)</li>
+<li>ADB provider configuration (provider_lanes table)</li>
+<li>Amazon service definitions (amazon_services table)</li>
+<li>Manual playable overrides (amazon_playable_overrides table)</li>
+</ul>
+</div>
+<div class="params">
+<div><strong>Returns:</strong> Immediate response with statistics on deleted records</div>
+<div><strong>Execution:</strong> Runs in background thread, watch logs for progress</div>
+<div><strong>Protection:</strong> Returns 409 error if refresh is already running</div>
+</div>
+<pre># Wipe all event data (use with EXTREME caution)
+curl -X POST "$BASE/api/wipe-event-data" \
+-H "Content-Type: application/json"
+
+# Example response:
+# {
+#   "status": "started",
+#   "events_deleted": 1234,
+#   "playables_deleted": 5678,
+#   "lanes_deleted": 100,
+#   "errors": []
+# }</pre>
+<div class="note">
+<div class="note-title">🔄 Post-Wipe Workflow</div>
+After wiping, run a full refresh to repopulate data:
+<pre style="margin-top: 8px;"># Repopulate after wipe
+curl -X POST "$BASE/api/refresh" \
+-H "Content-Type: application/json"</pre>
+Your filter settings will be automatically applied to the new data.
+</div>
+<div class="note" style="background: #422006; border-color: #f59e0b;">
+<div class="note-title" style="color: #fcd34d;">💡 When to Use This</div>
+<ul style="margin: 8px 0 0 20px; padding: 0; color: #fde68a;">
+<li>Database corruption or inconsistent state</li>
+<li>Testing scraper changes from a clean slate</li>
+<li>Major schema migrations requiring fresh data</li>
+<li>Debugging lane building logic issues</li>
+</ul>
+<div style="margin-top: 8px; color: #fed7aa;">
+<strong>DO NOT</strong> use this for routine maintenance. The daily refresh already handles stale data cleanup.
+</div>
+</div>
 </div>
 
 <div style="margin-top: 40px; padding: 20px; background: #0f172a; border-radius: 8px; border: 1px solid #1e293b;">

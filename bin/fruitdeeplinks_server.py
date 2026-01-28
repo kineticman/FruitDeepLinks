@@ -18,6 +18,15 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from collections import deque
 
+# Ensure this script's directory (/app/bin) is always on sys.path so local helpers
+# like adb_provider_mapper.py can be imported even when running from a different CWD.
+try:
+    _BIN_DIR = str(Path(__file__).parent)
+    if _BIN_DIR not in sys.path:
+        sys.path.insert(0, _BIN_DIR)
+except Exception:
+    pass
+
 from flask import (
     Flask,
     jsonify,
@@ -56,8 +65,27 @@ except ImportError:
 try:
     from logical_service_mapper import (
         get_all_logical_services_with_counts,
-        get_service_display_name as get_logical_service_display_name,
+        get_service_display_name as _ls_get_service_display_name,
     )
+
+    # Friendly display names for Amazon logical_service codes (aiv_*)
+    _AMAZON_SERVICE_DISPLAY_NAMES = {
+        "aiv_aggregator": "Amazon - Unknown",
+        "aiv_prime": "Amazon - Prime Exclusive",
+        "aiv_peacock": "Amazon - Peacock",
+        "aiv_max": "Amazon - Max",
+        "aiv_fox_one": "Amazon - FOX One",
+        "aiv_nba_league_pass": "Amazon - NBA League Pass",
+        "aiv_wnba_league_pass": "Amazon - WNBA League Pass",
+        "aiv_vix_premium": "Amazon - ViX Premium",
+        "aiv_vix": "Amazon - ViX",
+        "aiv_fanduel": "Amazon - FanDuel Sports Network",
+        "aiv_dazn": "Amazon - DAZN",
+        "aiv_willow": "Amazon - Willow",
+    }
+
+    def get_logical_service_display_name(service_code: str) -> str:
+        return _AMAZON_SERVICE_DISPLAY_NAMES.get(service_code, _ls_get_service_display_name(service_code))
 
     LOGICAL_SERVICES_AVAILABLE = True
 except ImportError:
@@ -166,6 +194,45 @@ def get_db_connection():
     return sqlite3.connect(str(DB_PATH))
 
 
+def _expand_enabled_services_for_amazon(conn: sqlite3.Connection, enabled_services: list) -> list:
+    """Expand enabled services for Amazon wildcard behavior.
+
+    Historically we stored a single 'aiv' master toggle in enabled_services.
+    But playables use sub-service schemes like 'aiv_aggregator', 'aiv_vix_premium', etc.
+
+    To keep backward compatibility, treat 'aiv' as enabling all 'aiv_*' schemes
+    that exist in the database.
+    """
+    try:
+        if not enabled_services or "aiv" not in enabled_services:
+            return enabled_services
+
+        expanded = set(enabled_services)
+
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT logical_service
+            FROM playables
+            WHERE provider='aiv'
+              AND logical_service IS NOT NULL
+              AND logical_service LIKE 'aiv_%'
+            """
+        )
+        for (ls,) in cur.fetchall():
+            if ls:
+                expanded.add(ls)
+
+        # Ensure the aggregator bucket is covered if present historically
+        expanded.add("aiv_aggregator")
+
+        return sorted(expanded)
+    except Exception:
+        # Fail safe: never break selection on expansion issues
+        return enabled_services
+
+
+
 def _load_raw_preferences():
     """
     Load raw key/value prefs from user_preferences table (no JSON decoding).
@@ -204,6 +271,7 @@ def get_user_preferences():
             "disabled_leagues": [],
             "service_priorities": {},
             "amazon_penalty": True,
+            "amazon_master_enabled": True,  # Master toggle for all Amazon services
             "language_preference": "en"
         }
 
@@ -221,6 +289,7 @@ def get_user_preferences():
                 "disabled_leagues": [],
                 "service_priorities": {},
                 "amazon_penalty": True,
+                "amazon_master_enabled": True,
                 "language_preference": "en"
             }
 
@@ -274,6 +343,15 @@ def get_user_preferences():
         else:
             result["language_preference"] = "en"
         
+        # Add amazon_master_enabled (default: True)
+        if "amazon_master_enabled" in prefs:
+            try:
+                result["amazon_master_enabled"] = bool(json.loads(prefs["amazon_master_enabled"]) if isinstance(prefs["amazon_master_enabled"], str) else prefs["amazon_master_enabled"])
+            except Exception:
+                result["amazon_master_enabled"] = True
+        else:
+            result["amazon_master_enabled"] = True
+        
         return result
     except Exception as e:
         log(f"Error loading preferences: {e}", "ERROR")
@@ -284,6 +362,7 @@ def get_user_preferences():
             "disabled_leagues": [],
             "service_priorities": {},
             "amazon_penalty": True,
+            "amazon_master_enabled": True,
             "language_preference": "en"
         }
 
@@ -394,13 +473,15 @@ def get_available_filters():
     """Get available sports, leagues, and providers for filtering"""
     conn = get_db_connection()
     if not conn:
-        return {"providers": [], "sports": [], "leagues": []}
+        return {"providers": [], "sports": [], "leagues": [], "amazon_services": []}
 
     try:
         cur = conn.cursor()
 
         # Get providers using logical service mapping
         providers = []
+        amazon_services = []  # Separate list for Amazon sub-services
+        
         try:
             if LOGICAL_SERVICES_AVAILABLE:
                 # Use logical service mapper to get web services broken down
@@ -410,15 +491,25 @@ def get_available_filters():
                     service_counts.items(), key=lambda x: -x[1]
                 ):
                     display_name = get_logical_service_display_name(service_code)
-                    providers.append(
-                        {
-                            "scheme": service_code,
-                            "name": display_name,
-                            "count": count,
-                        }
-                    )
-                
-                # Amazon Exclusives is now computed in get_all_logical_services_with_counts()
+                    
+                    # Separate Amazon services from regular providers
+                    # Include both 'aiv' (generic/legacy) and 'aiv_*' (specific services)
+                    if service_code == 'aiv' or service_code.startswith('aiv_'):
+                        amazon_services.append(
+                            {
+                                "scheme": service_code,
+                                "name": display_name,
+                                "count": count,
+                            }
+                        )
+                    else:
+                        providers.append(
+                            {
+                                "scheme": service_code,
+                                "name": display_name,
+                                "count": count,
+                            }
+                        )
             
             else:
                 # Fallback: use raw provider grouping
@@ -434,13 +525,23 @@ def get_available_filters():
                 for row in cur.fetchall():
                     provider, count = row
                     display_name = get_provider_display_name(provider)
-                    providers.append(
-                        {
-                            "scheme": provider,
-                            "name": display_name,
-                            "count": count,
-                        }
-                    )
+                    
+                    if provider == 'aiv':
+                        amazon_services.append(
+                            {
+                                "scheme": provider,
+                                "name": display_name,
+                                "count": count,
+                            }
+                        )
+                    else:
+                        providers.append(
+                            {
+                                "scheme": provider,
+                                "name": display_name,
+                                "count": count,
+                            }
+                        )
         except Exception as e:
             log(f"Error loading providers: {e}", "ERROR")
 
@@ -503,13 +604,14 @@ def get_available_filters():
         conn.close()
         return {
             "providers": providers,
+            "amazon_services": amazon_services,
             "sports": sports_list,
             "leagues": leagues_list,
         }
     except Exception as e:
         log(f"Error getting filters: {e}", "ERROR")
         conn.close()
-        return {"providers": [], "sports": [], "leagues": []}
+        return {"providers": [], "amazon_services": [], "sports": [], "leagues": []}
 
 
 def get_db_stats():
@@ -746,10 +848,11 @@ def get_event_link_info(conn, event_id, uid_col, primary_deeplink_col, full_deep
         except Exception:
             prefs = {"enabled_services": []}
         enabled_services = prefs.get("enabled_services", [])
+        enabled_services_for_resolution = _expand_enabled_services_for_amazon(conn, enabled_services)
 
         # Try best deeplink for event
         try:
-            candidate = get_best_deeplink_for_event(conn, event_id, enabled_services)
+            candidate = get_best_deeplink_for_event(conn, event_id, enabled_services_for_resolution)
         except Exception:
             candidate = None
         if candidate:
@@ -1786,24 +1889,8 @@ def api_events():
         params.extend([like, like, like, like, like, like])
 
     if provider:
-        # Special handling for aiv_exclusive synthetic service
-        if provider == 'aiv_exclusive':
-            # Events where AIV is the ONLY logical service
-            where.append("""
-                EXISTS (
-                    SELECT 1 FROM playables p 
-                    WHERE p.event_id = e.id AND p.logical_service = 'aiv'
-                )
-                AND NOT EXISTS (
-                    SELECT 1 FROM playables p 
-                    WHERE p.event_id = e.id 
-                      AND COALESCE(p.logical_service, '') <> ''
-                      AND p.logical_service <> 'aiv'
-                )
-            """)
-        else:
-            where.append(f"EXISTS (SELECT 1 FROM playables p WHERE p.event_id = e.id AND {service_expr} = ?)")
-            params.append(provider)
+        where.append(f"EXISTS (SELECT 1 FROM playables p WHERE p.event_id = e.id AND {service_expr} = ?)")
+        params.append(provider)
 
     if has_playables:
         where.append("(SELECT COUNT(*) FROM playables p WHERE p.event_id = e.id) > 0")
@@ -2034,17 +2121,22 @@ def api_event_detail(event_id):
             try:
                 prefs = load_user_preferences(conn)
                 enabled_services = prefs.get("enabled_services", [])
+                enabled_services_for_resolution = _expand_enabled_services_for_amazon(conn, enabled_services)
+                amazon_master_enabled = prefs.get("amazon_master_enabled", True)
 
                 deeplink = None
                 try:
-                    deeplink = get_best_deeplink_for_event(conn, event_id, enabled_services)
+                    deeplink = get_best_deeplink_for_event(conn, event_id, enabled_services_for_resolution)
                 except Exception:
                     deeplink = None
 
                 top_playable = None
                 try:
                     from filter_integration import get_filtered_playables
-                    filtered = get_filtered_playables(conn, event_id, enabled_services)
+                    filtered = get_filtered_playables(
+                        conn, event_id, enabled_services_for_resolution,
+                        amazon_master_enabled=amazon_master_enabled
+                    )
                     if filtered:
                         top_playable = filtered[0]
                 except Exception:
@@ -2408,6 +2500,185 @@ def api_apply_filters():
     return jsonify({"status": "started"})
 
 
+@app.route("/api/wipe-event-data", methods=["POST"])
+def api_wipe_event_data():
+    """
+    Wipe all event data from databases while preserving settings/filters.
+    
+    Preserves:
+    - user_preferences (filter settings)
+    - provider_lanes (ADB configuration)
+    - amazon_services (service definitions)
+    - amazon_playable_overrides (manual overrides)
+    
+    Wipes:
+    - events, playables, event_images (event data)
+    - lanes, lane_events, adb_lanes (lane schedules)
+    - amazon_channels, amazon_channel_history (scraped data)
+    - amazon_gti_cache.pkl (Amazon scraper cache file)
+    - Entire apple_events.db and espn_graph.db (cache databases)
+    """
+    if refresh_status["running"]:
+        return jsonify({"error": "Cannot wipe while refresh is running"}), 409
+    
+    def run_wipe():
+        refresh_status["running"] = True
+        refresh_status["current_step"] = "Wiping event data..."
+        log("Starting database wipe (preserving settings)", "INFO")
+        
+        stats = {
+            "events_deleted": 0,
+            "playables_deleted": 0,
+            "lanes_deleted": 0,
+            "errors": []
+        }
+        
+        try:
+            # Wipe fruit_events.db tables (preserving settings)
+            fruit_db = Path(DB_PATH)
+            if fruit_db.exists():
+                log(f"Wiping event data from {fruit_db}", "INFO")
+                conn = sqlite3.connect(str(fruit_db))
+                cur = conn.cursor()
+                
+                try:
+                    # Enable foreign keys for CASCADE behavior
+                    cur.execute("PRAGMA foreign_keys = ON")
+                    
+                    # Count before deletion
+                    cur.execute("SELECT COUNT(*) FROM events")
+                    stats["events_deleted"] = cur.fetchone()[0]
+                    
+                    cur.execute("SELECT COUNT(*) FROM playables")
+                    stats["playables_deleted"] = cur.fetchone()[0]
+                    
+                    cur.execute("SELECT COUNT(*) FROM lanes")
+                    lane_count = cur.fetchone()[0]
+                    cur.execute("SELECT COUNT(*) FROM adb_lanes")
+                    adb_lane_count = cur.fetchone()[0]
+                    stats["lanes_deleted"] = lane_count + adb_lane_count
+                    
+                    # Wipe event data tables
+                    log("Deleting events (CASCADE will handle playables, event_images)...", "INFO")
+                    cur.execute("DELETE FROM events")
+                    
+                    # Explicitly delete playables and event_images (defensive, in case CASCADE doesn't fire)
+                    log("Deleting playables and event_images...", "INFO")
+                    cur.execute("DELETE FROM playables")
+                    cur.execute("DELETE FROM event_images")
+                    
+                    log("Deleting lanes and lane_events...", "INFO")
+                    cur.execute("DELETE FROM lane_events")
+                    cur.execute("DELETE FROM lanes")
+                    
+                    log("Deleting ADB lanes...", "INFO")
+                    cur.execute("DELETE FROM adb_lanes")
+                    
+                    log("Deleting Amazon scraped data...", "INFO")
+                    cur.execute("DELETE FROM amazon_channels")
+                    cur.execute("DELETE FROM amazon_channel_history")
+                    
+                    # Reset sqlite_sequence for auto-increment tables
+                    cur.execute("DELETE FROM sqlite_sequence WHERE name IN ('adb_lanes', 'amazon_channel_history')")
+                    
+                    conn.commit()
+                    log(f"✅ Wiped {stats['events_deleted']} events, {stats['playables_deleted']} playables, {stats['lanes_deleted']} lanes", "INFO")
+                    
+                    # Compact database (must be outside transaction)
+                    log("Compacting database (VACUUM)...", "INFO")
+                    cur.execute("VACUUM")
+                    log("✅ Database compacted", "INFO")
+                    
+                except Exception as e:
+                    conn.rollback()
+                    error_msg = f"Error wiping fruit_events.db: {str(e)}"
+                    log(error_msg, "ERROR")
+                    stats["errors"].append(error_msg)
+                finally:
+                    conn.close()
+            
+            # Delete Amazon GTI cache file
+            amazon_cache = fruit_db.parent / "amazon_gti_cache.pkl"
+            if amazon_cache.exists():
+                log(f"Deleting Amazon GTI cache: {amazon_cache}", "INFO")
+                try:
+                    amazon_cache.unlink()
+                    log("✅ Deleted Amazon GTI cache", "INFO")
+                except Exception as e:
+                    error_msg = f"Error deleting Amazon cache: {str(e)}"
+                    log(error_msg, "WARNING")
+                    stats["errors"].append(error_msg)
+            
+            # Wipe apple_events.db entirely (it's just a cache)
+            apple_db = fruit_db.parent / "apple_events.db"
+            if apple_db.exists():
+                log(f"Wiping entire cache database: {apple_db}", "INFO")
+                try:
+                    conn = sqlite3.connect(str(apple_db))
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM apple_events")
+                    conn.commit()
+                    conn.close()
+                    log("✅ Wiped apple_events.db cache", "INFO")
+                except Exception as e:
+                    error_msg = f"Error wiping apple_events.db: {str(e)}"
+                    log(error_msg, "WARNING")
+                    stats["errors"].append(error_msg)
+            
+            # Wipe espn_graph.db entirely (it's just a cache)
+            espn_db = fruit_db.parent / "espn_graph.db"
+            if espn_db.exists():
+                log(f"Wiping entire cache database: {espn_db}", "INFO")
+                try:
+                    conn = sqlite3.connect(str(espn_db))
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM events")
+                    cur.execute("DELETE FROM feeds")
+                    conn.commit()
+                    conn.close()
+                    log("✅ Wiped espn_graph.db cache", "INFO")
+                except Exception as e:
+                    error_msg = f"Error wiping espn_graph.db: {str(e)}"
+                    log(error_msg, "WARNING")
+                    stats["errors"].append(error_msg)
+            
+            if stats["errors"]:
+                refresh_status["last_status"] = "completed_with_errors"
+                log(f"⚠️ Wipe completed with {len(stats['errors'])} errors", "WARNING")
+            else:
+                refresh_status["last_status"] = "success"
+                log("✅ Database wipe completed successfully!", "INFO")
+            
+        except Exception as e:
+            refresh_status["last_status"] = "error"
+            error_msg = f"Fatal wipe error: {str(e)}"
+            log(error_msg, "ERROR")
+            stats["errors"].append(error_msg)
+        
+        finally:
+            refresh_status["running"] = False
+            refresh_status["current_step"] = None
+            refresh_status["last_run"] = datetime.now().isoformat()
+            
+            # Store stats for the response
+            refresh_status["last_wipe_stats"] = stats
+    
+    # Run wipe in background thread
+    thread = threading.Thread(target=run_wipe, daemon=True)
+    thread.start()
+    
+    # Wait a moment for initial stats
+    time.sleep(0.5)
+    
+    return jsonify({
+        "status": "started",
+        "events_deleted": refresh_status.get("last_wipe_stats", {}).get("events_deleted", 0),
+        "playables_deleted": refresh_status.get("last_wipe_stats", {}).get("playables_deleted", 0),
+        "lanes_deleted": refresh_status.get("last_wipe_stats", {}).get("lanes_deleted", 0),
+        "errors": refresh_status.get("last_wipe_stats", {}).get("errors", [])
+    })
+
+
 # ==================== Filters APIs ====================
 @app.route("/filters")
 def filters_page():
@@ -2417,11 +2688,19 @@ def filters_page():
 
 @app.route("/api/filters")
 def api_filters():
-    """Get available filters (providers, sports, leagues)"""
+    """Get available filters + current preferences.
+
+    Frontend (templates/filters.html) expects a wrapped shape:
+        { "filters": {...}, "preferences": {...} }
+    Some scripts/tools also expect flat top-level keys (providers, amazon_services, sports, leagues),
+    so we include BOTH for backward compatibility.
+    """
     filters = get_available_filters()
     prefs = get_user_preferences()
-    return jsonify({"filters": filters, "preferences": prefs})
-
+    payload = {"filters": filters, "preferences": prefs}
+    # Back-compat: also expose the filters at the top level
+    payload.update(filters)
+    return jsonify(payload)
 
 @app.route("/api/filters/priorities", methods=["GET", "POST"])
 def api_filter_priorities():
@@ -2463,15 +2742,24 @@ def api_selection_examples():
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         
-        # Get user preferences
-        if FILTERING_AVAILABLE:
-            prefs = load_user_preferences(conn)
-        else:
-            prefs = get_user_preferences()
+        # Get user preferences (single source of truth)
+        # Always use get_user_preferences() here so amazon_master_enabled / language_preference
+        # are honored consistently, regardless of FILTERING_AVAILABLE.
+        prefs = get_user_preferences()
         
         enabled_services = prefs.get("enabled_services", [])
+        enabled_services_for_resolution = _expand_enabled_services_for_amazon(conn, enabled_services)
         priority_map = prefs.get("service_priorities", {})
         amazon_penalty = prefs.get("amazon_penalty", True)
+        amazon_master_enabled = prefs.get("amazon_master_enabled", True)
+
+        # Master override: if Amazon master is disabled, ensure no Amazon-family services can be selected
+        # (including compatibility expansion like aiv_aggregator).
+        if amazon_master_enabled is False:
+            enabled_services_for_resolution = [
+                s for s in enabled_services_for_resolution
+                if not (s == "aiv" or s.startswith("aiv_"))
+            ]
         
         # Find events with multiple DISTINCT services (more interesting for examples)
         cur.execute("""
@@ -2532,7 +2820,8 @@ def api_selection_examples():
                 
                 # Get filtered playables (with user preferences) to determine winner
                 filtered_playables = get_filtered_playables(
-                    conn, event_id, enabled_services, priority_map, amazon_penalty
+                    conn, event_id, enabled_services_for_resolution, priority_map, amazon_penalty, 
+                    language_preference="en", amazon_master_enabled=amazon_master_enabled
                 )
                 
                 winner = filtered_playables[0] if filtered_playables else None
@@ -2695,50 +2984,6 @@ def get_provider_lane_stats(conn: sqlite3.Connection) -> list[dict]:
         }
     
 
-    # Synthetic service: aiv_exclusive (Amazon Exclusives)
-    if LOGICAL_SERVICES_AVAILABLE and 'logical_service' in columns:
-        try:
-            # Count events where AIV is the only mapped logical_service
-            cur.execute(
-                """
-                SELECT
-                    COUNT(DISTINCT e.id) AS event_count,
-                    COUNT(p.playable_id) AS playable_count,
-                    COUNT(DISTINCT CASE WHEN datetime(e.end_utc) > datetime('now') THEN e.id END) AS future_event_count
-                FROM events e
-                JOIN playables p ON p.event_id = e.id
-                WHERE p.logical_service = 'aiv'
-                  AND NOT EXISTS (
-                    SELECT 1 FROM playables p2
-                    WHERE p2.event_id = e.id
-                      AND COALESCE(p2.logical_service,'') <> 'aiv'
-                  )
-                """
-            )
-            row = cur.fetchone() or (0,0,0)
-            excl_events = int(row[0] or 0)
-            excl_playables = int(row[1] or 0)
-            excl_future = int(row[2] or 0)
-            if excl_events > 0 and 'aiv_exclusive' not in services:
-                display_name = 'aiv_exclusive'
-                try:
-                    from logical_service_mapper import get_service_display_name
-                    display_name = get_service_display_name('aiv_exclusive')
-                except Exception:
-                    display_name = 'Amazon Exclusives'
-                services['aiv_exclusive'] = {
-                    'provider_code': 'aiv_exclusive',
-                    'name': display_name,
-                    'event_count': excl_events,
-                    'playable_count': excl_playables,
-                    'future_event_count': excl_future,
-                    'adb_enabled': 0,
-                    'adb_lane_count': 0,
-                    'created_at': None,
-                    'updated_at': None,
-                }
-        except Exception as e:
-            log(f"Error computing aiv_exclusive lane stats: {e}", 'ERROR')
     # Merge with provider_lanes configuration
     cur.execute("""
         SELECT provider_code, adb_enabled, adb_lane_count, created_at, updated_at
@@ -2781,13 +3026,13 @@ def get_provider_lane_stats(conn: sqlite3.Connection) -> list[dict]:
         from adb_provider_mapper import get_adb_provider_code
         
         for code, info in services.items():
-            adb_code = get_adb_provider_code(code)
+            adb_code = 'aiv' if (code == 'aiv' or code.startswith('aiv_')) else get_adb_provider_code(code)
             
             if adb_code not in adb_aggregated:
                 # Initialize with this service's data
                 adb_aggregated[adb_code] = {
                     "provider_code": adb_code,
-                    "name": info["name"] if adb_code == code else adb_code.upper(),
+                    "name": ("Amazon (All AIV)" if adb_code == "aiv" else (info["name"] if adb_code == code else adb_code.upper())),
                     "event_count": 0,
                     "playable_count": 0,
                     "future_event_count": 0,
@@ -2820,11 +3065,167 @@ def get_provider_lane_stats(conn: sqlite3.Connection) -> list[dict]:
         filtered_services = adb_aggregated
                 
     except ImportError:
-        # If mapper not available, show all services
-        filtered_services = services
+        # If mapper not available, at minimum collapse Amazon logical services (aiv_*)
+        # into a single ADB provider 'aiv' so the UI doesn't explode into many Amazon rows.
+        amazon_agg = None
+        filtered_services = {}
+        for code, info in services.items():
+            if code == 'aiv' or str(code).startswith('aiv_'):
+                if amazon_agg is None:
+                    amazon_agg = {
+                        'provider_code': 'aiv',
+                        'name': 'Amazon (All AIV)',
+                        'event_count': 0,
+                        'playable_count': 0,
+                        'future_event_count': 0,
+                        'adb_enabled': 0,
+                        'adb_lane_count': 0,
+                        'created_at': None,
+                        'updated_at': None,
+                    }
+                amazon_agg['event_count'] += int(info.get('event_count', 0) or 0)
+                amazon_agg['playable_count'] += int(info.get('playable_count', 0) or 0)
+                amazon_agg['future_event_count'] += int(info.get('future_event_count', 0) or 0)
+                # Prefer canonical 'aiv' config if present; otherwise take any enabled/lanes as a hint
+                if code == 'aiv':
+                    amazon_agg['adb_enabled'] = int(info.get('adb_enabled', 0) or 0)
+                    amazon_agg['adb_lane_count'] = int(info.get('adb_lane_count', 0) or 0)
+                    amazon_agg['created_at'] = info.get('created_at')
+                    amazon_agg['updated_at'] = info.get('updated_at')
+                else:
+                    amazon_agg['adb_enabled'] = max(int(amazon_agg['adb_enabled']), int(info.get('adb_enabled', 0) or 0))
+                    amazon_agg['adb_lane_count'] = max(int(amazon_agg['adb_lane_count']), int(info.get('adb_lane_count', 0) or 0))
+                continue
+
+            filtered_services[code] = info
+
+        if amazon_agg is not None:
+            filtered_services['aiv'] = amazon_agg
+
     
     # Sort by event count (descending), then by name
     return sorted(filtered_services.values(), key=lambda x: (-x["event_count"], x["name"]))
+
+
+
+# Provider lane code aliases (legacy -> canonical)
+# This prevents stale/legacy codes from lingering in provider_lanes UI/config.
+PROVIDER_LANE_ALIASES = {
+    # Old Kayo provider code -> canonical logical_service
+    "kayo": "kayo_web",
+}
+
+def _normalize_provider_lane_code(code: str) -> str:
+    """Normalize provider_lanes/adb_lanes provider codes.
+
+    - Applies explicit aliases (e.g., 'kayo' -> 'kayo_web')
+    - Collapses Amazon sub-services (aiv_*) into the single ADB provider 'aiv'
+      so the ADB UI and export treat Amazon as one service.
+    """
+    code = (code or "").strip()
+    if not code:
+        return ""
+    code = PROVIDER_LANE_ALIASES.get(code, code)
+    if code.startswith("aiv_"):
+        return "aiv"
+    return code
+def _migrate_provider_lane_aliases(conn: sqlite3.Connection) -> None:
+    """One-time-ish migration to keep provider_lanes rows on canonical codes.
+
+    If a legacy code exists (e.g., 'kayo') and the canonical code doesn't, move
+    the saved config (adb_enabled/adb_lane_count) over, then delete the legacy row.
+    Also attempts to update adb_lanes.provider_code if that table exists.
+    """
+    try:
+        cur = conn.cursor()
+        for legacy, canonical in PROVIDER_LANE_ALIASES.items():
+            if legacy == canonical:
+                continue
+
+            cur.execute(
+                "SELECT provider_code, adb_enabled, adb_lane_count, created_at, updated_at "
+                "FROM provider_lanes WHERE provider_code = ?",
+                (legacy,),
+            )
+            legacy_row = cur.fetchone()
+            if not legacy_row:
+                continue
+
+            cur.execute("SELECT 1 FROM provider_lanes WHERE provider_code = ? LIMIT 1", (canonical,))
+            canonical_exists = cur.fetchone() is not None
+
+            if not canonical_exists:
+                # Move legacy settings to canonical row
+                cur.execute(
+                    "INSERT INTO provider_lanes (provider_code, adb_enabled, adb_lane_count, created_at, updated_at) "
+                    "VALUES (?, ?, ?, COALESCE(?, datetime('now')), datetime('now'))",
+                    (canonical, legacy_row[1], legacy_row[2], legacy_row[3]),
+                )
+
+            # Update adb_lanes if present
+            try:
+                cur.execute("UPDATE adb_lanes SET provider_code = ? WHERE provider_code = ?", (canonical, legacy))
+            except Exception:
+                pass
+
+            # Remove legacy row
+            cur.execute("DELETE FROM provider_lanes WHERE provider_code = ?", (legacy,))
+
+        # Collapse any Amazon sub-services (aiv_*) into the single ADB provider 'aiv'
+        try:
+            cur.execute(
+                "SELECT provider_code, adb_enabled, adb_lane_count FROM provider_lanes WHERE provider_code LIKE 'aiv_%' AND provider_code != 'aiv'"
+            )
+            legacy_rows = cur.fetchall()
+            if legacy_rows:
+                # Ensure canonical row exists
+                cur.execute(
+                    "SELECT adb_enabled, adb_lane_count FROM provider_lanes WHERE provider_code='aiv'"
+                )
+                existing = cur.fetchone()
+                existing_enabled = int(existing[0]) if existing else 0
+                existing_lanes = int(existing[1]) if existing else 0
+
+                merged_enabled = existing_enabled
+                merged_lanes = existing_lanes
+
+                for legacy_code, adb_enabled, adb_lane_count in legacy_rows:
+                    merged_enabled = max(merged_enabled, int(adb_enabled or 0))
+                    merged_lanes = max(merged_lanes, int(adb_lane_count or 0))
+
+                if existing:
+                    cur.execute(
+                        "UPDATE provider_lanes SET adb_enabled=?, adb_lane_count=?, updated_at=datetime('now') WHERE provider_code='aiv'",
+                        (merged_enabled, merged_lanes),
+                    )
+                else:
+                    cur.execute(
+                        "INSERT INTO provider_lanes (provider_code, adb_enabled, adb_lane_count, created_at, updated_at) VALUES ('aiv', ?, ?, datetime('now'), datetime('now'))",
+                        (merged_enabled, merged_lanes),
+                    )
+
+                # Delete legacy rows
+                cur.execute(
+                    "DELETE FROM provider_lanes WHERE provider_code LIKE 'aiv_%' AND provider_code != 'aiv'"
+                )
+
+                # Also normalize adb_lanes rows if present
+                try:
+                    cur.execute(
+                        "UPDATE adb_lanes SET provider_code='aiv' WHERE provider_code LIKE 'aiv_%' AND provider_code != 'aiv'"
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        conn.commit()
+    except Exception as e:
+        # Don't break the API if migration fails
+        try:
+            log(f"provider_lanes alias migration skipped/failed: {e}", "WARNING")
+        except Exception:
+            pass
 
 
 @app.route("/api/provider_lanes", methods=["GET", "POST"])
@@ -2843,6 +3244,9 @@ def api_provider_lanes():
         )
 
     conn.row_factory = sqlite3.Row
+
+    # Keep provider_lanes on canonical provider codes (aliases)
+    _migrate_provider_lane_aliases(conn)
     try:
         if request.method == "GET":
             # Use enhanced stats function that shows event counts
@@ -2887,6 +3291,8 @@ def api_provider_lanes():
             if not isinstance(item, dict):
                 continue
             code = (item.get("provider_code") or "").strip()
+            # Normalize legacy provider codes to canonical
+            code = _normalize_provider_lane_code(code)
             if not code:
                 continue
 
@@ -2918,6 +3324,50 @@ def api_provider_lanes():
         return jsonify({"status": "success", "updated": updated})
     finally:
         conn.close()
+
+
+
+@app.route("/api/provider_lanes/<provider_code>", methods=["DELETE"])
+def api_delete_provider_lane(provider_code):
+    """Delete a provider from provider_lanes (and any associated adb_lanes rows).
+
+    Intended to clean up stale/removed providers (e.g., deprecated synthetic providers).
+    """
+    code = _normalize_provider_lane_code(provider_code)
+    if not code:
+        return jsonify({"status": "error", "error": "Missing provider_code"}), 400
+
+    conn = get_db_connection()
+    if conn is None:
+        return jsonify({"status": "error", "error": "Database not found"}), 500
+
+    try:
+        cur = conn.cursor()
+
+        # Delete lane mapping rows if present
+        try:
+            if code == "aiv":
+                cur.execute("DELETE FROM adb_lanes WHERE provider_code = ? OR provider_code LIKE 'aiv_%'", (code,))
+            else:
+                cur.execute("DELETE FROM adb_lanes WHERE provider_code = ?", (code,))
+        except Exception:
+            # adb_lanes table may not exist in some deployments
+            pass
+
+        cur.execute("DELETE FROM provider_lanes WHERE provider_code = ?", (code,))
+        deleted = cur.rowcount or 0
+        conn.commit()
+
+        if deleted == 0:
+            return jsonify({"status": "not_found", "provider_code": code}), 404
+
+        log(f"Deleted provider_lanes entry for {code}", "INFO")
+        return jsonify({"status": "success", "provider_code": code, "deleted": deleted})
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 @app.route("/api/lane/<int:lane_number>/deeplink")

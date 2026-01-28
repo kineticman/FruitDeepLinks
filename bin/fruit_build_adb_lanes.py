@@ -192,11 +192,10 @@ def should_include_event(classification_json: str, disabled_sports: Sequence[str
     if league_vals and any(norm(v) in dl for v in league_vals):
         return False
 
-    raw_low = cj.lower()
-    if any(x and x in raw_low for x in ds):
-        return False
-    if any(x and x in raw_low for x in dl):
-        return False
+    # Don't do raw substring matching - it's too aggressive and filters out
+    # events where the disabled term appears anywhere in the JSON
+    # (e.g., "Basketball" in "Basketball Association")
+    # This now matches the behavior of filter_integration.py used by direct output
 
     return True
 
@@ -229,30 +228,41 @@ def clear_adb_lanes(conn: sqlite3.Connection, provider_code: str, log: logging.L
 
 
 def load_events_for_provider(
-    conn: sqlite3.Connection, 
+    conn: sqlite3.Connection,
     provider_code: str,
-    enabled_services: List[str]
+    enabled_services: List[str],
 ) -> List[Dict[str, Any]]:
     """
     Load events for an ADB provider code.
-    
-    Note: provider_code may map to multiple logical_service values.
-    For example, 'sportscenter' maps to both 'espn_linear' and 'espn_plus'.
-    Only events with playables from ENABLED logical services are included.
+
+    Notes:
+      - provider_code may map to multiple logical_service values.
+      - For Amazon, we intentionally *collapse* all Amazon logical services (aiv_*)
+        into the single ADB provider_code "aiv", while still respecting the user's
+        enabled_services allowlist.
+
+        Rules for Amazon (provider_code == "aiv"):
+          * enabled_services empty  -> include ALL amazon logical_service LIKE 'aiv%%'
+          * 'aiv' in enabled_services -> include ALL amazon logical_service LIKE 'aiv%%'
+          * otherwise -> include only amazon logical_services explicitly enabled (aiv_*)
     """
     cur = conn.cursor()
 
-    # Synthetic provider: Amazon Exclusives
-    #
-    # "aiv_exclusive" is NOT a real logical_service stored in the playables table.
-    # It represents events where Amazon Prime Video (logical_service='aiv') is the
-    # ONLY mapped streaming option for that event.
-    if provider_code == "aiv_exclusive":
-        if enabled_services and "aiv_exclusive" not in enabled_services:
-            return []
+    # --- Amazon special case: collapse all aiv_* services into provider_code "aiv" for ADB ---
+    if provider_code == "aiv":
+        if not enabled_services or ("aiv" in enabled_services):
+            # Include everything Amazon-y, including aiv_aggregator, aiv_vix_premium, etc.
+            where = "p.logical_service LIKE 'aiv%'"
+            params: List[str] = []
+        else:
+            allowed = [s for s in enabled_services if isinstance(s, str) and s.startswith("aiv_")]
+            if not allowed:
+                return []
+            placeholders = ",".join("?" * len(allowed))
+            where = f"p.logical_service IN ({placeholders})"
+            params = allowed
 
-        cur.execute(
-            """
+        query = f"""
             SELECT
                 e.id,
                 e.title,
@@ -262,69 +272,44 @@ def load_events_for_provider(
                 e.end_ms,
                 e.classification_json
             FROM events e
-            WHERE EXISTS (
-                SELECT 1 FROM playables p
-                 WHERE p.event_id = e.id AND p.logical_service = 'aiv'
-            )
-              AND NOT EXISTS (
-                SELECT 1 FROM playables p
-                 WHERE p.event_id = e.id
-                   AND p.logical_service IS NOT NULL
-                   AND p.logical_service <> ''
-                   AND p.logical_service <> 'aiv'
-            )
-            ORDER BY datetime(e.start_utc) ASC
-            """
-        )
+            JOIN playables p ON p.event_id = e.id
+            WHERE {where}
+            GROUP BY e.id
+        """
+        cur.execute(query, params)
 
-        out: List[Dict[str, Any]] = []
-        for (eid, title, start_utc, end_utc, start_ms, end_ms, classification_json) in cur.fetchall():
-            out.append(
-                {
-                    "id": eid,
-                    "title": title,
-                    "start_utc": start_utc,
-                    "end_utc": end_utc,
-                    "start_ms": start_ms,
-                    "end_ms": end_ms,
-                    "classification_json": classification_json,
-                }
-            )
-        return out
-    
-    # Get all logical services that map to this ADB provider
-    all_logical_services = get_logical_services_for_adb_provider(provider_code)
-    
-    # Filter to only include enabled services
-    # If enabled_services is empty, include all (legacy behavior)
-    if enabled_services:
-        logical_services = [ls for ls in all_logical_services if ls in enabled_services]
     else:
-        logical_services = all_logical_services
-    
-    if not logical_services:
-        # No enabled services for this provider
-        return []
-    
-    # Build query with IN clause for multiple services
-    placeholders = ','.join('?' * len(logical_services))
-    query = f"""
-        SELECT
-            e.id,
-            e.title,
-            e.start_utc,
-            e.end_utc,
-            e.start_ms,
-            e.end_ms,
-            e.classification_json
-        FROM events e
-        JOIN playables p ON p.event_id = e.id
-        WHERE p.logical_service IN ({placeholders})
-        GROUP BY e.id
-    """
-    
-    cur.execute(query, logical_services)
-    
+        # Get all logical services that map to this ADB provider
+        all_logical_services = get_logical_services_for_adb_provider(provider_code)
+
+        # Filter to only include enabled services
+        # If enabled_services is empty, include all (legacy behavior)
+        if enabled_services:
+            logical_services = [ls for ls in all_logical_services if ls in enabled_services]
+        else:
+            logical_services = all_logical_services
+
+        if not logical_services:
+            # No enabled services for this provider
+            return []
+
+        placeholders = ",".join("?" * len(logical_services))
+        query = f"""
+            SELECT
+                e.id,
+                e.title,
+                e.start_utc,
+                e.end_utc,
+                e.start_ms,
+                e.end_ms,
+                e.classification_json
+            FROM events e
+            JOIN playables p ON p.event_id = e.id
+            WHERE p.logical_service IN ({placeholders})
+            GROUP BY e.id
+        """
+        cur.execute(query, logical_services)
+
     out: List[Dict[str, Any]] = []
     for (eid, title, start_utc, end_utc, start_ms, end_ms, classification_json) in cur.fetchall():
         out.append(
@@ -339,6 +324,7 @@ def load_events_for_provider(
             }
         )
     return out
+
 
 
 def assign_to_lanes(
@@ -433,15 +419,27 @@ def build_adb_lanes(db_path: str, provider_filter: Optional[str] = None) -> None
         clear_adb_lanes(conn, provider_code, log)
 
         # Only enforce enabled_services when the user explicitly set a non-empty allowlist.
-        # Check if ANY of the logical services mapped to this ADB provider are enabled
-        # OR if the provider code itself is enabled (for synthetic providers like aiv_exclusive)
+        # Check if ANY of the logical services mapped to this ADB provider are enabled.
+        #
+        # Amazon special-case:
+        #   - provider_code 'aiv' should be considered enabled if either:
+        #       * 'aiv' is enabled, OR
+        #       * any 'aiv_*' logical service is enabled
         if enabled_services:
-            logical_services = get_logical_services_for_adb_provider(provider_code)
-            # Check both logical services AND the provider code itself
-            if not any(ls in enabled_services for ls in logical_services) and provider_code not in enabled_services:
-                log.info("Skipping provider %s because none of its logical services %s are in enabled_services", 
-                        provider_code, logical_services)
-                continue
+            if provider_code == "aiv":
+                if ("aiv" not in enabled_services) and (not any(s.startswith("aiv_") for s in enabled_services if isinstance(s, str))):
+                    log.info("Skipping provider %s because no Amazon services are enabled (need 'aiv' or any 'aiv_*')", provider_code)
+                    continue
+            else:
+                logical_services = get_logical_services_for_adb_provider(provider_code)
+                # Check both logical services AND the provider code itself
+                if not any(ls in enabled_services for ls in logical_services) and provider_code not in enabled_services:
+                    log.info(
+                        "Skipping provider %s because none of its logical services %s are in enabled_services",
+                        provider_code,
+                        logical_services,
+                    )
+                    continue
 
         evs = load_events_for_provider(conn, provider_code, enabled_services)
 

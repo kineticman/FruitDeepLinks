@@ -344,6 +344,32 @@ Select which streaming services you have subscriptions to. Only events available
 <div id="providers-grid" class="filter-grid" style="display: none;"></div>
 </div>
 
+<div class="card" id="amazon-section">
+<h2>📦 Amazon Services</h2>
+<p class="section-description">
+Amazon Prime Video hosts multiple streaming services. Enable the master toggle to use Amazon, then select which sub-services you want.
+<strong>Note:</strong> "Amazon - Unknown" includes unscraped events and may contain false positives.
+</p>
+
+<!-- Master Toggle -->
+<div style="margin-bottom: 20px;">
+<div class="filter-item" id="amazon-master-toggle" onclick="toggleAmazonMaster()" 
+     style="background: #1e293b; border: 3px solid #fbbf24; cursor: pointer; padding: 16px;">
+<div class="checkbox"></div>
+<div class="filter-info">
+<div class="filter-name" style="font-size: 18px; font-weight: 700;">🔧 Amazon (Master Toggle)</div>
+<div class="filter-count" id="amazon-total-count">Loading...</div>
+</div>
+</div>
+</div>
+
+<!-- Sub-services -->
+<div id="amazon-services-wrapper" style="opacity: 1; transition: opacity 0.3s;">
+<div id="amazon-services-loading" class="loading">Loading Amazon services...</div>
+<div id="amazon-services-grid" class="filter-grid" style="display: none;"></div>
+</div>
+</div>
+
 <div class="card">
 <h2>🌐 Language Preference</h2>
 <p class="section-description">
@@ -440,11 +466,13 @@ disabled_sports: [],
 disabled_leagues: [],
 service_priorities: {},
 amazon_penalty: true,
+amazon_master_enabled: true,
 language_preference: 'en'  // 'en', 'es', or 'both'
 };
 
 let availableFilters = {
 providers: [],
+amazon_services: [],
 sports: [],
 leagues: []
 };
@@ -459,9 +487,12 @@ const data = await res.json();
 availableFilters = data.filters;
 currentPreferences = data.preferences;
 
-// If no enabled services, default to ALL enabled
+// If no enabled services, default to ALL enabled (including Amazon)
 if (!currentPreferences.enabled_services || currentPreferences.enabled_services.length === 0) {
-currentPreferences.enabled_services = availableFilters.providers.map(p => p.scheme);
+currentPreferences.enabled_services = [
+...availableFilters.providers.map(p => p.scheme),
+...(availableFilters.amazon_services || []).map(s => s.scheme)
+];
 }
 
 // Load priorities
@@ -472,7 +503,13 @@ if (!currentPreferences.language_preference) {
 currentPreferences.language_preference = 'en';
 }
 
+// Set default amazon_master_enabled if not present
+if (currentPreferences.amazon_master_enabled === undefined) {
+currentPreferences.amazon_master_enabled = true;
+}
+
 renderProviders();
+renderAmazonServices();
 renderSports();
 renderLeagues();
 renderPriorities();
@@ -508,9 +545,13 @@ function renderPriorities() {
 const container = document.getElementById('priority-list');
 const loading = document.getElementById('priority-loading');
 
-// Get only enabled services
-const enabledServices = availableFilters.providers.filter(p => 
-currentPreferences.enabled_services.includes(p.scheme)
+// Get only enabled services (include Amazon sub-services too)
+const allPriorityServices = [
+  ...(availableFilters.providers || []),
+  ...(availableFilters.amazon_services || []),
+];
+const enabledServices = allPriorityServices.filter(p =>
+  currentPreferences.enabled_services.includes(p.scheme)
 );
 
 if (enabledServices.length === 0) {
@@ -665,6 +706,79 @@ loading.style.display = 'none';
 grid.style.display = 'grid';
 }
 
+function renderAmazonServices() {
+const grid = document.getElementById('amazon-services-grid');
+const loading = document.getElementById('amazon-services-loading');
+const masterToggle = document.getElementById('amazon-master-toggle');
+const wrapper = document.getElementById('amazon-services-wrapper');
+const totalCount = document.getElementById('amazon-total-count');
+
+const amazonMasterEnabled = currentPreferences.amazon_master_enabled !== false;
+
+// Update master toggle appearance
+if (amazonMasterEnabled) {
+masterToggle.classList.remove('disabled');
+masterToggle.classList.add('enabled');
+wrapper.style.opacity = '1';
+wrapper.style.pointerEvents = 'auto';
+} else {
+masterToggle.classList.remove('enabled');
+masterToggle.classList.add('disabled');
+wrapper.style.opacity = '0.4';
+wrapper.style.pointerEvents = 'none';
+}
+
+if (!availableFilters.amazon_services || availableFilters.amazon_services.length === 0) {
+loading.textContent = 'No Amazon services found.';
+totalCount.textContent = '0 events';
+return;
+}
+
+// Calculate total events
+const total = availableFilters.amazon_services.reduce((sum, s) => sum + s.count, 0);
+totalCount.textContent = `${total} total events`;
+
+grid.innerHTML = availableFilters.amazon_services.map(service => {
+const isEnabled = currentPreferences.enabled_services.includes(service.scheme);
+return `
+<div class="filter-item ${isEnabled ? 'enabled' : 'disabled'}" 
+onclick="toggleAmazonService('${service.scheme}')">
+<div class="checkbox"></div>
+<div class="filter-info">
+<div class="filter-name">${service.name}</div>
+<div class="filter-count">${service.count} events</div>
+</div>
+</div>
+`;
+}).join('');
+
+loading.style.display = 'none';
+grid.style.display = 'grid';
+}
+
+function toggleAmazonMaster() {
+currentPreferences.amazon_master_enabled = !currentPreferences.amazon_master_enabled;
+renderAmazonServices();
+loadSelectionExamples();
+}
+
+function toggleAmazonService(scheme) {
+// Only allow toggling if master is enabled
+if (currentPreferences.amazon_master_enabled === false) {
+return;
+}
+
+const index = currentPreferences.enabled_services.indexOf(scheme);
+if (index > -1) {
+currentPreferences.enabled_services.splice(index, 1);
+} else {
+currentPreferences.enabled_services.push(scheme);
+}
+renderAmazonServices();
+renderPriorities();
+loadSelectionExamples();
+}
+
 function renderSports() {
 const grid = document.getElementById('sports-grid');
 const loading = document.getElementById('sports-loading');
@@ -773,7 +887,8 @@ body: JSON.stringify({
 enabled_services: currentPreferences.enabled_services,
 disabled_sports: currentPreferences.disabled_sports,
 disabled_leagues: currentPreferences.disabled_leagues,
-language_preference: currentPreferences.language_preference
+language_preference: currentPreferences.language_preference,
+amazon_master_enabled: currentPreferences.amazon_master_enabled
 })
 });
 
@@ -809,7 +924,8 @@ body: JSON.stringify({
 enabled_services: currentPreferences.enabled_services,
 disabled_sports: currentPreferences.disabled_sports,
 disabled_leagues: currentPreferences.disabled_leagues,
-language_preference: currentPreferences.language_preference
+language_preference: currentPreferences.language_preference,
+amazon_master_enabled: currentPreferences.amazon_master_enabled
 })
 });
 

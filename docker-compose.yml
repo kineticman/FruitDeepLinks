@@ -3,6 +3,7 @@ services:
   fruitdeeplinks:
     build: .
     container_name: fruitdeeplinks
+    init: true
     hostname: fruitdeeplinks
     shm_size: '2gb'
     environment:

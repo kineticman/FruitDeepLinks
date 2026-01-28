@@ -140,6 +140,48 @@ def _add_placeholder_blocks(
 
 
 
+def cleanup_disabled_adb_files(conn: sqlite3.Connection, out_dir: Path, log: logging.Logger) -> None:
+    """Remove M3U/XML files for disabled ADB providers."""
+    # Get list of enabled providers from provider_lanes table
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT provider_code 
+        FROM provider_lanes 
+        WHERE adb_enabled = 1
+    """)
+    enabled_providers = {row[0] for row in cur.fetchall()}
+    
+    if not out_dir.exists():
+        return
+    
+    # Map of provider to file suffixes (without extension)
+    provider_files = {
+        'aiv': ['adb_lanes_aiv', 'adb_lanes_aiv_exclusive'],
+        'gametime': ['adb_lanes_gametime'],
+        'max': ['adb_lanes_max'],
+        'pplus': ['adb_lanes_pplus'],
+        'sportscenter': ['adb_lanes_sportscenter']
+    }
+    
+    # Remove files for disabled providers
+    for provider_code, file_prefixes in provider_files.items():
+        if provider_code not in enabled_providers:
+            for prefix in file_prefixes:
+                for ext in ['.m3u', '.xml']:
+                    filepath = out_dir / f"{prefix}{ext}"
+                    if filepath.exists():
+                        filepath.unlink()
+                        log.info("Removed %s (provider '%s' is disabled)", filepath.name, provider_code)
+    
+    # Also clean up main adb_lanes files if NO providers are enabled
+    if not enabled_providers:
+        for filename in ['adb_lanes.m3u', 'adb_lanes.xml']:
+            filepath = out_dir / filename
+            if filepath.exists():
+                filepath.unlink()
+                log.info("Removed %s (all ADB providers disabled)", filename)
+
+
 def export_adb_lanes(db_path: Path, out_dir: Path, server_url: str) -> Path:
     log = get_logger()
     log.info("Using database: %s", db_path)
@@ -153,6 +195,8 @@ def export_adb_lanes(db_path: Path, out_dir: Path, server_url: str) -> Path:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
+        # Clean up files for disabled services FIRST
+        cleanup_disabled_adb_files(conn, out_dir, log)
         cur = conn.cursor()
 
         # Ensure adb_lanes exists and has rows
