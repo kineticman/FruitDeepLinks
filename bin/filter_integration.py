@@ -112,17 +112,29 @@ def get_default_service_priorities() -> Dict[str, int]:
 
 def load_user_preferences(conn: sqlite3.Connection) -> Dict[str, Any]:
     """
-    Load user filter preferences from database
+    Load user filter preferences from database.
 
-    Returns:
-        {
-            "enabled_services": ["sportsonespn", "peacock", ...],
-            "disabled_sports": ["Women's Basketball", ...],
-            "disabled_leagues": ["WNBA", ...],
-            "service_priorities": {"sportsonespn": 100, "peacock": 98, ...},
-            "amazon_penalty": True
-        }
+    Expected keys in user_preferences:
+      - enabled_services: JSON list of logical service codes
+      - disabled_sports: JSON list
+      - disabled_leagues: JSON list
+      - service_priorities: JSON object mapping service code -> int priority
+      - amazon_penalty: JSON bool
+      - amazon_master_enabled: JSON bool
+      - language_preference: JSON string ("en", "es", "both")
+
+    Returns a dict with sane defaults when the table/keys are missing.
     """
+    defaults: Dict[str, Any] = {
+        "enabled_services": [],
+        "disabled_sports": [],
+        "disabled_leagues": [],
+        "service_priorities": get_default_service_priorities(),
+        "amazon_penalty": True,
+        "amazon_master_enabled": True,
+        "language_preference": "en",
+    }
+
     try:
         cur = conn.cursor()
 
@@ -132,65 +144,72 @@ def load_user_preferences(conn: sqlite3.Connection) -> Dict[str, Any]:
             "WHERE type='table' AND name='user_preferences'"
         )
         if not cur.fetchone():
-            return {
-                "enabled_services": [],
-                "disabled_sports": [],
-                "disabled_leagues": [],
-                "service_priorities": get_default_service_priorities(),
-                "amazon_penalty": True,
-            }
+            return defaults
 
-        prefs: Dict[str, Any] = {}
+        raw: Dict[str, Any] = {}
         cur.execute("SELECT key, value FROM user_preferences")
-        for row in cur.fetchall():
-            key = row[0]
-            value = row[1]
-            try:
-                prefs[key] = json.loads(value) if value else []
-            except Exception:
-                prefs[key] = []
+        for key, value in cur.fetchall():
+            # Keep raw strings; parse per-key below
+            raw[key] = value
 
-        # Parse special keys
-        result = {
-            "enabled_services": prefs.get("enabled_services", []),
-            "disabled_sports": prefs.get("disabled_sports", []),
-            "disabled_leagues": prefs.get("disabled_leagues", []),
-        }
-        
-        # Service priorities (with smart defaults)
-        if "service_priorities" in prefs:
+        result: Dict[str, Any] = dict(defaults)
+
+        # Lists
+        for k in ("enabled_services", "disabled_sports", "disabled_leagues"):
+            v = raw.get(k, None)
+            if v is None:
+                continue
             try:
-                custom_priorities = json.loads(prefs["service_priorities"]) if isinstance(prefs["service_priorities"], str) else prefs["service_priorities"]
-                # Merge with defaults (user values override defaults)
-                default_priorities = get_default_service_priorities()
-                default_priorities.update(custom_priorities)
-                result["service_priorities"] = default_priorities
+                parsed = json.loads(v) if isinstance(v, str) else v
+                result[k] = parsed if isinstance(parsed, list) else defaults[k]
+            except Exception:
+                result[k] = defaults[k]
+
+        # Service priorities (merge user overrides onto defaults)
+        v = raw.get("service_priorities", None)
+        if v is not None:
+            try:
+                parsed = json.loads(v) if isinstance(v, str) else v
+                if isinstance(parsed, dict):
+                    merged = get_default_service_priorities()
+                    merged.update({str(k): int(val) for k, val in parsed.items()})
+                    result["service_priorities"] = merged
             except Exception:
                 result["service_priorities"] = get_default_service_priorities()
-        else:
-            result["service_priorities"] = get_default_service_priorities()
-        
-        # Amazon penalty flag
-        if "amazon_penalty" in prefs:
+
+        # Amazon penalty
+        v = raw.get("amazon_penalty", None)
+        if v is not None:
             try:
-                result["amazon_penalty"] = bool(json.loads(prefs["amazon_penalty"]) if isinstance(prefs["amazon_penalty"], str) else prefs["amazon_penalty"])
+                parsed = json.loads(v) if isinstance(v, str) else v
+                result["amazon_penalty"] = bool(parsed)
             except Exception:
-                result["amazon_penalty"] = True
-        else:
-            result["amazon_penalty"] = True
-        
+                result["amazon_penalty"] = defaults["amazon_penalty"]
+
+        # Amazon master enabled
+        v = raw.get("amazon_master_enabled", None)
+        if v is not None:
+            try:
+                parsed = json.loads(v) if isinstance(v, str) else v
+                result["amazon_master_enabled"] = bool(parsed)
+            except Exception:
+                result["amazon_master_enabled"] = defaults["amazon_master_enabled"]
+
+        # Language preference
+        v = raw.get("language_preference", None)
+        if v is not None:
+            try:
+                parsed = json.loads(v) if isinstance(v, str) else v
+                if isinstance(parsed, str) and parsed in ("en", "es", "both"):
+                    result["language_preference"] = parsed
+            except Exception:
+                result["language_preference"] = defaults["language_preference"]
+
         return result
-        
+
     except Exception as e:
         print(f"Warning: Could not load user preferences: {e}")
-        return {
-            "enabled_services": [],
-            "disabled_sports": [],
-            "disabled_leagues": [],
-            "service_priorities": get_default_service_priorities(),
-            "amazon_penalty": True,
-        }
-
+        return defaults
 
 def should_include_event(event: Dict[str, Any], preferences: Dict[str, Any]) -> bool:
     """

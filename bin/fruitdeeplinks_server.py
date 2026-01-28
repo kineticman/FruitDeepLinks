@@ -2688,11 +2688,19 @@ def filters_page():
 
 @app.route("/api/filters")
 def api_filters():
-    """Get available filters (providers, sports, leagues)"""
+    """Get available filters + current preferences.
+
+    Frontend (templates/filters.html) expects a wrapped shape:
+        { "filters": {...}, "preferences": {...} }
+    Some scripts/tools also expect flat top-level keys (providers, amazon_services, sports, leagues),
+    so we include BOTH for backward compatibility.
+    """
     filters = get_available_filters()
     prefs = get_user_preferences()
-    return jsonify({"filters": filters, "preferences": prefs})
-
+    payload = {"filters": filters, "preferences": prefs}
+    # Back-compat: also expose the filters at the top level
+    payload.update(filters)
+    return jsonify(payload)
 
 @app.route("/api/filters/priorities", methods=["GET", "POST"])
 def api_filter_priorities():
@@ -2734,17 +2742,24 @@ def api_selection_examples():
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         
-        # Get user preferences
-        if FILTERING_AVAILABLE:
-            prefs = load_user_preferences(conn)
-        else:
-            prefs = get_user_preferences()
+        # Get user preferences (single source of truth)
+        # Always use get_user_preferences() here so amazon_master_enabled / language_preference
+        # are honored consistently, regardless of FILTERING_AVAILABLE.
+        prefs = get_user_preferences()
         
         enabled_services = prefs.get("enabled_services", [])
         enabled_services_for_resolution = _expand_enabled_services_for_amazon(conn, enabled_services)
         priority_map = prefs.get("service_priorities", {})
         amazon_penalty = prefs.get("amazon_penalty", True)
         amazon_master_enabled = prefs.get("amazon_master_enabled", True)
+
+        # Master override: if Amazon master is disabled, ensure no Amazon-family services can be selected
+        # (including compatibility expansion like aiv_aggregator).
+        if amazon_master_enabled is False:
+            enabled_services_for_resolution = [
+                s for s in enabled_services_for_resolution
+                if not (s == "aiv" or s.startswith("aiv_"))
+            ]
         
         # Find events with multiple DISTINCT services (more interesting for examples)
         cur.execute("""
