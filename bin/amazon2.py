@@ -200,35 +200,108 @@ def purge_malformed_amazon_channels(conn: sqlite3.Connection) -> int:
         # Never fail the scrape due to preflight cleanup
         return 0
 
-def extract_gtis(db_path: str, limit: int) -> List[str]:
+def extract_gtis(
+    db_path: str,
+    limit: int,
+    horizon_hours: int = 72,
+    past_hours: int = 6,
+    rescrape_hours: int = 48,
+) -> List[str]:
+    """
+    Extract Amazon GTIs to scrape.
+
+    Strategy:
+      1) Prefer an event-horizon selection (JOIN playables->events) so we only scrape what matters soon.
+      2) Apply a cache-skip using amazon_channels.last_updated_utc (skip recently-successful GTIs).
+      3) Fall back to legacy behavior if required columns/tables are missing.
+
+    Notes:
+      - Horizon filter can be disabled by setting horizon_hours=0.
+      - Cache-skip can be disabled by setting rescrape_hours=0.
+      - 'limit' is an additional hard safety cap applied at the end.
+    """
     conn = sqlite3.connect(db_path)
     purged = purge_malformed_amazon_channels(conn)
     if purged:
         LOG.info("Preflight: purged malformed amazon_channels rows count=%d", purged)
+
     try:
-        cols = _detect_columns(conn, "playables")
-        # Prefer columns likely to contain URLs/ids; take what exists.
+        play_cols = set(_detect_columns(conn, "playables"))
+        has_event_id = "event_id" in play_cols
+        has_events_table = False
+        try:
+            cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='events'")
+            has_events_table = bool(cur.fetchone())
+        except Exception:
+            has_events_table = False
+
         candidates = [c for c in [
             "playable_url", "deeplink_play", "deeplink_open", "http_deeplink_url",
             "playable_id", "content_id", "title"
-        ] if c in cols]
+        ] if c in play_cols]
         if not candidates:
             raise RuntimeError("No usable columns found in playables table for GTI extraction")
 
-        sql = f"SELECT {', '.join(candidates)} FROM playables WHERE provider='aiv'"
-        cur = conn.execute(sql)
         gtis: List[str] = []
-        for row in cur.fetchall():
-            gtis.extend(_extract_gtis_from_row(row))
+
+        # Preferred: horizon-based selection
+        if has_event_id and has_events_table and horizon_hours and horizon_hours > 0:
+            ev_cols = set(_detect_columns(conn, "events"))
+            if ("start_utc" in ev_cols) or ("end_utc" in ev_cols):
+                future_mod = f"+{int(horizon_hours)} hours"
+                past_mod = f"-{int(past_hours)} hours"
+                sql = f"""
+                    SELECT {', '.join('p.' + c for c in candidates)}
+                    FROM playables p
+                    JOIN events e ON e.id = p.event_id
+                    WHERE p.provider='aiv'
+                      AND (e.start_utc IS NULL OR e.start_utc <= datetime('now', ?))
+                      AND (e.end_utc IS NULL OR e.end_utc >= datetime('now', ?))
+                """
+                cur = conn.execute(sql, (future_mod, past_mod))
+                for row in cur.fetchall():
+                    gtis.extend(_extract_gtis_from_row(row))
+
+        # Fallback: legacy (all AIV playables)
+        if not gtis:
+            sql = f"SELECT {', '.join(candidates)} FROM playables WHERE provider='aiv'"
+            cur = conn.execute(sql)
+            for row in cur.fetchall():
+                gtis.extend(_extract_gtis_from_row(row))
 
         # De-dupe while preserving order
         seen = set()
-        uniq = []
+        uniq: List[str] = []
         for g in gtis:
             if g not in seen:
                 seen.add(g)
                 uniq.append(g)
 
+        # Cache-skip: drop GTIs scraped recently
+        if rescrape_hours and rescrape_hours > 0:
+            try:
+                _ensure_tables(conn)
+                cutoff_mod = f"-{int(rescrape_hours)} hours"
+                cur = conn.execute(
+                    "SELECT gti FROM amazon_channels "
+                    "WHERE last_updated_utc IS NOT NULL "
+                    "AND datetime(last_updated_utc) >= datetime('now', ?)",
+                    (cutoff_mod,),
+                )
+                recent = {r[0] for r in cur.fetchall() if r and r[0]}
+                if recent:
+                    before = len(uniq)
+                    uniq = [g for g in uniq if g not in recent]
+                    LOG.info(
+                        "Cache-skip: filtered %d recently-scraped GTIs (rescrape_hours=%d). Remaining=%d",
+                        before - len(uniq),
+                        int(rescrape_hours),
+                        len(uniq),
+                    )
+            except Exception:
+                LOG.debug("Cache-skip: failed; continuing without cache filtering", exc_info=True)
+
+        # Apply hard cap last
         if limit and limit > 0:
             uniq = uniq[:limit]
         return uniq
@@ -486,10 +559,13 @@ async def run(
     workers: int,
     timeout_ms: int,
     retries: int,
+    horizon_hours: int = 72,
+    past_hours: int = 6,
+    rescrape_hours: int = 48,
     log_every: int = 10,
     keep_debug: int = 3,
 ) -> int:
-    gtis = extract_gtis(db, max_n)
+    gtis = extract_gtis(db, max_n, horizon_hours=horizon_hours, past_hours=past_hours, rescrape_hours=rescrape_hours)
     total_gtis = len(gtis)
     LOG.info("Extracted %d GTIs from DB", total_gtis)
     if not gtis:
@@ -667,6 +743,9 @@ argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", required=True, help="Path to fruit_events.db")
     ap.add_argument("--max", type=int, default=0, help="Max GTIs to scrape (0 = all found)")
+    ap.add_argument("--horizon-hours", type=int, default=72, help="Only consider events starting within the next N hours (default 72). Set 0 to disable horizon filter.")
+    ap.add_argument("--past-hours", type=int, default=6, help="Include events that ended within the last N hours (default 6).")
+    ap.add_argument("--rescrape-hours", type=int, default=48, help="Skip GTIs successfully scraped within the last N hours (default 48). Set 0 to disable cache-skip.")
     ap.add_argument("--workers", type=int, default=3, help="Concurrent workers (contexts)")
     ap.add_argument("--timeout-ms", type=int, default=30000, help="Navigation timeout per GTI")
     ap.add_argument("--retries", type=int, default=1, help="Retries per GTI on timeout/error")
@@ -680,7 +759,18 @@ argv: Optional[Sequence[str]] = None) -> int:
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
-    return asyncio.run(run(args.db, args.max, args.workers, args.timeout_ms, args.retries, args.log_every, args.keep_debug))
+    return asyncio.run(run(
+        args.db,
+        args.max,
+        args.workers,
+        args.timeout_ms,
+        args.retries,
+        horizon_hours=args.horizon_hours,
+        past_hours=args.past_hours,
+        rescrape_hours=args.rescrape_hours,
+        log_every=args.log_every,
+        keep_debug=args.keep_debug,
+    ))
 
 if __name__ == "__main__":
     raise SystemExit(main())

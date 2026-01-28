@@ -159,7 +159,11 @@ Enable daily auto refresh
 </div>
 
 <div class="card">
-<h2>Live Logs <span class="loading" id="log-status"></span></h2>
+<h2>Live Logs <span class="loading" id="log-status"></span>
+  <label style="font-size:12px; margin-left:10px; color:#94a3b8; user-select:none;">
+    <input type="checkbox" id="follow-tail" checked style="margin-right:6px;">Follow
+  </label>
+</h2>
 <div class="log-container" id="log-container"></div>
 </div>
 </div>
@@ -358,6 +362,8 @@ if (logEventSource) logEventSource.close();
 logEventSource = new EventSource('/api/logs/stream');
 const container = document.getElementById('log-container');
 
+const MAX_LOG_LINES = 2000; // bump as needed (2000-5000 is usually fine)
+
 logEventSource.onmessage = (event) => {
   let lineText = '';
   try {
@@ -370,14 +376,25 @@ logEventSource.onmessage = (event) => {
 
   if (!lineText) return;
 
+  const follow = document.getElementById('follow-tail')?.checked !== false;
+
+  // If user is near bottom *before* we append, we can safely auto-follow.
+  const wasNearBottom =
+    (container.scrollHeight - container.scrollTop - container.clientHeight) < 40;
+
+  const shouldAutoScroll = follow && wasNearBottom;
+
   const line = document.createElement('div');
   line.className = 'log-line';
   line.textContent = lineText;
   container.appendChild(line);
-  container.scrollTop = container.scrollHeight;
 
-  // Keep only last 500 lines
-  while (container.children.length > 500) {
+  if (shouldAutoScroll) {
+    container.scrollTop = container.scrollHeight;
+  }
+
+  // Keep only last N lines
+  while (container.children.length > MAX_LOG_LINES) {
     container.removeChild(container.firstChild);
   }
 };
@@ -389,8 +406,13 @@ logEventSource.addEventListener('ping', () => {
 });
 
 logEventSource.onerror = () => {
-document.getElementById('log-status').textContent = ' Reconnecting...';
-setTimeout(setupLogStream, 5000);
+  document.getElementById('log-status').textContent = ' Reconnecting...';
+  try { logEventSource.close(); } catch (e) {}
+
+  // Reload a small tail so you don't "miss" logs during reconnect
+  loadInitialLogs();
+
+  setTimeout(setupLogStream, 2000);
 };
 
 document.getElementById('log-status').textContent = 'LIVE';
@@ -400,10 +422,19 @@ async function loadInitialLogs() {
 const res = await fetch('/api/logs?count=100');
 const data = await res.json();
 const container = document.getElementById('log-container');
-container.innerHTML = data.logs.map(log => 
+
+const follow = document.getElementById('follow-tail')?.checked !== false;
+const wasNearBottom =
+  (container.scrollHeight - container.scrollTop - container.clientHeight) < 40;
+
+container.innerHTML = data.logs.map(log =>
 `<div class="log-line">${log}</div>`
 ).join('');
-container.scrollTop = container.scrollHeight;
+
+// Only auto-scroll if following tail (or if user was already near bottom)
+if (follow && wasNearBottom) {
+  container.scrollTop = container.scrollHeight;
+}
 }
 
 async function wipeEventData() {

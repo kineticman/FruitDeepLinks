@@ -441,11 +441,14 @@ def main():
     # Identifies which Amazon subscription is required for each event.
     # Uses amazon2.py (Playwright) which is dramatically more stable than the legacy Selenium scraper.
     #
-    # Defaults match our proven-good manual run:
-    #   python3 amazon2.py --db ... --max 175 --workers 3 --timeout-ms 30000 --retries 1
+    # Defaults are horizon + cache (recommended):
+    #   python3 amazon2.py --db ... --horizon-hours 72 --past-hours 6 --rescrape-hours 48 --max 350 --workers 3 --timeout-ms 30000 --retries 1
     #
     # Env knobs (optional):
-    #   AMAZON_MAX:         max GTIs to process (default 175)
+    #   AMAZON_MAX:               hard safety cap on GTIs to process (default 350; applied after horizon+cache)
+#   AMAZON_HORIZON_HOURS:     only consider events starting within next N hours (default 72)
+#   AMAZON_PAST_HOURS:        include events that ended within last N hours (default 6)
+#   AMAZON_RESCRAPE_HOURS:    skip GTIs scraped successfully within last N hours (default 48)
     #   AMAZON_WORKERS:     concurrency (default 3)
     #   AMAZON_TIMEOUT_MS:  per-request timeout ms (default 30000)
     #   AMAZON_RETRIES:     retry count (default 1)
@@ -456,7 +459,10 @@ def main():
         print("=" * 60)
         print("Amazon scraper skipped (--skip-scrape flag)")
     else:
-        amazon_max = os.getenv("AMAZON_MAX", "175")
+        amazon_max = os.getenv("AMAZON_MAX", "350")  # safety cap (after horizon+cache)
+        amazon_horizon_hours = os.getenv("AMAZON_HORIZON_HOURS", "72")
+        amazon_past_hours = os.getenv("AMAZON_PAST_HOURS", "6")
+        amazon_rescrape_hours = os.getenv("AMAZON_RESCRAPE_HOURS", "48")
         amazon_workers = os.getenv("AMAZON_WORKERS", "3")
         amazon_timeout_ms = os.getenv("AMAZON_TIMEOUT_MS", "30000")
         amazon_retries = os.getenv("AMAZON_RETRIES", "1")
@@ -471,6 +477,9 @@ def main():
             "python3", "amazon2.py",
             "--db", str(DB_PATH),
             "--max", str(amazon_max),
+            "--horizon-hours", str(amazon_horizon_hours),
+            "--past-hours", str(amazon_past_hours),
+            "--rescrape-hours", str(amazon_rescrape_hours),
             "--workers", str(amazon_workers),
             "--timeout-ms", str(amazon_timeout_ms),
             "--retries", str(amazon_retries),
