@@ -159,11 +159,7 @@ Enable daily auto refresh
 </div>
 
 <div class="card">
-<h2>Live Logs <span class="loading" id="log-status"></span>
-  <label style="font-size:12px; margin-left:10px; color:#94a3b8; user-select:none;">
-    <input type="checkbox" id="follow-tail" checked style="margin-right:6px;">Follow
-  </label>
-</h2>
+<h2>Live Logs <span class="loading" id="log-status"></span></h2>
 <div class="log-container" id="log-container"></div>
 </div>
 </div>
@@ -356,85 +352,217 @@ label.textContent = 'Auto refresh is disabled';
 }
 }
 
-function setupLogStream() {
-if (logEventSource) logEventSource.close();
+// ===================== Live Logs (sticky scroll + session restore) =====================
+const LOG_MAX_LINES = 2000;              // keep this many lines in the DOM
+const LOG_TAIL_ON_CONNECT = 500;         // server tail if we have no stored seq
+const AUTO_SCROLL_THRESHOLD_PX = 40;     // within this many px of bottom counts as "at bottom"
+const LOG_STORE_KEY = "fdl_admin_live_logs_v1";      // sessionStorage cache of recent log lines
+const LOG_STORE_SEQ_KEY = "fdl_admin_live_logs_seq"; // last seen seq (for SSE resume)
+const LOG_STORE_SCROLL_KEY = "fdl_admin_live_logs_scroll"; // last scrollTop (when not at bottom)
 
-logEventSource = new EventSource('/api/logs/stream');
-const container = document.getElementById('log-container');
+let _logSaveTimer = null;
+let _logLines = [];   // [{seq:number|null, text:string}]
+let _lastSeq = 0;
 
-const MAX_LOG_LINES = 2000; // bump as needed (2000-5000 is usually fine)
-
-logEventSource.onmessage = (event) => {
-  let lineText = '';
+function _loadLogsFromSession() {
   try {
-    const obj = JSON.parse(event.data);
-    lineText = (obj && (obj.log ?? obj.line)) ? (obj.log ?? obj.line) : String(event.data || '');
+    const raw = sessionStorage.getItem(LOG_STORE_KEY);
+    const rawSeq = sessionStorage.getItem(LOG_STORE_SEQ_KEY);
+    const rawScroll = sessionStorage.getItem(LOG_STORE_SCROLL_KEY);
+
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) _logLines = parsed.filter(x => x && typeof x.text === "string");
+    }
+    if (rawSeq) _lastSeq = parseInt(rawSeq, 10) || 0;
+
+    return {
+      hadLogs: _logLines.length > 0,
+      lastSeq: _lastSeq,
+      scrollTop: rawScroll ? (parseInt(rawScroll, 10) || 0) : 0,
+    };
   } catch (e) {
-    // Backwards-compatible: server may stream plain-text lines
-    lineText = String(event.data || '');
+    _logLines = [];
+    _lastSeq = 0;
+    return { hadLogs: false, lastSeq: 0, scrollTop: 0 };
   }
+}
 
-  if (!lineText) return;
+function _scheduleSaveLogsToSession() {
+  // debounce writes to sessionStorage so we don't thrash it while logs spam
+  if (_logSaveTimer) return;
+  _logSaveTimer = setTimeout(() => {
+    _logSaveTimer = null;
+    try {
+      // cap stored lines so sessionStorage stays sane
+      const tail = _logLines.slice(-LOG_MAX_LINES);
+      sessionStorage.setItem(LOG_STORE_KEY, JSON.stringify(tail));
+      sessionStorage.setItem(LOG_STORE_SEQ_KEY, String(_lastSeq || 0));
+    } catch (e) {
+      // ignore storage failures
+    }
+  }, 250);
+}
 
-  const follow = document.getElementById('follow-tail')?.checked !== false;
+function _escapeHtml(s) {
+  // avoid HTML injection in log rendering
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
 
-  // If user is near bottom *before* we append, we can safely auto-follow.
-  const wasNearBottom =
-    (container.scrollHeight - container.scrollTop - container.clientHeight) < 40;
+function _renderLogsIntoDom({ restoreScrollTop = null } = {}) {
+  const container = document.getElementById("log-container");
+  if (!container) return;
 
-  const shouldAutoScroll = follow && wasNearBottom;
+  const tail = _logLines.slice(-LOG_MAX_LINES);
+  container.innerHTML = tail
+    .map(x => `<div class="log-line" data-seq="${x.seq ?? ""}">${_escapeHtml(x.text)}</div>`)
+    .join("");
 
-  const line = document.createElement('div');
-  line.className = 'log-line';
-  line.textContent = lineText;
-  container.appendChild(line);
-
-  if (shouldAutoScroll) {
+  // If the user left while scrolled up, restore that scroll position.
+  // Otherwise, default to bottom.
+  if (typeof restoreScrollTop === "number" && restoreScrollTop > 0) {
+    container.scrollTop = Math.min(restoreScrollTop, container.scrollHeight);
+  } else {
     container.scrollTop = container.scrollHeight;
   }
+}
 
-  // Keep only last N lines
-  while (container.children.length > MAX_LOG_LINES) {
+function _isAtBottom(container) {
+  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+  return distanceFromBottom <= AUTO_SCROLL_THRESHOLD_PX;
+}
+
+function _appendLogLineToDom(textLine, seqOrNull) {
+  const container = document.getElementById("log-container");
+  if (!container) return;
+
+  const wasAtBottom = _isAtBottom(container);
+  const prevScrollTop = container.scrollTop;
+
+  const line = document.createElement("div");
+  line.className = "log-line";
+  if (seqOrNull != null) line.dataset.seq = String(seqOrNull);
+  line.textContent = textLine; // safe, no HTML parsing
+  container.appendChild(line);
+
+  // Trim DOM lines (from the top)
+  while (container.children.length > LOG_MAX_LINES) {
     container.removeChild(container.firstChild);
   }
-};
 
+  // Sticky scroll behavior:
+  // - If user is reading older lines (not at bottom), keep them where they are.
+  // - If they're at bottom, follow new lines.
+  if (wasAtBottom) {
+    container.scrollTop = container.scrollHeight;
+  } else {
+    container.scrollTop = prevScrollTop;
+    try {
+      sessionStorage.setItem(LOG_STORE_SCROLL_KEY, String(container.scrollTop));
+    } catch (e) {}
+  }
+}
 
-logEventSource.addEventListener('ping', () => {
-  // Keep-alive heartbeat
-  // (No UI update needed; connection staying open is the goal)
-});
+function _addLogLine(textLine, seqOrNull) {
+  if (!textLine) return;
 
-logEventSource.onerror = () => {
-  document.getElementById('log-status').textContent = ' Reconnecting...';
-  try { logEventSource.close(); } catch (e) {}
+  const seq = (seqOrNull != null) ? (parseInt(seqOrNull, 10) || 0) : 0;
+  if (seq > 0) _lastSeq = Math.max(_lastSeq, seq);
 
-  // Reload a small tail so you don't "miss" logs during reconnect
-  loadInitialLogs();
+  _logLines.push({ seq: seq > 0 ? seq : null, text: textLine });
+  if (_logLines.length > LOG_MAX_LINES) _logLines = _logLines.slice(-LOG_MAX_LINES);
 
-  setTimeout(setupLogStream, 2000);
-};
+  _appendLogLineToDom(textLine, seq > 0 ? seq : null);
+  _scheduleSaveLogsToSession();
+}
 
-document.getElementById('log-status').textContent = 'LIVE';
+function setupLogStream() {
+  if (logEventSource) logEventSource.close();
+
+  const statusEl = document.getElementById("log-status");
+  if (statusEl) statusEl.textContent = "CONNECTING…";
+
+  const hasSeq = (_lastSeq && _lastSeq > 0);
+  const qs = new URLSearchParams();
+  if (hasSeq) {
+    qs.set("since", String(_lastSeq));
+  } else {
+    // no seq known -> ask server to tail some lines so we immediately see history
+    qs.set("tail", String(LOG_TAIL_ON_CONNECT));
+  }
+
+  logEventSource = new EventSource(`/api/logs/stream?${qs.toString()}`);
+  const container = document.getElementById("log-container");
+
+  // Persist scroll position when user scrolls up (and restore it on return)
+  if (container) {
+    container.addEventListener("scroll", () => {
+      if (!_isAtBottom(container)) {
+        try { sessionStorage.setItem(LOG_STORE_SCROLL_KEY, String(container.scrollTop)); } catch (e) {}
+      } else {
+        try { sessionStorage.removeItem(LOG_STORE_SCROLL_KEY); } catch (e) {}
+      }
+    }, { passive: true });
+  }
+
+  logEventSource.onmessage = (event) => {
+    let lineText = "";
+    let seq = null;
+
+    try {
+      const obj = JSON.parse(event.data);
+      lineText = (obj && (obj.log ?? obj.line)) ? (obj.log ?? obj.line) : String(event.data || "");
+      if (obj && typeof obj.seq !== "undefined") seq = obj.seq;
+    } catch (e) {
+      // Backwards-compatible: server may stream plain-text lines
+      lineText = String(event.data || "");
+    }
+
+    if (!lineText) return;
+    _addLogLine(lineText, seq);
+  };
+
+  logEventSource.addEventListener("ping", () => {
+    // keep-alive heartbeat
+  });
+
+  logEventSource.onerror = () => {
+    if (statusEl) statusEl.textContent = "RECONNECTING…";
+    try { logEventSource.close(); } catch (e) {}
+    setTimeout(setupLogStream, 2000);
+  };
+
+  if (statusEl) statusEl.textContent = "LIVE";
 }
 
 async function loadInitialLogs() {
-const res = await fetch('/api/logs?count=100');
-const data = await res.json();
-const container = document.getElementById('log-container');
+  // Prefer restoring from sessionStorage so navigating away/back preserves what you were reading.
+  const restored = _loadLogsFromSession();
+  _renderLogsIntoDom({ restoreScrollTop: restored.scrollTop });
 
-const follow = document.getElementById('follow-tail')?.checked !== false;
-const wasNearBottom =
-  (container.scrollHeight - container.scrollTop - container.clientHeight) < 40;
-
-container.innerHTML = data.logs.map(log =>
-`<div class="log-line">${log}</div>`
-).join('');
-
-// Only auto-scroll if following tail (or if user was already near bottom)
-if (follow && wasNearBottom) {
-  container.scrollTop = container.scrollHeight;
-}
+  // If nothing was restored, do a one-shot pull for quick history (plain lines),
+  // then SSE will take over and include seqs.
+  if (!restored.hadLogs) {
+    try {
+      const res = await fetch(`/api/logs?count=${LOG_TAIL_ON_CONNECT}`);
+      const data = await res.json();
+      if (Array.isArray(data.logs)) {
+        data.logs.forEach((t) => {
+          if (typeof t === "string" && t.trim()) _logLines.push({ seq: null, text: t });
+        });
+        _logLines = _logLines.slice(-LOG_MAX_LINES);
+        _renderLogsIntoDom();
+        _scheduleSaveLogsToSession();
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
 }
 
 async function wipeEventData() {
