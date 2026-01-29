@@ -130,6 +130,40 @@ def normalize_service(channel_id: Optional[str], channel_name: Optional[str]) ->
     return None
 
 
+def _table_columns(cur: sqlite3.Cursor, table: str) -> set[str]:
+    """Return set of column names for `table`."""
+    cur.execute(f"PRAGMA table_info({table})")
+    rows = cur.fetchall()
+    cols = set()
+    for r in rows:
+        # row: (cid, name, type, notnull, dflt_value, pk) or sqlite3.Row
+        name = r["name"] if isinstance(r, sqlite3.Row) else r[1]
+        cols.add(str(name))
+    return cols
+
+
+def ensure_amazon_channels_schema(conn: sqlite3.Connection) -> None:
+    """
+    Make this script tolerant of older DBs by adding missing columns we rely on.
+    Idempotent / safe to run repeatedly.
+    """
+    cur = conn.cursor()
+    # Ensure schema is compatible across mixed-version DBs
+    ensure_amazon_channels_schema(conn)
+
+    cols = _table_columns(cur, "amazon_channels")
+
+    # Older DBs may not have is_stale; default to 0 (not stale).
+    if "is_stale" not in cols:
+        cur.execute("ALTER TABLE amazon_channels ADD COLUMN is_stale INTEGER DEFAULT 0")
+
+    conn.commit()
+
+
+
+
+
+
 def migrate(db_path: str) -> int:
     print("=" * 80)
     print("MIGRATING AMAZON PLAYABLES TO CORRECT LOGICAL SERVICES (broadcast GTI join)")
