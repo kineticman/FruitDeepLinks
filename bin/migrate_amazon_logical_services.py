@@ -148,8 +148,6 @@ def ensure_amazon_channels_schema(conn: sqlite3.Connection) -> None:
     Idempotent / safe to run repeatedly.
     """
     cur = conn.cursor()
-    # Ensure schema is compatible across mixed-version DBs
-    ensure_amazon_channels_schema(conn)
 
     cols = _table_columns(cur, "amazon_channels")
 
@@ -178,6 +176,9 @@ def migrate(db_path: str) -> int:
     cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='amazon_channels'")
     if not cur.fetchone():
         raise SystemExit("amazon_channels table not found. Run the Amazon scraper first.")
+
+    # Ensure schema is compatible across mixed-version DBs
+    ensure_amazon_channels_schema(conn)
 
     # Load amazon_channels mapping (prefer non-stale)
     cur.execute("""

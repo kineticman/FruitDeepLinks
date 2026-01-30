@@ -136,6 +136,8 @@ def _ensure_tables(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE amazon_channels ADD COLUMN channel_name TEXT")
     if "last_updated_utc" not in existing:
         conn.execute("ALTER TABLE amazon_channels ADD COLUMN last_updated_utc TEXT")
+    if "is_stale" not in existing:
+        conn.execute("ALTER TABLE amazon_channels ADD COLUMN is_stale INTEGER DEFAULT 0")
 
     conn.commit()
 
@@ -277,7 +279,7 @@ def extract_gtis(
                 seen.add(g)
                 uniq.append(g)
 
-        # Cache-skip: drop GTIs scraped recently
+        # Cache-skip: drop GTIs scraped recently (but only if they're not stale)
         if rescrape_hours and rescrape_hours > 0:
             try:
                 _ensure_tables(conn)
@@ -285,7 +287,8 @@ def extract_gtis(
                 cur = conn.execute(
                     "SELECT gti FROM amazon_channels "
                     "WHERE last_updated_utc IS NOT NULL "
-                    "AND datetime(last_updated_utc) >= datetime('now', ?)",
+                    "AND datetime(last_updated_utc) >= datetime('now', ?) "
+                    "AND (is_stale IS NULL OR is_stale = 0)",
                     (cutoff_mod,),
                 )
                 recent = {r[0] for r in cur.fetchall() if r and r[0]}
@@ -520,14 +523,31 @@ def upsert_results(db_path: str, results: Sequence[ScrapeResult]) -> int:
         n = 0
         now = _utcnow_iso()
         for r in results:
-            if r.status != "SUCCESS":
+            # Skip ERROR and TIMEOUT - only write SUCCESS and STALE
+            if r.status not in ("SUCCESS", "STALE"):
                 continue
+            
             # Build an UPSERT that matches whatever schema exists
             cols_cur = conn.execute("PRAGMA table_info(amazon_channels)")
             cols = {row[1] for row in cols_cur.fetchall()}
             has_lu = "last_updated_utc" in cols
+            has_stale = "is_stale" in cols
+            
+            # Determine is_stale value
+            is_stale_val = 1 if r.status == "STALE" else 0
 
-            if has_lu:
+            if has_lu and has_stale:
+                conn.execute(
+                    "INSERT INTO amazon_channels(gti, channel_id, channel_name, last_updated_utc, is_stale) "
+                    "VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(gti) DO UPDATE SET "
+                    "channel_id=excluded.channel_id, "
+                    "channel_name=excluded.channel_name, "
+                    "last_updated_utc=excluded.last_updated_utc, "
+                    "is_stale=excluded.is_stale",
+                    (r.gti, r.channel_id, r.channel_name, now, is_stale_val),
+                )
+            elif has_lu:
                 conn.execute(
                     "INSERT INTO amazon_channels(gti, channel_id, channel_name, last_updated_utc) "
                     "VALUES(?,?,?,?) "
@@ -536,6 +556,16 @@ def upsert_results(db_path: str, results: Sequence[ScrapeResult]) -> int:
                     "channel_name=excluded.channel_name, "
                     "last_updated_utc=excluded.last_updated_utc",
                     (r.gti, r.channel_id, r.channel_name, now),
+                )
+            elif has_stale:
+                conn.execute(
+                    "INSERT INTO amazon_channels(gti, channel_id, channel_name, is_stale) "
+                    "VALUES(?,?,?,?) "
+                    "ON CONFLICT(gti) DO UPDATE SET "
+                    "channel_id=excluded.channel_id, "
+                    "channel_name=excluded.channel_name, "
+                    "is_stale=excluded.is_stale",
+                    (r.gti, r.channel_id, r.channel_name, is_stale_val),
                 )
             else:
                 conn.execute(
