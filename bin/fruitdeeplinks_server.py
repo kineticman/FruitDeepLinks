@@ -2258,8 +2258,8 @@ def api_status():
 
 @app.route("/api/logs")
 def api_logs():
-    """Get recent logs"""
-    count = request.args.get("count", 100, type=int)
+    """Get recent logs (default: 5000 lines, max: 10000)"""
+    count = min(request.args.get("count", 5000, type=int), 10000)
     return jsonify({"logs": [l for (_, l) in list(log_buffer)[-count:]], "count": len(log_buffer)})
 
 
