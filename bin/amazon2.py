@@ -47,6 +47,8 @@ BENEFIT_MAP: Dict[str, Tuple[str, str]] = {
     "maxliveeventsus": ("Max", "aiv_max"),
     "vixplusus": ("ViX Premium", "aiv_vix_premium"),
     "FSNOHIFSOH3": ("FanDuel Sports Network", "aiv_fanduel"),
+    # Channel UUIDs (when benefit_id returns the channel instead of short benefit ID)
+    "amzn1.dv.channel.7a36cb2b-40e6-40c7-809f-a6cf9b9f0859": ("NBA League Pass", "aiv_nba_league_pass"),
 }
 
 # Simple inference from entitlement/page text -> (display name, logical_service)

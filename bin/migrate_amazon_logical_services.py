@@ -36,6 +36,7 @@ from typing import Dict, Optional, Tuple
 
 
 BROADCAST_RX = re.compile(r"broadcast=(amzn1\.dv\.gti\.[^&\s]+)", re.IGNORECASE)
+GTI_RX = re.compile(r"(amzn1\.dv\.gti\.[a-f0-9-]{36})", re.IGNORECASE)
 
 
 def utcnow_iso() -> str:
@@ -43,12 +44,25 @@ def utcnow_iso() -> str:
 
 
 def extract_broadcast_gti(deeplink_play: Optional[str], deeplink_open: Optional[str]) -> Optional[str]:
+    """
+    Extract GTI from deeplink, preferring broadcast= parameter but falling back to any GTI found.
+    """
     for s in (deeplink_play, deeplink_open):
         if not s:
             continue
+        # Prefer broadcast= parameter (most reliable for multi-feed events)
         m = BROADCAST_RX.search(s)
         if m:
             return m.group(1)
+    
+    # Fallback: find any GTI in the deeplink (for single-feed events like Willow)
+    for s in (deeplink_play, deeplink_open):
+        if not s:
+            continue
+        m = GTI_RX.search(s)
+        if m:
+            return m.group(1)
+    
     return None
 
 
@@ -59,6 +73,11 @@ def normalize_service(channel_id: Optional[str], channel_name: Optional[str]) ->
     """
     cid = (channel_id or "").strip()
     cname = (channel_name or "").strip()
+    
+    # If amazon_channels already provides a canonical aiv_* id, trust it (future-proof)
+    cid_l = cid.lower()
+    if cid_l.startswith("aiv_") and cid_l not in {"aiv_aggregator"}:
+        return cid_l
 
     # Some scrapes yield Amazon internal identifiers like:
     # - amzn1.dv.channel.<uuid>
@@ -66,9 +85,7 @@ def normalize_service(channel_id: Optional[str], channel_name: Optional[str]) ->
     # In those cases, the channel_name is usually the best signal.
     # Some scrapes yield benefit ids like peacockus, daznus, vixplusus, maxliveeventsus, etc.
 
-    # First: direct known benefit ids / canonical ids
-    cid_l = cid.lower()
-
+    # First: direct known benefit ids / canonical ids (for backward compatibility)
     direct_map = {
         "aiv_nba_league_pass": "aiv_nba_league_pass",
         "aiv_wnba_league_pass": "aiv_wnba_league_pass",
