@@ -25,6 +25,8 @@ LOGICAL_SERVICE_MAP = {
     'tv.apple.com': 'apple_tv',  # Special - needs league lookup
     'kayosports.com.au': 'kayo_web',
     'www.kayosports.com.au': 'kayo_web',
+    'gothamsports.com': 'gotham',
+    'www.gothamsports.com': 'gotham',
 }
 
 # Display names for logical services
@@ -58,6 +60,10 @@ SERVICE_DISPLAY_NAMES = {
     'nba': 'NBA League Pass',
     'mlb': 'MLB.TV',
     'nhl': 'NHL.TV',
+    
+    # Niche sports services
+    'victory': 'Victory+',
+    'gotham': 'Gotham Sports',
     
     # Web-based (new logical services)
     'peacock_web': 'Peacock (Web)',
@@ -270,6 +276,14 @@ def get_logical_service_for_playable(
     if provider == 'kayo':
         return 'kayo_web'
     
+    # Victory+ provider: map to victory
+    if provider == 'victory':
+        return 'victory'
+    
+    # Gotham Sports provider: map to gotham
+    if provider == 'gotham':
+        return 'gotham'
+    
     # Non-web providers: use provider as-is
     if provider not in ('http', 'https', None, ''):
         return provider
@@ -428,6 +442,8 @@ def get_logical_service_priority(service_code: str) -> int:
         'open.dazn.com': 17,
         'f1tv': 18,
         'kayo_web': 19,  # Kayo Sports (Australia)
+        'victory': 19,   # Victory+ (WHL, LOVB, other niche sports)
+        'gotham': 20,    # Gotham Sports (MSG/YES Network - NYC regional)
         'marquee': 20,   # Marquee Sports Network (Chicago regional)
         'vixapp': 21,
         'aiv_vix_premium': 21,       # ViX on Amazon - same as direct

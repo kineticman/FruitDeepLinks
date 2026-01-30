@@ -125,8 +125,9 @@ CORS(app)
 # Global state
 log_lock = threading.Lock()
 log_seq = 0
-# Keep last 1000 log lines as (seq, line). seq is monotonic so streaming works even when deque is full.
-log_buffer = deque(maxlen=1000)
+# Keep last 5000 log lines as (seq, line). seq is monotonic so streaming works even when deque is full.
+# Increased from 1000 to 5000 to accommodate full daily_refresh.py output
+log_buffer = deque(maxlen=5000)
 
 def append_log_line(line: str) -> int:
     """Append a log line to the in-memory buffer and return its sequence number."""

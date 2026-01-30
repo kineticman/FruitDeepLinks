@@ -327,6 +327,16 @@ def main(argv=None):
         choices=["apple", "fruit", "both"],
         help="Print SQLite bloat stats for the selected DB (apple, fruit, both) and exit.",
     )
+    parser.add_argument(
+        "--skip-scrape",
+        action="store_true",
+        help="Skip all scraping steps (Apple TV, Kayo, Victory+, Gotham, ESPN). Use existing data files.",
+    )
+    parser.add_argument(
+        "--force-apple-import",
+        action="store_true",
+        help="Force Apple TV import even if database hasn't changed (used with --skip-scrape).",
+    )
     args = parser.parse_args(argv)
 
     if args.bloat_stats_only is not None:
@@ -358,8 +368,9 @@ def main(argv=None):
     # Total steps in this pipeline
     total_steps = 13
 
-    # Check for --skip-scrape flag
-    skip_scrape = "--skip-scrape" in sys.argv
+    # Get flags from parsed arguments
+    skip_scrape = args.skip_scrape
+    force_apple_import = args.force_apple_import
 
     # Fresh-install defensive step: bootstrap Apple UTS auth tokens if missing/invalid.
     # Prevents brand new installs from failing with:
@@ -531,7 +542,6 @@ def main(argv=None):
     # Step 6: Import Apple TV events (DB-to-DB from apple_events.db)
     # NOTE: Step 6 can be slow (GZIP + JSON parse). If --skip-scrape was used and the Apple DB
     # hasn't changed since the last successful import, we skip this step to keep "Skip Scrape" fast.
-    force_apple_import = "--force-apple-import" in sys.argv
 
     if (skip_scrape or skip_apple) and (not force_apple_import) and _apple_import_is_fresh(APPLE_DB_PATH):
         print("\n" + "=" * 60)
@@ -601,6 +611,53 @@ def main(argv=None):
             return 1
     else:
         print(f"\n[7/{total_steps}] Kayo data not found at {kayo_json}, skipping ingest")
+
+    # Step 7a: Scrape Victory+ events
+    # Victory+ uses guest authentication (no user credentials required)
+    # Session is cached in the database, so authentication only happens once
+    if skip_scrape:
+        print("\n" + "=" * 60)
+        print(f"[7a/{total_steps}] Scraping Victory+ events. SKIPPED")
+        print("=" * 60)
+    else:
+        print("\n" + "=" * 60)
+        print(f"[7a/{total_steps}] Scraping Victory+ events")
+        print("=" * 60)
+        # Victory+ scrape is non-fatal - don't stop pipeline if it fails
+        # The scraper handles import internally (no separate ingest step needed)
+        run_step("7a", total_steps, "Scraping Victory+ events (WHL, LOVB, niche sports)", [
+            "python3", "victory_scraper.py",
+            "--fruit-db", str(DB_PATH),
+        ], allow_fail=True)
+
+    # Step 7a-gotham: Scrape Gotham Sports (MSG/YES Network)
+    # Self-contained scraper that handles both scraping and ingestion
+    # NYC regional sports: Knicks, Rangers, Islanders, Devils, Yankees, Nets
+    if skip_scrape:
+        print("\n" + "=" * 60)
+        print(f"[7a-gotham/{total_steps}] Scraping Gotham Sports. SKIPPED")
+        print("=" * 60)
+    else:
+        gotham_enabled = os.getenv("GOTHAM_ENABLED", "true").lower() not in ("0", "false", "no")
+        if gotham_enabled:
+            gotham_days = os.getenv("GOTHAM_DAYS", "7")
+            gotham_zone = os.getenv("GOTHAM_ZONE", "zone-1")
+            print("\n" + "=" * 60)
+            print(f"[7a-gotham/{total_steps}] Scraping Gotham Sports (MSG/YES - {gotham_days} days)")
+            print("=" * 60)
+            # Gotham scrape is non-fatal - don't stop pipeline if it fails
+            # The scraper handles import internally (no separate ingest step needed)
+            run_step("7a-gotham", total_steps, f"Scraping Gotham Sports ({gotham_zone}, {gotham_days} days)", [
+                "python3", "gotham_integration.py",
+                "--db", str(DB_PATH),
+                "--days", gotham_days,
+                "--zone", gotham_zone,
+            ], allow_fail=True)
+        else:
+            print("\n" + "=" * 60)
+            print(f"[7a-gotham/{total_steps}] Scraping Gotham Sports. DISABLED")
+            print("=" * 60)
+            print("Set GOTHAM_ENABLED=true to enable")
 
     # Step 7b: Scrape ESPN Watch Graph (skippable, runs after Apple TV import)
     espn_days = os.getenv("ESPN_DAYS", "7")
