@@ -31,6 +31,7 @@ try:
     from xmltv_helpers import (
         get_provider_display_name,
         add_categories_and_tags,
+        build_enhanced_description,
     )
 except ImportError:
     # Fallback if not in path
@@ -39,6 +40,22 @@ except ImportError:
     
     def add_categories_and_tags(prog_el, event, provider_name=None, is_placeholder=False):
         pass
+    
+    def build_enhanced_description(event, provider_name=None):
+        import re
+        synopsis = event.get("synopsis") or event.get("synopsis_brief") or event.get("title") or "Sports Event"
+        
+        # Clean polluted synopsis
+        if synopsis:
+            synopsis = re.sub(r'^\([^)]+\)\s*-\s*[^-]+\s*-\s*\([^)]+\)\s*-\s*', '', synopsis)
+            synopsis = re.sub(r'^\([^)]+\)\s*-\s*', '', synopsis)
+            synopsis = re.sub(r'^[^-]+-\s*\([^)]+\)\s*-\s*', '', synopsis)
+            synopsis = re.sub(r'\s*-\s*Available on [^-]+$', '', synopsis)
+            synopsis = synopsis.strip()
+        
+        if provider_name:
+            return f"{synopsis} - Available on {provider_name}"
+        return synopsis
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parents[1] / "data" / "fruit_events.db"
 DEFAULT_OUT_DIR = Path(__file__).resolve().parents[1] / "out"
@@ -341,7 +358,6 @@ def export_adb_lanes(db_path: Path, out_dir: Path, server_url: str) -> Path:
                 stop_attr = iso_to_xmltv(stop_dt.isoformat())
 
                 title = row["title"] or row["title_brief"] or "Event"
-                synopsis = row["synopsis"] or row["synopsis_brief"] or ""
 
                 prog_el = ET.SubElement(
                     tv,
@@ -353,12 +369,13 @@ def export_adb_lanes(db_path: Path, out_dir: Path, server_url: str) -> Path:
                 title_el = ET.SubElement(prog_el, "title")
                 title_el.text = title
 
-                if synopsis:
-                    desc_el = ET.SubElement(prog_el, "desc")
-                    desc_el.text = synopsis
+                # Description - use enhanced builder for ESPN-style formatting
+                provider_display = get_provider_display_name(provider_code) or provider_label
+                desc_text = build_enhanced_description(dict(row), provider_name=provider_display)
+                desc_el = ET.SubElement(prog_el, "desc")
+                desc_el.text = desc_text
 
                 # Use shared helper for categories and tags
-                provider_display = get_provider_display_name(provider_code) or provider_label
                 add_categories_and_tags(
                     prog_el,
                     event=dict(row),

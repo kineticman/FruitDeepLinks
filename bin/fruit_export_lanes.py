@@ -19,6 +19,7 @@ try:
         get_provider_display_name,
         get_provider_from_channel,
         add_categories_and_tags,
+        build_enhanced_description,
     )
 except ImportError:
     # Fallback if not in path - define locally
@@ -30,6 +31,22 @@ except ImportError:
     
     def add_categories_and_tags(prog_el, event, provider_name=None, is_placeholder=False):
         pass
+    
+    def build_enhanced_description(event, provider_name=None):
+        import re
+        synopsis = event.get("synopsis") or event.get("title") or "Sports Event"
+        
+        # Clean polluted synopsis
+        if synopsis:
+            synopsis = re.sub(r'^\([^)]+\)\s*-\s*[^-]+\s*-\s*\([^)]+\)\s*-\s*', '', synopsis)
+            synopsis = re.sub(r'^\([^)]+\)\s*-\s*', '', synopsis)
+            synopsis = re.sub(r'^[^-]+-\s*\([^)]+\)\s*-\s*', '', synopsis)
+            synopsis = re.sub(r'\s*-\s*Available on [^-]+$', '', synopsis)
+            synopsis = synopsis.strip()
+        
+        if provider_name:
+            return f"{synopsis} - Available on {provider_name}"
+        return synopsis
 
 # -------------------- DB helpers --------------------
 def get_conn(db_path: str) -> sqlite3.Connection:
@@ -102,6 +119,7 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
                e.synopsis,
                e.channel_name,
                e.genres_json,
+               e.classification_json,
                e.pvid,
                e.hero_image_url
           FROM lane_events le
@@ -160,15 +178,7 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
             title = event.get("title") or "Sports Event"
             ET.SubElement(prog, "title").text = title
             
-            # Description
-            desc = event.get("synopsis") or title
-            
-            # Strip any existing "Available on X" text from the synopsis
-            # (it was added during import with channel_name, but we want to use chosen_provider instead)
-            import re
-            desc = re.sub(r'\s*-\s*Available on [^-]+$', '', desc)
-            
-            # Use the same provider logic as categories for consistency
+            # Description - use enhanced builder for ESPN-style formatting
             chosen_provider = event.get("chosen_provider")
             chosen_logical_service = event.get("chosen_logical_service")
             channel_name = event.get("channel_name")
@@ -182,8 +192,8 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
             elif channel_name:
                 provider_for_desc = get_provider_from_channel(channel_name)
             
-            if provider_for_desc:
-                desc = f"{desc} - Available on {provider_for_desc}"
+            # Build enhanced description (handles minimal data gracefully, moves feed types to end)
+            desc = build_enhanced_description(event, provider_name=provider_for_desc)
             
             ET.SubElement(prog, "desc").text = desc
             

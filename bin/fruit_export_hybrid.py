@@ -52,6 +52,28 @@ except ImportError:
         return None
 
 
+# Import shared XMLTV helpers
+try:
+    from xmltv_helpers import build_enhanced_description
+except ImportError:
+    # Fallback if not in path
+    def build_enhanced_description(event, provider_name=None):
+        import re
+        synopsis = event.get("synopsis") or event.get("synopsis_brief") or event.get("title") or "Sports Event"
+        
+        # Clean polluted synopsis
+        if synopsis:
+            synopsis = re.sub(r'^\([^)]+\)\s*-\s*[^-]+\s*-\s*\([^)]+\)\s*-\s*', '', synopsis)
+            synopsis = re.sub(r'^\([^)]+\)\s*-\s*', '', synopsis)
+            synopsis = re.sub(r'^[^-]+-\s*\([^)]+\)\s*-\s*', '', synopsis)
+            synopsis = re.sub(r'\s*-\s*Available on [^-]+$', '', synopsis)
+            synopsis = synopsis.strip()
+        
+        if provider_name:
+            return f"{synopsis} - Available on {provider_name}"
+        return synopsis
+
+
 # -------------------- Deprecated Services --------------------
 # Services that have been removed and should be filtered out from preferences
 DEPRECATED_SERVICES = {
@@ -537,28 +559,14 @@ def build_direct_xmltv(
         )
         ET.SubElement(prog, "title").text = title
 
-        base_desc = event.get("synopsis") or event.get("synopsis_brief") or title
-        sport_label = None
-        genres_json = event.get("genres_json")
-        if genres_json:
-            try:
-                genres = json.loads(genres_json)
-                if isinstance(genres, list):
-                    cands = [g for g in genres if g and g not in (provider, "Sports")]
-                    if cands:
-                        sport_label = max(cands, key=len)
-            except Exception:
-                pass
-        if sport_label and provider:
-            desc_text = f"{base_desc} - {sport_label} - on {provider}"
-        elif provider:
-            desc_text = f"{base_desc} - on {provider}"
-        else:
-            desc_text = base_desc
+        # Build enhanced description (ESPN-style)
+        desc_text = build_enhanced_description(event, provider_name=provider)
         ET.SubElement(prog, "desc").text = desc_text
 
+        # Categories
         ET.SubElement(prog, "category").text = provider
         ET.SubElement(prog, "category").text = "Sports"
+        genres_json = event.get("genres_json")
         if genres_json:
             try:
                 for g in json.loads(genres_json) or []:
