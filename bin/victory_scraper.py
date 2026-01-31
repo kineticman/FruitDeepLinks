@@ -9,7 +9,7 @@ Features:
 - Auto guest registration + login (session persists in DB)
 - Scrapes category 57 (Live & Upcoming events)
 - Maps WHL, LOVB, and other Victory+ content to genres
-- Creates events + playables with direct manifest URLs
+- Creates events + playables with Universal Links (/share/ URLs for iOS)
 - Integrates with logical_service_mapper (service code: victory)
 
 Usage:
@@ -314,8 +314,20 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
         # Image URL
         hero_image_url = event.get("imageUrl", "")
         
-        # Video manifest URL
-        video_url = event.get("videoUrl", "")
+        # Build Victory+ Universal Link for iOS/tvOS
+        # Format: https://victoryplus.com/share/{series_slug}/{event_id}
+        # This works on iOS, may work on tvOS in some contexts
+        share_url = f"https://victoryplus.com/share/{series_slug}/{event['id']}"
+        
+        # Also store manifest URL as fallback in raw_attributes
+        manifest_url = event.get("videoUrl", "")
+        raw_attributes = {
+            "manifest_url": manifest_url,
+            "series_slug": series_slug,
+            "series_id": series_id,
+            "series_name": series_name,
+        }
+        raw_attributes_json = json.dumps(raw_attributes)
         
         # Synopsis from summary
         synopsis = event.get("summary", "")
@@ -328,8 +340,8 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
              channel_name, channel_provider_id, genres_json,
              is_free, is_premium, runtime_secs, 
              start_ms, end_ms, start_utc, end_utc, 
-             created_ms, created_utc, hero_image_url, last_seen_utc)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             created_ms, created_utc, hero_image_url, last_seen_utc, raw_attributes_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             event_id,
             str(event['id']),  # pvid
@@ -351,9 +363,10 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
             now,
             hero_image_url,
             now,  # last_seen_utc
+            raw_attributes_json,
         ))
         
-        # Create playable
+        # Create playable with Universal Link
         playable_id = f"{event['id']}-main"
         
         cur.execute("DELETE FROM playables WHERE event_id = ?", (event_id,))
@@ -368,13 +381,13 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
             "victory",
             "Victory+",
             "victory",
-            video_url,
+            share_url,  # Universal Link for iOS
             None,
-            video_url,
+            share_url,
             title,
             str(event['id']),
             15,  # priority (same as other niche sports services)
-            video_url,
+            share_url,
             now,
         ))
         
