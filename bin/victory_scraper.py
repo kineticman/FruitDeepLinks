@@ -37,6 +37,14 @@ from typing import Dict, List, Optional, Tuple
 
 import requests
 
+# Import genre normalization utilities
+try:
+    from genre_utils import normalize_genres
+except ImportError:
+    # Fallback if genre_utils not available
+    def normalize_genres(genres):
+        return genres
+
 # Victory+ API Configuration
 BASE_URL = "https://api.sports.aparentmedia.com/api/2.0"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -285,7 +293,10 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
         series_slug = event.get("seriesSlug", "")
         
         # Map to channel name and genres
-        channel_name, genres = map_series_to_sport(series_id, series_name, series_slug)
+        channel_name, raw_genres = map_series_to_sport(series_id, series_name, series_slug)
+        
+        # Normalize genres to filter out non-sports categories and fix capitalization
+        genres = normalize_genres(raw_genres)
         genres_json = json.dumps(genres)
         
         # Parse timestamps

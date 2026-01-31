@@ -26,6 +26,14 @@ from urllib.parse import urlencode, urlparse
 
 import requests
 
+# Import genre normalization utilities
+try:
+    from genre_utils import normalize_genres
+except ImportError:
+    # Fallback if genre_utils not available
+    def normalize_genres(genres):
+        return genres
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -406,7 +414,10 @@ def ingest_event(
         
         # Build genres JSON - ONLY include sport type (not league)
         # League goes in channel_name and classification_json
-        genres_json = json.dumps([event['sport']])
+        # Normalize genres to filter out non-sports categories and fix capitalization
+        raw_genres = [event['sport']]
+        normalized_genres = normalize_genres(raw_genres)
+        genres_json = json.dumps(normalized_genres)
         
         # Build classification JSON for league
         classification_json = json.dumps([
