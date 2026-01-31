@@ -594,12 +594,6 @@ def main():
         print(f"Events Ingested: {stats['inserted']}")
         print(f"Failed: {stats['failed']}")
         print(f"Database: {args.db}")
-        
-        print("\nNext steps:")
-        print("1. Add 'gotham' to logical_service_mapper.py (priority 20)")
-        print("2. Add to daily_refresh.py pipeline")
-        print("2. Run fruit_export_hybrid.py to generate M3U/XML")
-        print("3. Verify events appear in Channels DVR")
         print("=" * 60)
         
         return 0
