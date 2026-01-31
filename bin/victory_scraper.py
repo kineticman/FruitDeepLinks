@@ -9,7 +9,7 @@ Features:
 - Auto guest registration + login (session persists in DB)
 - Scrapes category 57 (Live & Upcoming events)
 - Maps WHL, LOVB, and other Victory+ content to genres
-- Creates events + playables with Universal Links (/share/ URLs for iOS)
+- Creates events + playables with direct manifest URLs
 - Integrates with logical_service_mapper (service code: victory)
 
 Usage:
@@ -231,37 +231,36 @@ def map_series_to_sport(series_id: str, series_name: str, series_slug: str) -> T
     
     # Hockey
     if sid in ("66", "67", "68", "150"):  # Stars, Ducks, Blues
-        return "Victory+ NHL", ["Hockey"]
+        return "Victory+ NHL", ["Hockey", "NHL"]
     elif "whl" in sname or "whl" in slug:
-        return "Victory+ WHL", ["Hockey"]
+        return "Victory+ WHL", ["Hockey", "WHL"]
     
     # Baseball
     if sid in ("128", "139"):  # Rangers
-        return "Victory+ MLB", ["Baseball"]
+        return "Victory+ MLB", ["Baseball", "MLB"]
     
     # Football
     if "thsca" in sname or "thsca" in slug or "uil" in sname or "uil" in slug:
-        return "Victory+ High School Football", ["Football"]
+        return "Victory+ High School Football", ["Football", "High School Football"]
     elif "ifl" in sname or "ifl" in slug:
-        return "Victory+ IFL", ["Football"]
+        return "Victory+ IFL", ["Football", "Indoor Football"]
     elif "wnfc" in sname or "wnfc" in slug:
-        return "Victory+ WNFC", ["Football"]
+        return "Victory+ WNFC", ["Football", "Women's Football"]
     
     # Soccer
     if "major arena soccer league" in sname or "majorarenasoccerleague" in slug:
-        return "Victory+ Soccer", ["Soccer"]
+        return "Victory+ Soccer", ["Soccer", "MASL"]
     
     # Volleyball
     if "league one volleyball" in sname or "league_one_volleyball" in slug:
-        return "Victory+ Volleyball", ["Volleyball"]
+        return "Victory+ Volleyball", ["Volleyball", "Women's Volleyball", "LOVB"]
     
     # Basketball
     if "pulse" in sname or "pulse" in slug:
-        return "Victory+ G League", ["Basketball"]
+        return "Victory+ G League", ["Basketball", "G League"]
     
-    # Unknown series - skip non-sports content
-    # This filters out talk shows, documentaries, and other programming
-    return None, None
+    # Default: Sports Talk / Other
+    return "Victory+", ["Sports"]
 
 
 def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run: bool = False):
@@ -287,13 +286,6 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
         
         # Map to channel name and genres
         channel_name, genres = map_series_to_sport(series_id, series_name, series_slug)
-        
-        # Skip unknown series (talk shows, non-sports content)
-        if channel_name is None or genres is None:
-            log(f"  Skip {event_id} ({title}): unmapped series {series_id} ({series_name})")
-            skipped += 1
-            continue
-        
         genres_json = json.dumps(genres)
         
         # Parse timestamps
@@ -311,23 +303,27 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
         end_ms = int(end_epoch * 1000)
         runtime_secs = int(end_epoch - start_epoch)
         
+        # Sanity check: Cap duration at 4 hours for sports events
+        # Victory+ API sometimes returns 12-hour broadcast windows
+        MAX_DURATION_HOURS = 4
+        if runtime_secs > MAX_DURATION_HOURS * 3600:
+            log(f"  Warning: {event_id} has {runtime_secs/3600:.1f}h duration, capping at {MAX_DURATION_HOURS}h")
+            runtime_secs = MAX_DURATION_HOURS * 3600
+            end_epoch = start_epoch + runtime_secs
+            end_utc = datetime.fromtimestamp(end_epoch, tz=timezone.utc).isoformat()
+            end_ms = int(end_epoch * 1000)
+        
         # Image URL
         hero_image_url = event.get("imageUrl", "")
         
-        # Build Victory+ Universal Link for iOS/tvOS
-        # Format: https://victoryplus.com/share/{series_slug}/{event_id}
-        # This works on iOS, may work on tvOS in some contexts
-        share_url = f"https://victoryplus.com/share/{series_slug}/{event['id']}"
-        
-        # Also store manifest URL as fallback in raw_attributes
-        manifest_url = event.get("videoUrl", "")
-        raw_attributes = {
-            "manifest_url": manifest_url,
-            "series_slug": series_slug,
-            "series_id": series_id,
-            "series_name": series_name,
-        }
-        raw_attributes_json = json.dumps(raw_attributes)
+        # Construct Victory+ share URL (better for deeplinks than direct manifest)
+        # Format: https://victoryplus.com/share/{seriesSlug}/{id}
+        series_slug = event.get("seriesSlug", "")
+        if series_slug:
+            video_url = f"https://victoryplus.com/share/{series_slug}/{event['id']}"
+        else:
+            # Fallback to direct manifest URL if no series slug
+            video_url = event.get("videoUrl", "")
         
         # Synopsis from summary
         synopsis = event.get("summary", "")
@@ -340,8 +336,8 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
              channel_name, channel_provider_id, genres_json,
              is_free, is_premium, runtime_secs, 
              start_ms, end_ms, start_utc, end_utc, 
-             created_ms, created_utc, hero_image_url, last_seen_utc, raw_attributes_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             created_ms, created_utc, hero_image_url, last_seen_utc)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             event_id,
             str(event['id']),  # pvid
@@ -363,10 +359,9 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
             now,
             hero_image_url,
             now,  # last_seen_utc
-            raw_attributes_json,
         ))
         
-        # Create playable with Universal Link
+        # Create playable
         playable_id = f"{event['id']}-main"
         
         cur.execute("DELETE FROM playables WHERE event_id = ?", (event_id,))
@@ -381,13 +376,13 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
             "victory",
             "Victory+",
             "victory",
-            share_url,  # Universal Link for iOS
+            video_url,
             None,
-            share_url,
+            video_url,
             title,
             str(event['id']),
             15,  # priority (same as other niche sports services)
-            share_url,
+            video_url,
             now,
         ))
         
