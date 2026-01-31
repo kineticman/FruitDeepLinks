@@ -231,33 +231,33 @@ def map_series_to_sport(series_id: str, series_name: str, series_slug: str) -> T
     
     # Hockey
     if sid in ("66", "67", "68", "150"):  # Stars, Ducks, Blues
-        return "Victory+ NHL", ["Hockey", "NHL"]
+        return "Victory+ NHL", ["Hockey"]
     elif "whl" in sname or "whl" in slug:
-        return "Victory+ WHL", ["Hockey", "WHL"]
+        return "Victory+ WHL", ["Hockey"]
     
     # Baseball
     if sid in ("128", "139"):  # Rangers
-        return "Victory+ MLB", ["Baseball", "MLB"]
+        return "Victory+ MLB", ["Baseball"]
     
     # Football
     if "thsca" in sname or "thsca" in slug or "uil" in sname or "uil" in slug:
-        return "Victory+ High School Football", ["Football", "High School Football"]
+        return "Victory+ High School Football", ["Football"]
     elif "ifl" in sname or "ifl" in slug:
-        return "Victory+ IFL", ["Football", "Indoor Football"]
+        return "Victory+ IFL", ["Football"]
     elif "wnfc" in sname or "wnfc" in slug:
-        return "Victory+ WNFC", ["Football", "Women's Football"]
+        return "Victory+ WNFC", ["Football"]
     
     # Soccer
     if "major arena soccer league" in sname or "majorarenasoccerleague" in slug:
-        return "Victory+ Soccer", ["Soccer", "MASL"]
+        return "Victory+ Soccer", ["Soccer"]
     
     # Volleyball
     if "league one volleyball" in sname or "league_one_volleyball" in slug:
-        return "Victory+ Volleyball", ["Volleyball", "Women's Volleyball", "LOVB"]
+        return "Victory+ Volleyball", ["Volleyball"]
     
     # Basketball
     if "pulse" in sname or "pulse" in slug:
-        return "Victory+ G League", ["Basketball", "G League"]
+        return "Victory+ G League", ["Basketball"]
     
     # Unknown series - skip non-sports content
     # This filters out talk shows, documentaries, and other programming
