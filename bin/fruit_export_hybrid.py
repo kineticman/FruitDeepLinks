@@ -427,104 +427,44 @@ def build_direct_xmltv(
                     json.dumps(payload, separators=(",", ":"), ensure_ascii=False), safe=""
                 )
 
-        # Determine human-readable provider for XML
-        # Start from channel-based guess, but prefer logical_service_mapper when available.
-        provider = get_provider_from_channel(channel_name) or "Sports"
+        # Determine human-readable provider from the SELECTED deeplink
+        provider = None
         
-        # Try to determine provider from best available playable, even if filtered out
-        if FILTERING_AVAILABLE:
+        if FILTERING_AVAILABLE and deeplink_url:
             try:
-                from logical_service_mapper import (
-                    get_logical_service_for_playable,
-                    get_service_display_name,
-                )
+                from logical_service_mapper import get_service_display_name, get_logical_service_for_playable
                 from provider_utils import extract_provider_from_url
                 
-                # If we have a deeplink, use it
-                if deeplink_url:
-                    # First, try to get stored logical_service from playables
-                    stored_logical_service = None
-                    try:
-                        cur = conn.cursor()
-                        cur.execute("""
-                            SELECT logical_service
-                            FROM playables
-                            WHERE event_id = ?
-                            ORDER BY priority DESC
-                            LIMIT 1
-                        """, (event_id,))
-                        playable = cur.fetchone()
-                        if playable and "logical_service" in playable.keys() and playable["logical_service"]:
-                            stored_logical_service = playable["logical_service"]
-                    except Exception:
-                        pass
-                    
-                    if stored_logical_service:
-                        # Use the pre-stored logical_service
-                        provider = get_service_display_name(stored_logical_service)
+                # Extract provider from the actual deeplink URL scheme
+                scheme = extract_provider_from_url(deeplink_url)
+                if scheme and scheme not in ("http", "https"):
+                    # For non-web deeplinks, get the logical service
+                    logical_service = get_logical_service_for_playable(
+                        provider=scheme,
+                        deeplink_play=deeplink_url,
+                        deeplink_open=None,
+                        playable_url=None,
+                        event_id=event_id,
+                        conn=conn,
+                    )
+                    provider = get_service_display_name(logical_service)
+                elif scheme in ("http", "https"):
+                    # For web URLs, check the domain for better labeling
+                    if "victoryplus.com" in deeplink_url:
+                        provider = "Victory+"
+                    elif "gothamfc.com" in deeplink_url:
+                        provider = "Gotham FC"
+                    elif "watch.tbs.com" in deeplink_url or "watchtbs" in deeplink_url:
+                        provider = "TBS"
                     else:
-                        # Fallback: calculate from URL
-                        raw_provider = extract_provider_from_url(deeplink_url) or ""
-                        playable_url = deeplink_url if deeplink_url.startswith("http") else None
-                        
-                        logical_service = get_logical_service_for_playable(
-                            provider=raw_provider,
-                            deeplink_play=deeplink_url,
-                            deeplink_open=None,
-                            playable_url=playable_url,
-                            event_id=event_id,
-                            conn=conn,
-                        )
-                        if logical_service:
-                            provider = get_service_display_name(logical_service)
-                else:
-                    # No deeplink, but check playables for provider metadata
-                    cur = conn.cursor()
-                    cur.execute("""
-                        SELECT provider, deeplink_play, deeplink_open, playable_url, priority, espn_graph_id, logical_service
-                        FROM playables
-                        WHERE event_id = ?
-                        ORDER BY priority DESC
-                        LIMIT 1
-                    """, (event_id,))
-                    playable = cur.fetchone()
-                    
-                    if playable:
-                        # Try to use stored logical_service first
-                        # sqlite3.Row doesn't have .get(), so check keys() first
-                        if "logical_service" in playable.keys() and playable["logical_service"]:
-                            provider = get_service_display_name(playable["logical_service"])
-                        else:
-                            # Fallback: calculate from provider/URLs
-                            raw_provider = (playable["provider"] or "").strip()
-                            deeplink_play = (playable["deeplink_play"] or "").strip()
-                            deeplink_open = (playable["deeplink_open"] or "").strip()
-                            playable_url_str = (playable["playable_url"] or "").strip()
-                            espn_graph_id = (playable.get("espn_graph_id") or "").strip() if "espn_graph_id" in playable.keys() else ""
-                        
-                            # ESPN FIX: Prefer ESPN Graph ID for ESPN playables
-                            if espn_graph_id and raw_provider.lower() in ('sportscenter', 'espn', 'espn+'):
-                                try:
-                                    parts = espn_graph_id.split(':')
-                                    if len(parts) >= 2:
-                                        play_id = parts[1]
-                                        deeplink_play = f"sportscenter://x-callback-url/showWatchStream?playID={play_id}"
-                                except Exception:
-                                    pass
-                            
-                            logical_service = get_logical_service_for_playable(
-                                provider=raw_provider,
-                                deeplink_play=deeplink_play or None,
-                                deeplink_open=deeplink_open or None,
-                                playable_url=playable_url_str or None,
-                                event_id=event_id,
-                                conn=conn,
-                            )
-                            if logical_service:
-                                provider = get_service_display_name(logical_service)
+                        provider = "Web"
             except Exception as e:
-                # Fall back to channel-based provider if mapping fails
-                provider = provider or "Sports"
+                # Fall back to database channel_name if detection fails
+                pass
+        
+        # Final fallback: use database channel_name provider
+        if not provider:
+            provider = get_provider_from_channel(channel_name) or "Sports"
 
         # Channel element
         chan = ET.SubElement(tv, "channel", id=chan_id)
@@ -808,42 +748,43 @@ def build_direct_m3u(
                 skipped_no_deeplink += 1
                 continue
 
-            actual_provider = provider
-            try:
-                if FILTERING_AVAILABLE:
-                    from logical_service_mapper import get_service_display_name
+            # Determine actual provider from the SELECTED deeplink, not the database channel_name
+            actual_provider = None
+            
+            if FILTERING_AVAILABLE:
+                try:
+                    from logical_service_mapper import get_service_display_name, get_logical_service_for_playable
+                    from provider_utils import extract_provider_from_url
                     
-                    # Try to get logical_service from the stored playable data
-                    stored_logical_service = None
-                    if p_rows:
-                        for prow in p_rows:
-                            if "logical_service" in prow.keys() and prow["logical_service"]:
-                                stored_logical_service = prow["logical_service"]
-                                break
-                    
-                    if stored_logical_service:
-                        # Use the pre-stored logical_service (already calculated during import)
-                        actual_provider = get_service_display_name(stored_logical_service)
-                    else:
-                        # Fallback: calculate from URL (old behavior)
-                        from logical_service_mapper import get_logical_service_for_playable
-                        from provider_utils import extract_provider_from_url
-                        
-                        scheme = extract_provider_from_url(deeplink_url)
-                        if scheme:
-                            try:
-                                logical_service = get_logical_service_for_playable(
-                                    provider=scheme if scheme not in ("http", "https") else scheme,
-                                    deeplink_play=deeplink_url,
-                                    deeplink_open=None,
-                                    playable_url=None,
-                                    event_id=event_id,
-                                    conn=conn,
-                                )
-                                actual_provider = get_service_display_name(logical_service)
-                            except Exception:
-                                actual_provider = provider
-            except Exception:
+                    # Extract provider from the actual deeplink URL scheme
+                    scheme = extract_provider_from_url(deeplink_url)
+                    if scheme and scheme not in ("http", "https"):
+                        # For non-web deeplinks, get the logical service
+                        logical_service = get_logical_service_for_playable(
+                            provider=scheme,
+                            deeplink_play=deeplink_url,
+                            deeplink_open=None,
+                            playable_url=None,
+                            event_id=event_id,
+                            conn=conn,
+                        )
+                        actual_provider = get_service_display_name(logical_service)
+                    elif scheme in ("http", "https"):
+                        # For web URLs, check the domain for better labeling
+                        if "victoryplus.com" in deeplink_url:
+                            actual_provider = "Victory+"
+                        elif "gothamfc.com" in deeplink_url:
+                            actual_provider = "Gotham FC"
+                        elif "watch.tbs.com" in deeplink_url or "watchtbs" in deeplink_url:
+                            actual_provider = "TBS"
+                        else:
+                            actual_provider = "Web"
+                except Exception as e:
+                    # If detection fails, we'll use fallback below
+                    pass
+            
+            # Fallback: use database channel_name provider only if detection completely failed
+            if not actual_provider:
                 actual_provider = provider
 
             if reason:
