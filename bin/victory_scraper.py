@@ -228,10 +228,10 @@ def fetch_victory_schedule(session_key: str) -> List[Dict]:
     return events
 
 
-def map_series_to_sport(series_id: str, series_name: str, series_slug: str) -> Tuple[str, List[str]]:
+def map_series_to_sport(series_id: str, series_name: str, series_slug: str) -> Tuple[str, List[str], List[Dict]]:
     """
-    Map Victory+ series to sport and genres.
-    Returns: (channel_name, [genres])
+    Map Victory+ series to sport, genres, and classifications.
+    Returns: (channel_name, [genres], [classifications])
     """
     sid = series_id
     sname = series_name.lower()
@@ -239,36 +239,36 @@ def map_series_to_sport(series_id: str, series_name: str, series_slug: str) -> T
     
     # Hockey
     if sid in ("66", "67", "68", "150"):  # Stars, Ducks, Blues
-        return "Victory+ NHL", ["Hockey", "NHL"]
+        return "Victory+ NHL", ["Hockey", "NHL"], [{"type": "sport", "value": "Hockey"}, {"type": "league", "value": "NHL"}]
     elif "whl" in sname or "whl" in slug:
-        return "Victory+ WHL", ["Hockey", "WHL"]
+        return "Victory+ WHL", ["Hockey", "WHL"], [{"type": "sport", "value": "Hockey"}, {"type": "league", "value": "WHL"}]
     
     # Baseball
     if sid in ("128", "139"):  # Rangers
-        return "Victory+ MLB", ["Baseball", "MLB"]
+        return "Victory+ MLB", ["Baseball", "MLB"], [{"type": "sport", "value": "Baseball"}, {"type": "league", "value": "MLB"}]
     
     # Football
     if "thsca" in sname or "thsca" in slug or "uil" in sname or "uil" in slug:
-        return "Victory+ High School Football", ["Football", "High School Football"]
+        return "Victory+ High School Football", ["Football", "High School Football"], [{"type": "sport", "value": "Football"}, {"type": "league", "value": "High School Football"}]
     elif "ifl" in sname or "ifl" in slug:
-        return "Victory+ IFL", ["Football", "Indoor Football"]
+        return "Victory+ IFL", ["Football", "Indoor Football"], [{"type": "sport", "value": "Football"}, {"type": "league", "value": "IFL"}]
     elif "wnfc" in sname or "wnfc" in slug:
-        return "Victory+ WNFC", ["Football", "Women's Football"]
+        return "Victory+ WNFC", ["Football", "Women's Football"], [{"type": "sport", "value": "Football"}, {"type": "league", "value": "WNFC"}]
     
     # Soccer
     if "major arena soccer league" in sname or "majorarenasoccerleague" in slug:
-        return "Victory+ Soccer", ["Soccer", "MASL"]
+        return "Victory+ Soccer", ["Soccer", "MASL"], [{"type": "sport", "value": "Soccer"}, {"type": "league", "value": "MASL"}]
     
     # Volleyball
     if "league one volleyball" in sname or "league_one_volleyball" in slug:
-        return "Victory+ Volleyball", ["Volleyball", "Women's Volleyball", "LOVB"]
+        return "Victory+ Volleyball", ["Volleyball", "Women's Volleyball", "LOVB"], [{"type": "sport", "value": "Volleyball"}, {"type": "league", "value": "LOVB"}]
     
     # Basketball
     if "pulse" in sname or "pulse" in slug:
-        return "Victory+ G League", ["Basketball", "G League"]
+        return "Victory+ G League", ["Basketball", "G League"], [{"type": "sport", "value": "Basketball"}, {"type": "league", "value": "G League"}]
     
     # Default: Sports Talk / Other
-    return "Victory+", ["Sports"]
+    return "Victory+", ["Sports"], [{"type": "sport", "value": "Sports"}]
 
 
 def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run: bool = False):
@@ -292,12 +292,26 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
         series_name = event.get("seriesName", "")
         series_slug = event.get("seriesSlug", "")
         
-        # Map to channel name and genres
-        channel_name, raw_genres = map_series_to_sport(series_id, series_name, series_slug)
+        # Map to channel name, genres, and classifications
+        channel_name, raw_genres, classifications = map_series_to_sport(series_id, series_name, series_slug)
         
         # Normalize genres to filter out non-sports categories and fix capitalization
         genres = normalize_genres(raw_genres)
         genres_json = json.dumps(genres)
+        
+        # Build classification_json
+        classification_json = json.dumps(classifications)
+        
+        # Add league prefix to title if it has a league and doesn't already have it
+        league = None
+        for classification in classifications:
+            if classification.get("type") == "league":
+                league = classification.get("value")
+                break
+        
+        # Add league prefix if we have one and title doesn't start with it
+        if league and not title.startswith(f"{league}:"):
+            title = f"{league}: {title}"
         
         # Parse timestamps
         start_epoch = event.get("broadcast_start")
@@ -344,11 +358,11 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
         cur.execute("""
             INSERT OR REPLACE INTO events 
             (id, pvid, title, title_brief, synopsis, synopsis_brief, 
-             channel_name, channel_provider_id, genres_json,
+             channel_name, channel_provider_id, genres_json, classification_json,
              is_free, is_premium, runtime_secs, 
              start_ms, end_ms, start_utc, end_utc, 
              created_ms, created_utc, hero_image_url, last_seen_utc)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             event_id,
             str(event['id']),  # pvid
@@ -359,6 +373,7 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
             channel_name,
             "victory",  # channel_provider_id
             genres_json,
+            classification_json,
             0,  # is_free (Victory+ requires subscription)
             1,  # is_premium
             runtime_secs,
