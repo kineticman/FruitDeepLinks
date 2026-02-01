@@ -54,9 +54,16 @@ except ImportError:
 
 # Import shared XMLTV helpers
 try:
-    from xmltv_helpers import build_enhanced_description
+    from xmltv_helpers import build_enhanced_description, build_enhanced_title
 except ImportError:
     # Fallback if not in path
+    def build_enhanced_title(event):
+        import re
+        title = event.get("title") or "Sports Event"
+        feed_pattern = r'\s*-\s*(Home Feed|Away Feed|National Feed|Local Feed|Main Feed|Alternate Feed)$'
+        title = re.sub(feed_pattern, '', title, flags=re.IGNORECASE)
+        return title.strip().rstrip('-').strip()
+    
     def build_enhanced_description(event, provider_name=None):
         import re
         synopsis = event.get("synopsis") or event.get("synopsis_brief") or event.get("title") or "Sports Event"
@@ -371,7 +378,7 @@ def build_direct_xmltv(
 
     for idx, event in enumerate(events, start=1):
         chan_id = stable_channel_id(event, epg_prefix)
-        title = event.get("title") or f"Sports Event {idx}"
+        title = build_enhanced_title(event)
         channel_name = event.get("channel_name") or "Sports"
         event_id = event.get("id", "")
 

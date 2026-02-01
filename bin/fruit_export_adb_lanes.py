@@ -32,6 +32,7 @@ try:
         get_provider_display_name,
         add_categories_and_tags,
         build_enhanced_description,
+        build_enhanced_title,
     )
 except ImportError:
     # Fallback if not in path
@@ -40,6 +41,13 @@ except ImportError:
     
     def add_categories_and_tags(prog_el, event, provider_name=None, is_placeholder=False):
         pass
+    
+    def build_enhanced_title(event):
+        import re
+        title = event.get("title") or "Sports Event"
+        feed_pattern = r'\s*-\s*(Home Feed|Away Feed|National Feed|Local Feed|Main Feed|Alternate Feed)$'
+        title = re.sub(feed_pattern, '', title, flags=re.IGNORECASE)
+        return title.strip().rstrip('-').strip()
     
     def build_enhanced_description(event, provider_name=None):
         import re
@@ -357,7 +365,8 @@ def export_adb_lanes(db_path: Path, out_dir: Path, server_url: str) -> Path:
                 start_attr = iso_to_xmltv(start_dt.isoformat())
                 stop_attr = iso_to_xmltv(stop_dt.isoformat())
 
-                title = row["title"] or row["title_brief"] or "Event"
+                # Title - use enhanced builder for ESPN-style formatting
+                title = build_enhanced_title(dict(row))
 
                 prog_el = ET.SubElement(
                     tv,
