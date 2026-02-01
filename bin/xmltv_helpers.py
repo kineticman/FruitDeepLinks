@@ -292,6 +292,77 @@ def get_classification_categories(event: Dict) -> Dict[str, Optional[str]]:
     return result
 
 
+# -------------------- Title Enhancement --------------------
+def build_enhanced_title(event: Dict) -> str:
+    """
+    Build an ESPN-style enhanced title for XMLTV.
+    
+    ESPN format: "Men's College Basketball: North Carolina Tar Heels at Georgia Tech Yellow Jackets"
+    Our format: "WHL: Red Deer at Vancouver" or "Hockey: Red Deer at Vancouver"
+    
+    Strategy:
+    1. Extract sport/league from classification_json
+    2. Remove feed type suffix (Home Feed, Away Feed, etc.) from title
+    3. Format as "League: Event" (or "Sport: Event" if no league)
+    4. Keep original title if no sport/league available
+    
+    Args:
+        event: Event data dictionary
+    
+    Returns:
+        Enhanced title string
+    """
+    title = event.get("title") or "Sports Event"
+    
+    # Remove feed type suffix
+    import re
+    feed_pattern = r'\s*-\s*(Home Feed|Away Feed|National Feed|Local Feed|Main Feed|Alternate Feed)$'
+    title = re.sub(feed_pattern, '', title, flags=re.IGNORECASE)
+    title = title.strip().rstrip('-').strip()
+    
+    # Get classification
+    classification = get_classification_categories(event)
+    sport = classification.get("sport")
+    league = classification.get("league")
+    
+    # Fallback: Try to extract league from channel_name if classification_json is missing
+    # Example: "Victory+ WHL" → extract "WHL"
+    channel_league = None
+    if not league:
+        channel_name = event.get("channel_name") or ""
+        # Common league patterns in channel names
+        if "WHL" in channel_name:
+            channel_league = "WHL"
+        elif "NHL" in channel_name:
+            channel_league = "NHL"
+        elif "NBA" in channel_name:
+            channel_league = "NBA"
+        elif "MLB" in channel_name:
+            channel_league = "MLB"
+        elif "MLS" in channel_name:
+            channel_league = "MLS"
+        elif "NCAA" in channel_name:
+            channel_league = "NCAA"
+    
+    # Build enhanced title
+    # Priority: League > channel_league (fallback) > Sport
+    prefix = league or channel_league or sport
+    
+    if prefix and prefix != "Sports":
+        # Check if title already has sport/league prefix (like ESPN does)
+        # ESPN format: "Men's College Basketball: ..."
+        if ":" in title and not title.startswith("NHL:") and not title.startswith("WHL:"):
+            # Already has a prefix, keep it
+            return title
+        else:
+            # Add our prefix: "WHL: Red Deer at Vancouver"
+            # Remove any existing sport prefix from title first
+            title_clean = re.sub(r'^(NHL|WHL|NBA|NCAA|MLB|MLS|Premier League):\s*', '', title, flags=re.IGNORECASE)
+            return f"{prefix}: {title_clean}"
+    
+    return title
+
+
 # -------------------- Description Enhancement --------------------
 def build_enhanced_description(event: Dict, provider_name: Optional[str] = None) -> str:
     """
@@ -372,6 +443,28 @@ def build_enhanced_description(event: Dict, provider_name: Optional[str] = None)
     classification = get_classification_categories(event)
     sport = classification.get("sport")
     league = classification.get("league")
+    
+    # Fallback: Extract league from channel_name if classification_json is missing
+    # Example: "Victory+ WHL" → extract "WHL"
+    if not league and not sport:
+        channel_name = event.get("channel_name") or ""
+        if "WHL" in channel_name:
+            league = "WHL"
+            sport = "Hockey"
+        elif "NHL" in channel_name:
+            league = "NHL"
+            sport = "Hockey"
+        elif "NBA" in channel_name:
+            league = "NBA"
+            sport = "Basketball"
+        elif "MLB" in channel_name:
+            league = "MLB"
+            sport = "Baseball"
+        elif "MLS" in channel_name:
+            league = "MLS"
+            sport = "Soccer"
+        elif "NCAA" in channel_name:
+            league = "NCAA"
     
     # Get sport detail from genres_json (like "Men's College Basketball")
     sport_detail = None

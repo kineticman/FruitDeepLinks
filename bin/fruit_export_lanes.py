@@ -20,6 +20,7 @@ try:
         get_provider_from_channel,
         add_categories_and_tags,
         build_enhanced_description,
+        build_enhanced_title,
     )
 except ImportError:
     # Fallback if not in path - define locally
@@ -31,6 +32,14 @@ except ImportError:
     
     def add_categories_and_tags(prog_el, event, provider_name=None, is_placeholder=False):
         pass
+    
+    def build_enhanced_title(event):
+        import re
+        title = event.get("title") or "Sports Event"
+        # Remove feed type suffix
+        feed_pattern = r'\s*-\s*(Home Feed|Away Feed|National Feed|Local Feed|Main Feed|Alternate Feed)$'
+        title = re.sub(feed_pattern, '', title, flags=re.IGNORECASE)
+        return title.strip().rstrip('-').strip()
     
     def build_enhanced_description(event, provider_name=None):
         import re
@@ -174,8 +183,8 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
                 stop=xmltv_time(end_utc),
             )
             
-            # Title
-            title = event.get("title") or "Sports Event"
+            # Title - use enhanced builder for ESPN-style formatting
+            title = build_enhanced_title(event)
             ET.SubElement(prog, "title").text = title
             
             # Description - use enhanced builder for ESPN-style formatting
