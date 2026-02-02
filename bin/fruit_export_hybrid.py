@@ -456,6 +456,8 @@ def build_direct_xmltv(
                         provider = "Gotham FC"
                     elif "watch.tbs.com" in deeplink_url or "watchtbs" in deeplink_url:
                         provider = "TBS"
+                    elif "watch.fanatiz.com" in deeplink_url or "fanatiz.com" in deeplink_url:
+                        provider = "Fanatiz Soccer"
                     else:
                         provider = "Web"
             except Exception as e:

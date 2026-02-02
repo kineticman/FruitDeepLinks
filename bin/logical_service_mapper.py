@@ -25,6 +25,8 @@ LOGICAL_SERVICE_MAP = {
     'tv.apple.com': 'apple_tv',  # Special - needs league lookup
     'kayosports.com.au': 'kayo_web',
     'www.kayosports.com.au': 'kayo_web',
+    'watch.fanatiz.com': 'fanatiz_web',
+    'www.fanatiz.com': 'fanatiz_web',
     'gothamsports.com': 'gotham',
     'www.gothamsports.com': 'gotham',
 }
@@ -70,6 +72,7 @@ SERVICE_DISPLAY_NAMES = {
     'max': 'Max',
     'f1tv': 'F1 TV',
     'kayo_web': 'Kayo Sports',
+    'fanatiz_web': 'Fanatiz Soccer',
     'apple_mls': 'Apple MLS',
     'apple_mlb': 'Apple MLB',
     'apple_nba': 'Apple NBA',
@@ -442,6 +445,7 @@ def get_logical_service_priority(service_code: str) -> int:
         'open.dazn.com': 17,
         'f1tv': 18,
         'kayo_web': 19,  # Kayo Sports (Australia)
+        'fanatiz_web': 20,  # Fanatiz Soccer (Latin America / international)
         'victory': 19,   # Victory+ (WHL, LOVB, other niche sports)
         'gotham': 20,    # Gotham Sports (MSG/YES Network - NYC regional)
         'marquee': 20,   # Marquee Sports Network (Chicago regional)

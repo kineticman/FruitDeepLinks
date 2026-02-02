@@ -445,6 +445,23 @@ def main(argv=None):
         ]):
             return 1
 
+    # Step 2a: Scrape Fanatiz Soccer
+    # Note: No --days filter - Fanatiz returns ~1,300 future events (full season, ~10 months)
+    fanatiz_json = OUT_DIR / "fanatiz_raw.json"
+
+    if skip_scrape:
+        print("\n" + "=" * 60)
+        print(f"[2a/{total_steps}] Scraping Fanatiz Soccer (all future events). SKIPPED")
+        print("=" * 60)
+        if not fanatiz_json.exists():
+            print(f"WARNING: --skip-scrape set but {fanatiz_json} not found; Fanatiz ingest will be skipped.")
+    else:
+        if not run_step("2a", total_steps, "Scraping Fanatiz Soccer (all future events)", [
+            "python3", "fanatiz_scrape.py",
+            "--out", str(fanatiz_json),
+        ]):
+            return 1
+
     # Fresh-install safety: ensure DB file exists before migrations
     if not DB_PATH.exists():
         print("\n" + "=" * 60)
@@ -611,6 +628,18 @@ def main(argv=None):
             return 1
     else:
         print(f"\n[7/{total_steps}] Kayo data not found at {kayo_json}, skipping ingest")
+
+    # Step 7-fanatiz: Import Fanatiz events
+    fanatiz_json = OUT_DIR / "fanatiz_raw.json"
+    if fanatiz_json.exists():
+        if not run_step("7-fanatiz", total_steps, "Importing Fanatiz events to database", [
+            "python3", "ingest_fanatiz.py",
+            "--db", str(DB_PATH),
+            "--fanatiz-json", str(fanatiz_json),
+        ]):
+            return 1
+    else:
+        print(f"\n[7-fanatiz/{total_steps}] Fanatiz data not found at {fanatiz_json}, skipping ingest")
 
     # Step 7a: Scrape Victory+ events
     # Victory+ uses guest authentication (no user credentials required)

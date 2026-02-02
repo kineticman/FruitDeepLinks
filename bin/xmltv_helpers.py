@@ -47,6 +47,8 @@ def get_provider_display_name(provider_id: str) -> Optional[str]:
         'apple_nhl': 'Apple NHL',
         'apple_other': 'Apple TV+',
         'victory': 'Victory+',
+        'fanatiz': 'Fanatiz Soccer',
+        'fanatiz_web': 'Fanatiz Soccer',
         'https': 'Web - Other',
         'http': 'Web - Other',
         'kayo_web': 'Kayo (Web)',
@@ -81,6 +83,8 @@ def get_provider_from_channel(channel_name: str) -> str:
         return "Apple TV+"
     elif "kayo" in channel_lower:
         return "Kayo"
+    elif "fanatiz" in channel_lower:
+        return "Fanatiz Soccer"
     elif "victory" in channel_lower:
         return "Victory+"
     else:
