@@ -130,6 +130,13 @@ def normalize_sport_name(raw_sport: str, category: str, genre: str) -> str:
     # Combine all text for pattern matching
     all_text = f"{sport_lower} {category_lower} {genre_lower}".lower()
     
+    # Special handling for beIN's "Sports General" catch-all category
+    # Check the title for sport indicators when category is unhelpful
+    title_text = ""
+    if 'sports general' in category_lower:
+        # We'll check title later for sport-specific terms
+        title_text = sport_lower  # sport_lower may actually be derived from title in some cases
+    
     # Football/Soccer (most common beIN sport)
     if any(x in all_text for x in ['football', 'soccer', 'premier league', 'la liga', 'laliga',
                                      'ligue 1', 'serie a', 'bundesliga', 'liga', 
@@ -343,12 +350,13 @@ def should_import_event(row: Dict[str, Any]) -> bool:
     if any(year in title for year in ['2017', '2018', '2019', '2020', '2021', '2022', '2023']):
         return False
     
-    # SKIP: Non-sports programming
+    # SKIP: Non-sports programming and filler content
     non_sports_categories = [
         'special, entertainment',
         'variety',
         'news bulletin',
         'interview',
+        'sports general',        # beIN's catch-all for news/filler (rarely actual sports)
     ]
     if any(cat in category for cat in non_sports_categories):
         return False
