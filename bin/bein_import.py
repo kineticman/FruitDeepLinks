@@ -301,6 +301,7 @@ def should_import_event(row: Dict[str, Any]) -> bool:
     - Skip replays, highlights, documentaries, talk shows
     - Skip promotional filler content
     - Skip non-sports programming
+    - Skip classic/archived matches from previous years
     
     Criteria:
     - Must have valid time data (startDate/endDate)
@@ -320,6 +321,7 @@ def should_import_event(row: Dict[str, Any]) -> bool:
     title = (row.get("title") or "").lower()
     category = (row.get("category") or "").lower()
     genre = (row.get("genre") or "").lower()
+    synopsis = (row.get("synopsis") or "").lower()
     
     # SKIP: Obvious filler/promotional content
     skip_keywords = [
@@ -329,6 +331,16 @@ def should_import_event(row: Dict[str, Any]) -> bool:
         'le plus grand des spectacles', # Generic promo
     ]
     if any(keyword in title for keyword in skip_keywords):
+        return False
+    
+    # SKIP: Classic matches and replays from previous years
+    # beIN uses "Classic" in category for archived matches
+    # e.g., "LaLiga Classic", "Serie A Classic"
+    if 'classic' in category:
+        return False
+    
+    # Additional check: years in title indicate old matches
+    if any(year in title for year in ['2017', '2018', '2019', '2020', '2021', '2022', '2023']):
         return False
     
     # SKIP: Non-sports programming
@@ -346,7 +358,6 @@ def should_import_event(row: Dict[str, Any]) -> bool:
         'highlight',
         'magazine',
         '90 in 30',              # Highlight show
-        'classic',               # Old replays
         'documentary',
         'the big interview',
         'efl highlights',
