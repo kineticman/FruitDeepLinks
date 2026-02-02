@@ -506,8 +506,9 @@ def build_enhanced_description(event: Dict, provider_name: Optional[str] = None)
     # Build structured description parts
     parts = []
     
-    # Part 1: Sport (always first if available)
-    if sport and sport != "Sports":
+    # Part 1: Sport (skip if synopsis already contains team matchup)
+    # If synopsis has "Team A vs Team B", don't add redundant "Soccer -" prefix
+    if sport and sport != "Sports" and " vs " not in base_desc:
         parts.append(sport)
     
     # Part 2: Sport detail or league (in parentheses)

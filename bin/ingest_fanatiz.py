@@ -111,17 +111,6 @@ class FanatizIngestor:
         
         genres_json = json.dumps(genres)
         
-        # Build classification_json (for title prefixing in XMLTV)
-        # Format: [{"type": "sport", "value": "Soccer"}, {"type": "league", "value": "Primera A"}]
-        classification = [
-            {"type": "sport", "value": sport}
-        ]
-        # Only add league if it's different and meaningful (not just "Soccer")
-        if league and league != sport and league != "Soccer":
-            classification.append({"type": "league", "value": league})
-        
-        classification_json = json.dumps(classification)
-        
         # Parse timestamps
         start_utc = event['start_utc']
         end_utc = event['end_utc']
@@ -149,6 +138,12 @@ class FanatizIngestor:
         # Build synopsis from metadata
         synopsis_parts = []
         
+        # Add full team names if available (most important info)
+        home_team = metadata.get('home_team')
+        away_team = metadata.get('away_team')
+        if home_team and away_team:
+            synopsis_parts.append(f"{home_team} vs {away_team}")
+        
         # Add event status if interesting
         event_status = metadata.get('event_status')
         if event_status and event_status not in ['Pending', 'Scheduled']:
@@ -157,10 +152,6 @@ class FanatizIngestor:
         # Add week/round if available
         if metadata.get('week'):
             synopsis_parts.append(f"Week {metadata['week']}")
-        
-        # Add Opta ID for reference
-        if metadata.get('opta_id'):
-            synopsis_parts.append(f"Opta: {metadata['opta_id']}")
         
         synopsis = ' • '.join(synopsis_parts) if synopsis_parts else 'Soccer Match'
         
@@ -183,7 +174,6 @@ class FanatizIngestor:
                     synopsis = ?,
                     synopsis_brief = ?,
                     channel_name = ?,
-                    classification_json = ?,
                     genres_json = ?,
                     start_utc = ?,
                     end_utc = ?,
@@ -200,7 +190,6 @@ class FanatizIngestor:
                 synopsis,
                 synopsis[:100] if len(synopsis) > 100 else synopsis,
                 channel_name,
-                classification_json,
                 genres_json,
                 start_utc,
                 end_utc,
@@ -220,11 +209,11 @@ class FanatizIngestor:
                 INSERT INTO events (
                     id, pvid, title, title_brief, synopsis, synopsis_brief,
                     channel_name, channel_provider_id,
-                    classification_json, genres_json, is_premium,
+                    genres_json, is_premium,
                     runtime_secs, start_ms, end_ms, start_utc, end_utc,
                     created_ms, created_utc, hero_image_url, last_seen_utc,
                     raw_attributes_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 event_id,
                 external_id,  # CRITICAL: pvid required for M3U export
@@ -234,7 +223,6 @@ class FanatizIngestor:
                 synopsis[:100] if len(synopsis) > 100 else synopsis,
                 channel_name,
                 self.PROVIDER,  # channel_provider_id
-                classification_json,
                 genres_json,
                 1,  # is_premium (Fanatiz requires subscription)
                 runtime_secs,
