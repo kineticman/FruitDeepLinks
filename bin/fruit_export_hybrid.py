@@ -59,7 +59,15 @@ except ImportError:
     # Fallback if not in path
     def build_enhanced_title(event):
         import re
-        title = event.get("title") or "Sports Event"
+        # Get title - never use synopsis/description
+        title = event.get("title")
+        
+        # Fallback if title is missing or empty
+        if not title or not title.strip():
+            # Use channel_name as last resort, never synopsis
+            title = event.get("channel_name") or "Sports Event"
+        
+        # Clean feed suffixes
         feed_pattern = r'\s*-\s*(Home Feed|Away Feed|National Feed|Local Feed|Main Feed|Alternate Feed)$'
         title = re.sub(feed_pattern, '', title, flags=re.IGNORECASE)
         return title.strip().rstrip('-').strip()
@@ -460,6 +468,8 @@ def build_direct_xmltv(
                         provider = "TBS"
                     elif "watch.fanatiz.com" in deeplink_url or "fanatiz.com" in deeplink_url:
                         provider = "Fanatiz Soccer"
+                    elif "beinsports.com" in deeplink_url or "bein" in deeplink_url.lower():
+                        provider = "beIN Sports"
                     else:
                         provider = "Web"
             except Exception as e:

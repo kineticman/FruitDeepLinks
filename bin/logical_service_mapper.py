@@ -29,6 +29,8 @@ LOGICAL_SERVICE_MAP = {
     'www.fanatiz.com': 'fanatiz_web',
     'gothamsports.com': 'gotham',
     'www.gothamsports.com': 'gotham',
+    'beinsports.com': 'bein',
+    'www.beinsports.com': 'bein',
 }
 
 # Display names for logical services
@@ -66,6 +68,7 @@ SERVICE_DISPLAY_NAMES = {
     # Niche sports services
     'victory': 'Victory+',
     'gotham': 'Gotham Sports',
+    'bein': 'beIN Sports',
     
     # Web-based (new logical services)
     'peacock_web': 'Peacock (Web)',
@@ -287,6 +290,10 @@ def get_logical_service_for_playable(
     if provider == 'gotham':
         return 'gotham'
     
+    # beIN Sports provider: map to bein
+    if provider == 'bein':
+        return 'bein'
+    
     # Non-web providers: use provider as-is
     if provider not in ('http', 'https', None, ''):
         return provider
@@ -445,6 +452,7 @@ def get_logical_service_priority(service_code: str) -> int:
         'open.dazn.com': 17,
         'f1tv': 18,
         'kayo_web': 19,  # Kayo Sports (Australia)
+        'bein': 19,  # beIN Sports (international/regional)
         'fanatiz_web': 20,  # Fanatiz Soccer (Latin America / international)
         'victory': 19,   # Victory+ (WHL, LOVB, other niche sports)
         'gotham': 20,    # Gotham Sports (MSG/YES Network - NYC regional)

@@ -49,6 +49,8 @@ def get_provider_display_name(provider_id: str) -> Optional[str]:
         'victory': 'Victory+',
         'fanatiz': 'Fanatiz Soccer',
         'fanatiz_web': 'Fanatiz Soccer',
+        'gotham': 'Gotham Sports',
+        'bein': 'beIN Sports',
         'https': 'Web - Other',
         'http': 'Web - Other',
         'kayo_web': 'Kayo (Web)',
@@ -87,6 +89,10 @@ def get_provider_from_channel(channel_name: str) -> str:
         return "Fanatiz Soccer"
     elif "victory" in channel_lower:
         return "Victory+"
+    elif "gotham" in channel_lower:
+        return "Gotham Sports"
+    elif "bein" in channel_lower:
+        return "beIN Sports"
     else:
         return channel_name
 
@@ -299,16 +305,13 @@ def get_classification_categories(event: Dict) -> Dict[str, Optional[str]]:
 # -------------------- Title Enhancement --------------------
 def build_enhanced_title(event: Dict) -> str:
     """
-    Build an ESPN-style enhanced title for XMLTV.
-    
-    ESPN format: "Men's College Basketball: North Carolina Tar Heels at Georgia Tech Yellow Jackets"
-    Our format: "WHL: Red Deer at Vancouver" or "Hockey: Red Deer at Vancouver"
+    Build an enhanced title for XMLTV.
     
     Strategy:
-    1. Extract sport/league from classification_json
-    2. Remove feed type suffix (Home Feed, Away Feed, etc.) from title
-    3. Format as "League: Event" (or "Sport: Event" if no league)
-    4. Keep original title if no sport/league available
+    1. Use event.get("title") - this is the actual event title
+    2. EXCEPTION: For certain services with generic titles, prefer synopsis if it has matchup info
+    3. Remove feed type suffix (Home Feed, Away Feed, etc.)
+    4. Fall back to "Sports Event" only if title is completely missing
     
     Args:
         event: Event data dictionary
@@ -316,13 +319,22 @@ def build_enhanced_title(event: Dict) -> str:
     Returns:
         Enhanced title string
     """
-    title = event.get("title") or "Sports Event"
-    
-    # For Gotham and similar: if synopsis has team matchup (contains " at " or " vs "), prefer it
+    title = event.get("title")
     synopsis = event.get("synopsis") or ""
-    if synopsis and (" at " in synopsis or " vs " in synopsis):
-        # Synopsis has more specific info (team matchups), use it
-        title = synopsis
+    event_id = event.get("id", "")
+    
+    # EXCEPTION: Gotham Sports often has generic titles like "NBA Basketball"
+    # but specific matchups in synopsis like "Brooklyn Nets at Detroit Pistons"
+    # For these services, prefer synopsis if it contains matchup info
+    if event_id.startswith("gotham-"):
+        if synopsis and (" at " in synopsis or " vs " in synopsis):
+            # Check if synopsis is more specific than title
+            if title and len(synopsis) > len(title) and synopsis not in title:
+                title = synopsis
+    
+    # Fallback only if title is actually missing or empty
+    if not title or not title.strip():
+        title = "Sports Event"
     
     # Remove feed type suffix
     import re

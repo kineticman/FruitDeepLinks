@@ -91,8 +91,13 @@ def get_default_service_priorities() -> Dict[str, int]:
         "mlb": 66,                 # MLB.TV
         "f1tv": 65,                # F1 TV Pro
         "dazn": 64,                # DAZN
-        "fubo": 63,                # FuboTV
-        "sling": 62,               # Sling TV
+        "kayo_web": 63,            # Kayo Sports (Australia)
+        "bein": 63,                # beIN Sports (international/regional)
+        "fanatiz_web": 62,         # Fanatiz Soccer (Latin America)
+        "victory": 62,             # Victory+ (WHL, LOVB)
+        "gotham": 62,              # Gotham Sports (MSG/YES Network)
+        "fubo": 61,                # FuboTV
+        "sling": 60,               # Sling TV
         
         # Tier 4: Free/Broadcast (30-49)
         "abc": 48,                 # ABC (free broadcast)

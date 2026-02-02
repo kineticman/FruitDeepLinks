@@ -330,7 +330,7 @@ def main(argv=None):
     parser.add_argument(
         "--skip-scrape",
         action="store_true",
-        help="Skip all scraping steps (Apple TV, Kayo, Victory+, Gotham, ESPN). Use existing data files.",
+        help="Skip all scraping steps (Apple TV, Kayo, Fanatiz, beIN, Victory+, Gotham, ESPN). Use existing data files.",
     )
     parser.add_argument(
         "--force-apple-import",
@@ -365,8 +365,8 @@ def main(argv=None):
     print(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
-    # Total steps in this pipeline
-    total_steps = 13
+    # Total steps in this pipeline (updated for beIN Sports)
+    total_steps = 15  # Was 13, now 15 (added beIN scrape + import)
 
     # Get flags from parsed arguments
     skip_scrape = args.skip_scrape
@@ -459,6 +459,22 @@ def main(argv=None):
         if not run_step("2a", total_steps, "Scraping Fanatiz Soccer (all future events)", [
             "python3", "fanatiz_scrape.py",
             "--out", str(fanatiz_json),
+        ]):
+            return 1
+
+    # Step 2b: Scrape beIN Sports
+    bein_json = OUT_DIR / "bein_snapshot.json"
+    
+    if skip_scrape:
+        print("\n" + "=" * 60)
+        print(f"[2b/{total_steps}] Scraping beIN Sports EPG. SKIPPED")
+        print("=" * 60)
+        if not bein_json.exists():
+            print(f"WARNING: --skip-scrape set but {bein_json} not found; beIN ingest will be skipped.")
+    else:
+        if not run_step("2b", total_steps, "Scraping beIN Sports EPG", [
+            "python3", "bein_scrape.py",
+            "--out", str(bein_json),
         ]):
             return 1
 
@@ -640,6 +656,18 @@ def main(argv=None):
             return 1
     else:
         print(f"\n[7-fanatiz/{total_steps}] Fanatiz data not found at {fanatiz_json}, skipping ingest")
+
+    # Step 7-bein: Import beIN Sports events
+    bein_json = OUT_DIR / "bein_snapshot.json"
+    if bein_json.exists():
+        if not run_step("7-bein", total_steps, "Importing beIN Sports events to database", [
+            "python3", "bein_import.py",
+            "--bein-json", str(bein_json),
+            "--fruit-db", str(DB_PATH),
+        ]):
+            return 1
+    else:
+        print(f"\n[7-bein/{total_steps}] beIN data not found at {bein_json}, skipping ingest")
 
     # Step 7a: Scrape Victory+ events
     # Victory+ uses guest authentication (no user credentials required)
