@@ -26,14 +26,6 @@ from urllib.parse import urlencode, urlparse
 
 import requests
 
-# Import genre normalization utilities
-try:
-    from genre_utils import normalize_genres
-except ImportError:
-    # Fallback if genre_utils not available
-    def normalize_genres(genres):
-        return genres
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -48,6 +40,7 @@ BASE_API_URL = "https://api.gothamsports.com/proxy"
 CONFIG_URL = "https://config.gothamsports.com/Configurations/v2/build.json"
 PROVIDER_CODE = "gotham"
 LOGICAL_SERVICE = "gotham"
+SERVICE_NAME = "Gotham Sports"
 SERVICE_PRIORITY = 20  # Similar to specialty sports services
 
 # Channel definitions for zone-1 (NYC metro) - MSG and YES
@@ -216,6 +209,32 @@ def normalize_event(raw: Dict[str, Any], channel_name: str) -> Optional[Dict[str
     # Skip OFF AIR placeholders (24-hour blocks with no content)
     if "OFF AIR" in title.upper() or "NO PROGRAMMING" in title.upper():
         return None
+    
+    # Skip pre/postgame shows (not actual games)
+    if any(skip in title.lower() for skip in ['pregame', 'postgame', 'pre game', 'post game', 'pre-game', 'post-game']):
+        logger.debug(f"Skipping pre/postgame show: {title}")
+        return None
+    
+    # Filter by program type - ONLY keep actual sports events
+    pgm_ty = pgm.get("pgm_ty", "")
+    is_game = str(raw.get("isGame", "")).lower() == "true"
+    
+    # Skip non-event programming
+    if pgm_ty in ("Sports non-event", "Series", "Paid Programming"):
+        logger.debug(f"Skipping non-event programming ({pgm_ty}): {title}")
+        return None
+    
+    # For events with isGame field, must be true
+    if "isGame" in raw and not is_game:
+        logger.debug(f"Skipping non-game (isGame=false): {title}")
+        return None
+    
+    # Skip replays/prerecorded content - FruitDeepLinks is LIVE events only
+    ev_replay = str(raw.get("ev_replay", "")).lower() == "true"
+    ep_ty = raw.get("ep_ty", "")
+    if ev_replay or ep_ty in ("prerecorded", "replay"):
+        logger.debug(f"Skipping replay/prerecorded: {title}")
+        return None
 
     # Get external ID - Use airing ID for uniqueness
     external_id = raw.get("id")
@@ -249,6 +268,15 @@ def normalize_event(raw: Dict[str, Any], channel_name: str) -> Optional[Dict[str
         logger.debug(f"Event {external_id} ({title}) has no sport type, skipping non-sports programming")
         return None
     
+    # Skip non-sports genres (talk shows, documentaries, business programming, etc.)
+    NON_SPORTS_GENRES = {
+        'bus./financial', 'biography', 'consumer', 'documentary', 
+        'talk show', 'magazine', 'news', 'reality', 'entertainment'
+    }
+    if sport.lower() in NON_SPORTS_GENRES:
+        logger.debug(f"Skipping non-sports genre '{sport}': {title}")
+        return None
+    
     league = pgm.get("spt_lg", "") or channel_name
 
     # Team information
@@ -271,21 +299,51 @@ def normalize_event(raw: Dict[str, Any], channel_name: str) -> Optional[Dict[str
     # Get description
     description = _pick_lang_name(pgm.get("loen", [])) or _pick_lang_name(pgm.get("lod", []))
 
-    # Extract image URL
+    # Extract image URL from ex_ia (external images array)
     hero_image = None
-    images = pgm.get("img", [])
+    images = pgm.get("ex_ia", [])  # Changed from "img" to "ex_ia"
     if images:
-        # Prefer 16x9 images
+        # Prefer web images (higher resolution)
         for img in images:
-            if img.get("ar") == "16x9":
-                hero_image = img.get("url")
+            if img.get("c") == "web":
+                hero_image = img.get("u")
                 break
+        # Fallback to mobile or first available
+        if not hero_image:
+            for img in images:
+                if img.get("c") == "mobile":
+                    hero_image = img.get("u")
+                    break
+        # Last fallback: first image
         if not hero_image and images:
-            hero_image = images[0].get("url")
+            hero_image = images[0].get("u")
 
-    # Check content type and availability
-    content_type = raw.get("cty", "live")  # live, vod, ppv, etc.
-    is_live = content_type == "live"
+    # Detect replays and prerecorded content using Gotham's semantic flags
+    # CRITICAL: Use API's explicit replay/live flags, not just airing window
+    ev_live = str(raw.get("ev_live", "")).lower() == "true"
+    ev_replay = str(raw.get("ev_replay", "")).lower() == "true"
+    ep_ty = raw.get("ep_ty", "")  # "live", "prerecorded", "replay"
+    
+    # An event is only truly live if:
+    # 1. ev_live is explicitly "true"
+    # 2. ev_replay is NOT "true"
+    # 3. ep_ty is NOT "prerecorded" or "replay"
+    is_live = (
+        ev_live 
+        and not ev_replay 
+        and ep_ty not in ("prerecorded", "replay")
+    )
+    
+    # Set airing type based on replay status
+    if ev_replay or ep_ty in ("prerecorded", "replay"):
+        airing_type = "replay"
+    elif is_live:
+        airing_type = "live"
+    else:
+        airing_type = "vod"
+    
+    # Check content availability
+    content_type = raw.get("cty", "airing")  # airing, vod, ppv, etc.
     is_premium = content_type != "free"
 
     # Get playable URL from program metadata
@@ -321,6 +379,7 @@ def normalize_event(raw: Dict[str, Any], channel_name: str) -> Optional[Dict[str
         "hero_image": hero_image,
         "is_live": is_live,
         "is_premium": is_premium,
+        "airing_type": airing_type,  # "live", "replay", "vod"
         "content_type": content_type,
         "playable_url": playable_url,
         "home_team": home_team,
@@ -414,10 +473,7 @@ def ingest_event(
         
         # Build genres JSON - ONLY include sport type (not league)
         # League goes in channel_name and classification_json
-        # Normalize genres to filter out non-sports categories and fix capitalization
-        raw_genres = [event['sport']]
-        normalized_genres = normalize_genres(raw_genres)
-        genres_json = json.dumps(normalized_genres)
+        genres_json = json.dumps([event['sport']])
         
         # Build classification JSON for league
         classification_json = json.dumps([
@@ -430,16 +486,17 @@ def ingest_event(
         cur.execute("""
             INSERT INTO events (
                 id, pvid, title, title_brief, synopsis, synopsis_brief,
-                channel_name, channel_provider_id,
+                channel_name, channel_provider_id, airing_type,
                 genres_json, classification_json,
                 is_premium, runtime_secs,
                 start_ms, end_ms, start_utc, end_utc,
                 created_ms, created_utc, last_seen_utc,
                 hero_image_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title = COALESCE(excluded.title, title),
                 synopsis = COALESCE(excluded.synopsis, synopsis),
+                airing_type = COALESCE(excluded.airing_type, airing_type),
                 end_utc = COALESCE(excluded.end_utc, end_utc),
                 end_ms = COALESCE(excluded.end_ms, end_ms),
                 last_seen_utc = excluded.last_seen_utc,
@@ -454,6 +511,7 @@ def ingest_event(
             event['description'][:200] if len(event['description']) > 200 else event['description'],
             event['channel'],  # channel_name (e.g., "MSG", "YES Network")
             PROVIDER_CODE,  # channel_provider_id
+            event.get('airing_type'),  # "live", "replay", "vod"
             genres_json,
             classification_json,
             1 if event['is_premium'] else 0,
@@ -472,20 +530,22 @@ def ingest_event(
         playable_id = f"{event['external_id']}-main"
         cur.execute("""
             INSERT INTO playables (
-                event_id, playable_id, provider, logical_service,
+                event_id, playable_id, provider, logical_service, service_name,
                 deeplink_play, deeplink_open, playable_url,
                 priority, created_utc, title
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(event_id, playable_id) DO UPDATE SET
                 deeplink_play = COALESCE(excluded.deeplink_play, deeplink_play),
                 playable_url = COALESCE(excluded.playable_url, playable_url),
                 logical_service = excluded.logical_service,
+                service_name = excluded.service_name,
                 priority = excluded.priority
         """, (
             event_id,
             playable_id,
             PROVIDER_CODE,
             LOGICAL_SERVICE,
+            SERVICE_NAME,
             event['playable_url'],
             event['playable_url'],
             event['playable_url'],

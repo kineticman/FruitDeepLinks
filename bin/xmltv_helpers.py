@@ -318,6 +318,12 @@ def build_enhanced_title(event: Dict) -> str:
     """
     title = event.get("title") or "Sports Event"
     
+    # For Gotham and similar: if synopsis has team matchup (contains " at " or " vs "), prefer it
+    synopsis = event.get("synopsis") or ""
+    if synopsis and (" at " in synopsis or " vs " in synopsis):
+        # Synopsis has more specific info (team matchups), use it
+        title = synopsis
+    
     # Remove feed type suffix
     import re
     feed_pattern = r'\s*-\s*(Home Feed|Away Feed|National Feed|Local Feed|Main Feed|Alternate Feed)$'

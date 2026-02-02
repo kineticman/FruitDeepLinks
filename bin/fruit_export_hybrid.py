@@ -454,6 +454,8 @@ def build_direct_xmltv(
                         provider = "Victory+"
                     elif "gothamfc.com" in deeplink_url:
                         provider = "Gotham FC"
+                    elif "gothamsports.com" in deeplink_url:
+                        provider = "Gotham Sports"
                     elif "watch.tbs.com" in deeplink_url or "watchtbs" in deeplink_url:
                         provider = "TBS"
                     elif "watch.fanatiz.com" in deeplink_url or "fanatiz.com" in deeplink_url:
@@ -777,6 +779,8 @@ def build_direct_m3u(
                             actual_provider = "Victory+"
                         elif "gothamfc.com" in deeplink_url:
                             actual_provider = "Gotham FC"
+                        elif "gothamsports.com" in deeplink_url:
+                            actual_provider = "Gotham Sports"
                         elif "watch.tbs.com" in deeplink_url or "watchtbs" in deeplink_url:
                             actual_provider = "TBS"
                         else:
