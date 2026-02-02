@@ -111,6 +111,17 @@ class FanatizIngestor:
         
         genres_json = json.dumps(genres)
         
+        # Build classification_json (for title prefixing in XMLTV)
+        # Format: [{"type": "sport", "value": "Soccer"}, {"type": "league", "value": "Primera A"}]
+        classification = [
+            {"type": "sport", "value": sport}
+        ]
+        # Only add league if it's different and meaningful (not just "Soccer")
+        if league and league != sport and league != "Soccer":
+            classification.append({"type": "league", "value": league})
+        
+        classification_json = json.dumps(classification)
+        
         # Parse timestamps
         start_utc = event['start_utc']
         end_utc = event['end_utc']
@@ -172,6 +183,7 @@ class FanatizIngestor:
                     synopsis = ?,
                     synopsis_brief = ?,
                     channel_name = ?,
+                    classification_json = ?,
                     genres_json = ?,
                     start_utc = ?,
                     end_utc = ?,
@@ -188,6 +200,7 @@ class FanatizIngestor:
                 synopsis,
                 synopsis[:100] if len(synopsis) > 100 else synopsis,
                 channel_name,
+                classification_json,
                 genres_json,
                 start_utc,
                 end_utc,
@@ -207,11 +220,11 @@ class FanatizIngestor:
                 INSERT INTO events (
                     id, pvid, title, title_brief, synopsis, synopsis_brief,
                     channel_name, channel_provider_id,
-                    genres_json, is_premium,
+                    classification_json, genres_json, is_premium,
                     runtime_secs, start_ms, end_ms, start_utc, end_utc,
                     created_ms, created_utc, hero_image_url, last_seen_utc,
                     raw_attributes_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 event_id,
                 external_id,  # CRITICAL: pvid required for M3U export
@@ -221,6 +234,7 @@ class FanatizIngestor:
                 synopsis[:100] if len(synopsis) > 100 else synopsis,
                 channel_name,
                 self.PROVIDER,  # channel_provider_id
+                classification_json,
                 genres_json,
                 1,  # is_premium (Fanatiz requires subscription)
                 runtime_secs,

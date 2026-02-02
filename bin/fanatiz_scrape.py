@@ -64,6 +64,7 @@ class FanatizScraper:
             'total_fetched': 0,
             'total_kept': 0,
             'total_filtered': 0,
+            'total_skipped': 0,  # Filtered by status (canceled/finished)
             'total_pages': 0,
             'events_with_playables': 0,
             'events_without_playables': 0,
@@ -198,6 +199,9 @@ class FanatizScraper:
                                 self.stats['events_without_playables'] += 1
                         else:
                             self.stats['total_filtered'] += 1
+                    else:
+                        # normalize_event returned None (filtered by status)
+                        self.stats['total_skipped'] += 1
                             
                 except Exception as e:
                     logger.error(f"Error normalizing event: {e}")
@@ -221,6 +225,7 @@ class FanatizScraper:
         logger.info(f"\nScrape complete:")
         logger.info(f"  Events fetched: {self.stats['total_fetched']}")
         logger.info(f"  Events kept: {self.stats['total_kept']}")
+        logger.info(f"  Events skipped (canceled/finished/old): {self.stats['total_skipped']}")
         if self.days:
             logger.info(f"  Events filtered (outside date range): {self.stats['total_filtered']}")
         logger.info(f"  With playables: {self.stats['events_with_playables']}")
@@ -303,9 +308,27 @@ class FanatizScraper:
             logger.debug(f"Sport type: {sport_type}")
             sport = self._normalize_sport(sport_type)
             
-            # Event status
+            # Event status filtering
             event_status = raw.get('eventStatus', {})
             status_category = raw.get('statusCategory', 'future')
+            
+            # Extract the event status name
+            event_status_name = event_status.get('name', {}).get('original', '')
+            
+            # Filter out finished/canceled matches
+            if event_status_name in ['After match', 'Canceled', 'Cancelled', 'Finished', 'Full-time', 'Complete']:
+                logger.debug(f"Skipping {event_status_name} match: {title}")
+                return None
+            
+            # Filter out old postponed events (before 2025)
+            if event_status_name in ['Postponed', 'Suspended']:
+                try:
+                    event_date = datetime.fromisoformat(start_utc.replace('Z', '+00:00'))
+                    if event_date.year < 2025:
+                        logger.debug(f"Skipping old {event_status_name} match from {event_date.year}: {title}")
+                        return None
+                except:
+                    pass  # If date parsing fails, keep the event
             
             # Images
             # Fanatiz provides team image IDs (often under homeTeam.flag / awayTeam.flag).
@@ -338,7 +361,7 @@ class FanatizScraper:
                 'home_team': home_team_obj.get('name'),
                 'away_team': away_team_obj.get('name'),
                 'status': status_category,
-                'event_status': event_status.get('name', {}).get('original'),
+                'event_status': event_status_name,
                 'type': sport_type,
                 'week': raw.get('week'),
                 'home_score': raw.get('homeScore'),
@@ -463,6 +486,7 @@ class FanatizScraper:
                 'total_fetched': self.stats['total_fetched'],
                 'total_kept': self.stats['total_kept'],
                 'total_filtered': self.stats['total_filtered'],
+                'total_skipped': self.stats['total_skipped'],
                 'total_pages': self.stats['total_pages'],
                 'events_with_playables': self.stats['events_with_playables'],
                 'events_without_playables': self.stats['events_without_playables'],
