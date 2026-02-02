@@ -327,6 +327,11 @@ def main(argv=None):
         choices=["apple", "fruit", "both"],
         help="Print SQLite bloat stats for the selected DB (apple, fruit, both) and exit.",
     )
+    parser.add_argument(
+        "--skip-scrape",
+        action="store_true",
+        help="Skip scraping steps, only run ingest and export from existing data.",
+    )
     args = parser.parse_args(argv)
 
     if args.bloat_stats_only is not None:
@@ -358,8 +363,8 @@ def main(argv=None):
     # Total steps in this pipeline
     total_steps = 13
 
-    # Check for --skip-scrape flag
-    skip_scrape = "--skip-scrape" in sys.argv
+    # Get --skip-scrape flag from parsed arguments
+    skip_scrape = args.skip_scrape
 
     # Fresh-install defensive step: bootstrap Apple UTS auth tokens if missing/invalid.
     # Prevents brand new installs from failing with:
