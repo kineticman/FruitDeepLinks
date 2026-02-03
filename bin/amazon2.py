@@ -352,6 +352,42 @@ def _normalize(benefit_id: str, entitlement: str, page_text: str) -> Tuple[str, 
     reason = f"UNKNOWN_BENEFIT_ID benefit_id={benefit_id} fallback_to_entitlement"
     return safe_name, sid, reason
 
+def _looks_stale_404(resp_status: int, title: str, page_text: str, benefit_id: str, entitlement: str, channel_id: str) -> Tuple[bool, str]:
+    """Return (is_stale, reason_detail).
+
+    We only mark STALE when we have high confidence:
+      - True HTTP 404/410 after redirects, OR
+      - Strong 'dog page' / not-found markers in *visible* content AND we have no valid signals.
+
+    This avoids false positives where '404' appears somewhere in HTML/navigation/scripts while the page is valid
+    (e.g., subscription offer pages like NBA League Pass).
+    """
+    try:
+        visible = ((title or "") + "\n" + (page_text or "")).lower()
+    except Exception:
+        visible = (title or "").lower()
+
+    HARD_404_MARKERS = (
+        "sorry, we couldn't find",
+        "sorry! we couldn't find that page",
+        "page not found",
+        "looking for something?",
+        "dogs of amazon",
+    )
+    looks_like_404 = any(m in visible for m in HARD_404_MARKERS)
+
+    has_valid_signals = bool(
+        (benefit_id or "").strip()
+        or (entitlement or "").strip()
+        or (channel_id or "").strip()
+    )
+
+    if resp_status in (404, 410):
+        return True, f"http_status={resp_status}"
+    if looks_like_404 and not has_valid_signals:
+        return True, "visible_404_markers_no_signals"
+    return False, ""
+
 async def _extract_entitlement_text(page) -> str:
     # Try a couple likely selectors; keep it fast.
     selectors = [
@@ -390,7 +426,8 @@ async def scrape_one(playwright, browser, gti: str, timeout_ms: int, retries: in
             ctx = await browser.new_context()
             page = await ctx.new_page()
 
-            await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            resp = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            resp_status = resp.status if resp else 0
 
             # light wait for client-rendered data without requiring full load
             try:
@@ -414,15 +451,30 @@ async def scrape_one(playwright, browser, gti: str, timeout_ms: int, retries: in
             if unknown_reason and benefit_id and benefit_id not in unknown_seen:
                 unknown_seen.add(benefit_id)
                 LOG.warning("%s entitlement=%r", unknown_reason, entitlement)
+            # Improved stale/404 detection (avoid false positives from stray '404' strings in HTML)
+            title = ""
+            try:
+                title = await page.title()
+            except Exception:
+                title = ""
 
-            # classify common stale/404-ish cases from HTML
-            if "Sorry, we couldn't find" in html or "Page Not Found" in html:
+            is_stale_404, stale_detail = _looks_stale_404(
+                resp_status=resp_status,
+                title=title,
+                page_text=page_text,
+                benefit_id=benefit_id,
+                entitlement=entitlement,
+                channel_id=channel_id,
+            )
+            if is_stale_404:
                 status = "STALE"
                 failure_reason = "STALE_GTI_404"
                 channel_name = ""
                 channel_id = ""
+                LOG.info("[STALE] GTI=%s resp_status=%s detail=%s final_url=%s title=%r", gti, resp_status, stale_detail, page.url, title)
             else:
                 status = "SUCCESS"
+                failure_reason = ""
                 failure_reason = ""
 
             elapsed = int((time.time() - start) * 1000)
