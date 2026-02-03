@@ -467,39 +467,73 @@ def create_playable_for_event(
 
 def get_bein_image_url(channel_data: Dict[str, Any], sport_type: str) -> str:
     """
-    Get image URL for beIN event - GUARANTEED to return a valid URL
-    
-    Strategy:
-    1. Try channel logo (HD or STD)
-    2. Fall back to sport-specific placeholder
-    3. Final fallback to beIN Sports logo
-    
-    This ensures EVERY event has an image for XML export.
+    Get a hero image URL for a beIN event.
+
+    Priority:
+      1) Channel logo (HD/STD) *if it looks like a real image URL*
+      2) Sport placeholder (stable)
+      3) Generic beIN placeholder (stable)
+
+    Why:
+      - Unsplash images can disappear / rate-limit / 404 over time.
+      - The beinsports.com DAM logo URL we used was returning 404 for you.
+      - We want deterministic, low-risk icon URLs in the exported XML.
     """
-    # Try to get channel logo first
+
+    def _looks_like_image_url(u: Any) -> bool:
+        if not u or not isinstance(u, str):
+            return False
+        u = u.strip()
+        if not (u.startswith("http://") or u.startswith("https://")):
+            return False
+
+        # Known-bad / unstable sources we've already hit 404s on.
+        if "images.unsplash.com" in u:
+            return False
+        if "www.beinsports.com/content/dam/" in u:
+            return False
+
+        return True
+
+    # 1) Channel logos first (these are best when present)
     if channel_data and isinstance(channel_data, dict):
         logo_hd = channel_data.get("logoHD")
-        if logo_hd:
+        if _looks_like_image_url(logo_hd):
             return logo_hd
-        
+
         logo_std = channel_data.get("logoSTD")
-        if logo_std:
+        if _looks_like_image_url(logo_std):
             return logo_std
-    
-    # Fall back to sport-specific placeholders
+
+    # 2) Stable sport placeholders.
+    # NOTE: placehold.co has been reliable for static PNG placeholders.
+    # Keep these URLs simple (no querystring) to minimize edge-case issues.
     sport_images = {
-        "Soccer": "https://images.unsplash.com/photo-1574629810360-7efbbe195018?w=800",
-        "Tennis": "https://images.unsplash.com/photo-1554068865-24cecd4e34b8?w=800",
-        "Basketball": "https://images.unsplash.com/photo-1546519638-68e109498ffc?w=800",
-        "Hockey": "https://images.unsplash.com/photo-1515703407324-5f753afd8be8?w=800",
-        "Rugby": "https://images.unsplash.com/photo-1571865188502-b189dda4b0af?w=800",
-        "Motorsports": "https://images.unsplash.com/photo-1510524197668-56cc03a55f7d?w=800",
-        "Handball": "https://images.unsplash.com/photo-1551958219-acbc608c6377?w=800",
-        "Equestrian": "https://images.unsplash.com/photo-1553284965-83fd3e82fa5a?w=800",
+        "Soccer": "https://placehold.co/800x450/png",
+        "Tennis": "https://placehold.co/800x450/png",
+        "Basketball": "https://placehold.co/800x450/png",
+        "Hockey": "https://placehold.co/800x450/png",
+        "Rugby": "https://placehold.co/800x450/png",
+        "Motorsports": "https://placehold.co/800x450/png",
+        "Handball": "https://placehold.co/800x450/png",
+        "Equestrian": "https://placehold.co/800x450/png",
+        "Cricket": "https://placehold.co/800x450/png",
+        "Golf": "https://placehold.co/800x450/png",
+        "Volleyball": "https://placehold.co/800x450/png",
+        "Athletics": "https://placehold.co/800x450/png",
+        "Baseball": "https://placehold.co/800x450/png",
+        "American Football": "https://placehold.co/800x450/png",
+        "Combat Sports": "https://placehold.co/800x450/png",
+        "Water Sports": "https://placehold.co/800x450/png",
+        "Winter Sports": "https://placehold.co/800x450/png",
+        "Olympic Sports": "https://placehold.co/800x450/png",
     }
-    
-    # Return sport-specific or final fallback to beIN logo
-    return sport_images.get(sport_type, "https://www.beinsports.com/content/dam/bein/en/bein-sports-logo-2023.png")
+
+    # 3) Generic final fallback.
+    fallback = "https://placehold.co/800x450/png"
+
+    url = sport_images.get(sport_type, fallback)
+    return url
 
 
 def normalize_event(row: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Tuple]]:
