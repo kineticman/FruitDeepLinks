@@ -465,6 +465,51 @@ def create_playable_for_event(
     )
 
 
+
+# --------------------------------------------------------------------
+# Sport fallback images (OpenMoji 618x618 PNG via jsDelivr CDN)
+# NOTE: OpenMoji graphics are CC BY-SA 4.0. Add attribution in README/about if distributing.
+# --------------------------------------------------------------------
+OPENMOJI_BASE = "https://cdn.jsdelivr.net/gh/hfg-gmuend/openmoji@16.0.0/color/618x618"
+
+SPORT_OPENMOJI = {
+    "Soccer": "26BD",              # ⚽
+    "Tennis": "1F3BE",             # 🎾
+    "Basketball": "1F3C0",         # 🏀
+    "Hockey": "1F3D2",             # 🏒
+    "Rugby": "1F3C9",              # 🏉
+    "Handball": "1F93E",           # 🤾
+    "Motorsports": "1F3CE",        # 🏎️
+    "Combat Sports": "1F94A",      # 🥊
+    "Equestrian": "1F3C7",         # 🏇
+    "Cricket": "1F3CF",            # 🏏
+    "Golf": "26F3",                # ⛳
+    "Volleyball": "1F3D0",         # 🏐
+    "Athletics": "1F3C3",          # 🏃
+    "Baseball": "26BE",            # ⚾
+    "American Football": "1F3C8",  # 🏈
+    "Table Tennis": "1F3D3",       # 🏓
+    "Darts": "1F3AF",              # 🎯
+    "Lacrosse": "1F94D",           # 🥍
+
+    # Approximations where Unicode doesn’t have a perfect sport icon:
+    "Netball": "1F3D0",            # 🏐
+    "Gridiron": "1F3C8",           # 🏈
+    "Water Sports": "1F3CA",       # 🏊
+    "Winter Sports": "26F7",       # ⛷️
+    "Cycling": "1F6B4",            # 🚴
+    "Olympic Sports": "1F3C5",     # 🏅
+
+    # Generic fallback:
+    "Other": "1F3DF",              # 🏟️
+}
+
+def sport_fallback_image_url(sport_type: str) -> str:
+    st = (sport_type or "Other").strip()
+    code = SPORT_OPENMOJI.get(st, SPORT_OPENMOJI["Other"])
+    return f"{OPENMOJI_BASE}/{code}.png"
+
+
 def get_bein_image_url(channel_data: Dict[str, Any], sport_type: str) -> str:
     """
     Get a hero image URL for a beIN event.
@@ -505,35 +550,8 @@ def get_bein_image_url(channel_data: Dict[str, Any], sport_type: str) -> str:
         if _looks_like_image_url(logo_std):
             return logo_std
 
-    # 2) Stable sport placeholders.
-    # NOTE: placehold.co has been reliable for static PNG placeholders.
-    # Keep these URLs simple (no querystring) to minimize edge-case issues.
-    sport_images = {
-        "Soccer": "https://placehold.co/800x450/png",
-        "Tennis": "https://placehold.co/800x450/png",
-        "Basketball": "https://placehold.co/800x450/png",
-        "Hockey": "https://placehold.co/800x450/png",
-        "Rugby": "https://placehold.co/800x450/png",
-        "Motorsports": "https://placehold.co/800x450/png",
-        "Handball": "https://placehold.co/800x450/png",
-        "Equestrian": "https://placehold.co/800x450/png",
-        "Cricket": "https://placehold.co/800x450/png",
-        "Golf": "https://placehold.co/800x450/png",
-        "Volleyball": "https://placehold.co/800x450/png",
-        "Athletics": "https://placehold.co/800x450/png",
-        "Baseball": "https://placehold.co/800x450/png",
-        "American Football": "https://placehold.co/800x450/png",
-        "Combat Sports": "https://placehold.co/800x450/png",
-        "Water Sports": "https://placehold.co/800x450/png",
-        "Winter Sports": "https://placehold.co/800x450/png",
-        "Olympic Sports": "https://placehold.co/800x450/png",
-    }
-
-    # 3) Generic final fallback.
-    fallback = "https://placehold.co/800x450/png"
-
-    url = sport_images.get(sport_type, fallback)
-    return url
+    # 2) Stable sport fallback (OpenMoji 618x618 PNG via jsDelivr)
+    return sport_fallback_image_url(sport_type)
 
 
 def normalize_event(row: Dict[str, Any]) -> Tuple[Dict[str, Any], Optional[Tuple]]:
