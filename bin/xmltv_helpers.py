@@ -46,6 +46,11 @@ def get_provider_display_name(provider_id: str) -> Optional[str]:
         'apple_nba': 'Apple NBA',
         'apple_nhl': 'Apple NHL',
         'apple_other': 'Apple TV+',
+        'victory': 'Victory+',
+        'fanatiz': 'Fanatiz Soccer',
+        'fanatiz_web': 'Fanatiz Soccer',
+        'gotham': 'Gotham Sports',
+        'bein': 'beIN Sports',
         'https': 'Web - Other',
         'http': 'Web - Other',
         'kayo_web': 'Kayo (Web)',
@@ -80,6 +85,14 @@ def get_provider_from_channel(channel_name: str) -> str:
         return "Apple TV+"
     elif "kayo" in channel_lower:
         return "Kayo"
+    elif "fanatiz" in channel_lower:
+        return "Fanatiz Soccer"
+    elif "victory" in channel_lower:
+        return "Victory+"
+    elif "gotham" in channel_lower:
+        return "Gotham Sports"
+    elif "bein" in channel_lower:
+        return "beIN Sports"
     else:
         return channel_name
 
@@ -269,10 +282,275 @@ def get_classification_categories(event: Dict) -> Dict[str, Optional[str]]:
     
     try:
         classification = json.loads(classification_json) if isinstance(classification_json, str) else classification_json
+        
+        # Handle both formats:
+        # Dict format: {"sport": "Hockey", "league": "NHL"}
+        # List format: [{"type": "sport", "value": "Hockey"}, {"type": "league", "value": "NHL"}]
         if isinstance(classification, dict):
             result["sport"] = classification.get("sport")
             result["league"] = classification.get("league")
+        elif isinstance(classification, list):
+            for item in classification:
+                if isinstance(item, dict):
+                    item_type = item.get("type")
+                    item_value = item.get("value")
+                    if item_type in ("sport", "league") and item_value:
+                        result[item_type] = item_value
     except Exception:
         pass
     
     return result
+
+
+# -------------------- Title Enhancement --------------------
+def build_enhanced_title(event: Dict) -> str:
+    """
+    Build an enhanced title for XMLTV.
+    
+    Strategy:
+    1. Use event.get("title") - this is the actual event title
+    2. EXCEPTION: For certain services with generic titles, prefer synopsis if it has matchup info
+    3. Remove feed type suffix (Home Feed, Away Feed, etc.)
+    4. Fall back to "Sports Event" only if title is completely missing
+    
+    Args:
+        event: Event data dictionary
+    
+    Returns:
+        Enhanced title string
+    """
+    title = event.get("title")
+    synopsis = event.get("synopsis") or ""
+    event_id = event.get("id", "")
+    
+    # EXCEPTION: Gotham Sports often has generic titles like "NBA Basketball"
+    # but specific matchups in synopsis like "Brooklyn Nets at Detroit Pistons"
+    # For these services, prefer synopsis if it contains matchup info
+    if event_id.startswith("gotham-"):
+        if synopsis and (" at " in synopsis or " vs " in synopsis):
+            # Check if synopsis is more specific than title
+            if title and len(synopsis) > len(title) and synopsis not in title:
+                title = synopsis
+    
+    # Fallback only if title is actually missing or empty
+    if not title or not title.strip():
+        title = "Sports Event"
+    
+    # Remove feed type suffix
+    import re
+    feed_pattern = r'\s*-\s*(Home Feed|Away Feed|National Feed|Local Feed|Main Feed|Alternate Feed)$'
+    title = re.sub(feed_pattern, '', title, flags=re.IGNORECASE)
+    title = title.strip().rstrip('-').strip()
+    
+    # Get classification
+    classification = get_classification_categories(event)
+    sport = classification.get("sport")
+    league = classification.get("league")
+    
+    # Fallback: Try to extract league from channel_name if classification_json is missing
+    # Example: "Victory+ WHL" → extract "WHL"
+    channel_league = None
+    if not league:
+        channel_name = event.get("channel_name") or ""
+        # Common league patterns in channel names
+        if "WHL" in channel_name:
+            channel_league = "WHL"
+        elif "NHL" in channel_name:
+            channel_league = "NHL"
+        elif "NBA" in channel_name:
+            channel_league = "NBA"
+        elif "MLB" in channel_name:
+            channel_league = "MLB"
+        elif "MLS" in channel_name:
+            channel_league = "MLS"
+        elif "NCAA" in channel_name:
+            channel_league = "NCAA"
+    
+    # Build enhanced title
+    # Priority: League > channel_league (fallback) > Sport
+    prefix = league or channel_league or sport
+    
+    if prefix and prefix != "Sports":
+        # Check if title already has sport/league prefix (like ESPN does)
+        # ESPN format: "Men's College Basketball: ..."
+        if ":" in title and not title.startswith("NHL:") and not title.startswith("WHL:"):
+            # Already has a prefix, keep it
+            return title
+        else:
+            # Add our prefix: "WHL: Red Deer at Vancouver"
+            # Remove any existing sport prefix from title first
+            title_clean = re.sub(r'^(NHL|WHL|NBA|NCAA|MLB|MLS|Premier League):\s*', '', title, flags=re.IGNORECASE)
+            return f"{prefix}: {title_clean}"
+    
+    return title
+
+
+# -------------------- Description Enhancement --------------------
+def build_enhanced_description(event: Dict, provider_name: Optional[str] = None) -> str:
+    """
+    Build an ESPN-style enhanced description for XMLTV.
+    
+    Creates rich descriptions like:
+    "Basketball - (Men's College Basketball) - North Carolina Tar Heels vs Georgia Tech Yellow Jackets - Available on ESPN+"
+    
+    Falls back gracefully when data is missing:
+    "Hockey - (WHL) - Edmonton at Swift Current at InnovationPlex - Available on Victory+ (Home Feed)"
+    
+    Strategy:
+    1. Start with synopsis (if rich) or title
+    2. Extract and remove feed type (Home/Away Feed) from title/synopsis
+    3. Extract sport/league from classification_json
+    4. Extract sport detail from genres_json (like "Men's College Basketball")
+    5. Build structured description: Sport - (Detail) - Event - Provider (Feed)
+    6. Add venue if synopsis was minimal
+    
+    Args:
+        event: Event data dictionary
+        provider_name: Display name of the provider (e.g., "ESPN+", "Victory+")
+    
+    Returns:
+        Enhanced description string
+    """
+    title = event.get("title") or "Sports Event"
+    synopsis = event.get("synopsis") or ""
+    synopsis_brief = event.get("synopsis_brief") or ""
+    venue = event.get("venue") or ""
+    
+    # Clean synopsis if it contains old formatted text from previous export versions
+    # Pattern examples:
+    #   "(Basketball) - Basketball - (Men's College Basketball) - Texas Longhorns..."
+    #   "(Hockey) - Red Deer at Prince George"
+    #   "Basketball - (Men's College Basketball) - ..."
+    import re
+    if synopsis:
+        # Remove patterns like "(Sport) - Sport - (Detail) - " or "Sport - (Detail) - "
+        synopsis = re.sub(r'^\([^)]+\)\s*-\s*[^-]+\s*-\s*\([^)]+\)\s*-\s*', '', synopsis)
+        synopsis = re.sub(r'^\([^)]+\)\s*-\s*', '', synopsis)  # "(Hockey) - "
+        synopsis = re.sub(r'^[^-]+-\s*\([^)]+\)\s*-\s*', '', synopsis)  # "Sport - (Detail) - "
+        synopsis = synopsis.strip()
+    
+    if synopsis_brief:
+        synopsis_brief = re.sub(r'^\([^)]+\)\s*-\s*[^-]+\s*-\s*\([^)]+\)\s*-\s*', '', synopsis_brief)
+        synopsis_brief = re.sub(r'^\([^)]+\)\s*-\s*', '', synopsis_brief)
+        synopsis_brief = re.sub(r'^[^-]+-\s*\([^)]+\)\s*-\s*', '', synopsis_brief)
+        synopsis_brief = synopsis_brief.strip()
+    
+    # Strip any existing "Available on X" suffix
+    synopsis = re.sub(r'\s*-\s*Available on [^-]+$', '', synopsis)
+    synopsis_brief = re.sub(r'\s*-\s*Available on [^-]+$', '', synopsis_brief)
+    
+    # Extract and remove feed type from title/synopsis (Home Feed, Away Feed, etc.)
+    feed_type = None
+    feed_pattern = r'\s*-\s*(Home Feed|Away Feed|National Feed|Local Feed|Main Feed|Alternate Feed)$'
+    
+    # Check title for feed suffix
+    title_match = re.search(feed_pattern, title, re.IGNORECASE)
+    if title_match:
+        feed_type = title_match.group(1)
+        title = re.sub(feed_pattern, '', title, flags=re.IGNORECASE)
+    
+    # Check synopsis for feed suffix
+    if not feed_type:
+        synopsis_match = re.search(feed_pattern, synopsis, re.IGNORECASE)
+        if synopsis_match:
+            feed_type = synopsis_match.group(1)
+            synopsis = re.sub(feed_pattern, '', synopsis, flags=re.IGNORECASE)
+    
+    # Clean up any trailing whitespace/dashes
+    title = title.strip().rstrip('-').strip()
+    synopsis = synopsis.strip().rstrip('-').strip()
+    synopsis_brief = synopsis_brief.strip().rstrip('-').strip()
+    
+    # Get classification (sport/league)
+    classification = get_classification_categories(event)
+    sport = classification.get("sport")
+    league = classification.get("league")
+    
+    # Fallback: Extract league from channel_name if classification_json is missing
+    # Example: "Victory+ WHL" → extract "WHL"
+    if not league and not sport:
+        channel_name = event.get("channel_name") or ""
+        if "WHL" in channel_name:
+            league = "WHL"
+            sport = "Hockey"
+        elif "NHL" in channel_name:
+            league = "NHL"
+            sport = "Hockey"
+        elif "NBA" in channel_name:
+            league = "NBA"
+            sport = "Basketball"
+        elif "MLB" in channel_name:
+            league = "MLB"
+            sport = "Baseball"
+        elif "MLS" in channel_name:
+            league = "MLS"
+            sport = "Soccer"
+        elif "NCAA" in channel_name:
+            league = "NCAA"
+    
+    # Get sport detail from genres_json (like "Men's College Basketball")
+    sport_detail = None
+    genres_json = event.get("genres_json")
+    if genres_json:
+        try:
+            genres = json.loads(genres_json) if isinstance(genres_json, str) else genres_json
+            if isinstance(genres, list):
+                # Look for detailed sport genres (longer than basic sport name)
+                # Don't filter out the sport itself - we want sport OUTSIDE and detail INSIDE parens
+                candidates = [
+                    g for g in genres 
+                    if g and isinstance(g, str) and g not in ("Sports", "Sports Event")
+                    and (not sport or g != sport)  # Skip if same as sport
+                    and (not league or g != league)  # Skip if same as league
+                    and (not provider_name or g != provider_name)  # Skip provider names
+                ]
+                # Pick the longest/most specific genre as detail (or use league if no detail)
+                if candidates:
+                    sport_detail = max(candidates, key=len)
+        except Exception:
+            pass
+    
+    # Determine base description
+    # Priority: synopsis (if substantial) > synopsis_brief > title
+    base_desc = synopsis if synopsis and len(synopsis) > 30 else (synopsis_brief or title)
+    
+    # If base description is just the venue, enhance it with title
+    if venue and base_desc.strip() == venue.strip():
+        base_desc = f"{title} at {venue}"
+    elif venue and len(base_desc) < 40 and venue not in base_desc:
+        # Synopsis is minimal and doesn't include venue - add it
+        base_desc = f"{base_desc} at {venue}" if base_desc != title else f"{title} at {venue}"
+    
+    # Build structured description parts
+    parts = []
+    
+    # Part 1: Sport (skip if synopsis already contains team matchup)
+    # If synopsis has "Team A vs Team B", don't add redundant "Soccer -" prefix
+    if sport and sport != "Sports" and " vs " not in base_desc:
+        parts.append(sport)
+    
+    # Part 2: Sport detail or league (in parentheses)
+    # Priority: sport_detail (if different from sport) > league
+    detail_part = None
+    if sport_detail and sport_detail != sport:
+        # Use sport_detail only if it's different from sport (e.g., "Men's College Basketball")
+        detail_part = sport_detail
+    elif league:
+        # Otherwise use league (e.g., "WHL", "NBA")
+        detail_part = league
+    
+    if detail_part:
+        parts.append(f"({detail_part})")
+    
+    # Part 3: Event description
+    parts.append(base_desc)
+    
+    # Part 4: Provider (with optional feed type)
+    if provider_name:
+        if feed_type:
+            parts.append(f"Available on {provider_name} ({feed_type})")
+        else:
+            parts.append(f"Available on {provider_name}")
+    
+    # Join with " - " separator (ESPN style)
+    return " - ".join(parts)

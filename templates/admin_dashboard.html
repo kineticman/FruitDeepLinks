@@ -353,8 +353,8 @@ label.textContent = 'Auto refresh is disabled';
 }
 
 // ===================== Live Logs (sticky scroll + session restore) =====================
-const LOG_MAX_LINES = 2000;              // keep this many lines in the DOM
-const LOG_TAIL_ON_CONNECT = 500;         // server tail if we have no stored seq
+const LOG_MAX_LINES = 5000;              // keep this many lines in the DOM (increased for daily_refresh)
+const LOG_TAIL_ON_CONNECT = 5000;       // server tail if we have no stored seq (increased from 500)
 const AUTO_SCROLL_THRESHOLD_PX = 40;     // within this many px of bottom counts as "at bottom"
 const LOG_STORE_KEY = "fdl_admin_live_logs_v1";      // sessionStorage cache of recent log lines
 const LOG_STORE_SEQ_KEY = "fdl_admin_live_logs_seq"; // last seen seq (for SSE resume)

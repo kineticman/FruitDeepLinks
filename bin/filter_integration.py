@@ -91,8 +91,13 @@ def get_default_service_priorities() -> Dict[str, int]:
         "mlb": 66,                 # MLB.TV
         "f1tv": 65,                # F1 TV Pro
         "dazn": 64,                # DAZN
-        "fubo": 63,                # FuboTV
-        "sling": 62,               # Sling TV
+        "kayo_web": 63,            # Kayo Sports (Australia)
+        "bein": 63,                # beIN Sports (international/regional)
+        "fanatiz_web": 62,         # Fanatiz Soccer (Latin America)
+        "victory": 62,             # Victory+ (WHL, LOVB)
+        "gotham": 62,              # Gotham Sports (MSG/YES Network)
+        "fubo": 61,                # FuboTV
+        "sling": 60,               # Sling TV
         
         # Tier 4: Free/Broadcast (30-49)
         "abc": 48,                 # ABC (free broadcast)
@@ -327,7 +332,8 @@ def get_filtered_playables(
         cur.execute(
             """
             SELECT playable_id, provider, deeplink_play, deeplink_open,
-                   playable_url, title, content_id, priority, service_name, espn_graph_id
+                   playable_url, title, content_id, priority, service_name, espn_graph_id,
+                   logical_service
             FROM playables
             WHERE event_id = ?
             ORDER BY priority ASC, playable_id ASC
@@ -348,6 +354,7 @@ def get_filtered_playables(
                 "priority": row[7],
                 "service_name": row[8],
                 "espn_graph_id": row[9],
+                "logical_service": row[10],  # Read from database
                 "event_id": event_id,
             }
 
@@ -364,20 +371,22 @@ def get_filtered_playables(
                     continue  # Skip English feeds if user wants Spanish only
 
             # Determine logical service for this playable
-            if LOGICAL_SERVICES_AVAILABLE:
-                logical_service = get_logical_service_for_playable(
-                    provider=playable["provider"],
-                    deeplink_play=playable["deeplink_play"],
-                    deeplink_open=playable["deeplink_open"],
-                    playable_url=playable["playable_url"],
-                    event_id=event_id,
-                    conn=conn,
-                    service_name=playable.get("service_name")  # Pass service_name for ESPN differentiation
-                )
-                playable["logical_service"] = logical_service
-            else:
-                # Fallback: use raw provider
-                playable["logical_service"] = playable["provider"]
+            # If not already set in database, calculate it
+            if not playable.get("logical_service"):
+                if LOGICAL_SERVICES_AVAILABLE:
+                    logical_service = get_logical_service_for_playable(
+                        provider=playable["provider"],
+                        deeplink_play=playable["deeplink_play"],
+                        deeplink_open=playable["deeplink_open"],
+                        playable_url=playable["playable_url"],
+                        event_id=event_id,
+                        conn=conn,
+                        service_name=playable.get("service_name")  # Pass service_name for ESPN differentiation
+                    )
+                    playable["logical_service"] = logical_service
+                else:
+                    # Fallback: use raw provider
+                    playable["logical_service"] = playable["provider"]
 
             # AMAZON MASTER TOGGLE: If master toggle is OFF, skip ALL Amazon services
             if not amazon_master_enabled and playable["logical_service"].startswith("aiv"):

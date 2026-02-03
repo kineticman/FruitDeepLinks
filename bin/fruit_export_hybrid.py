@@ -52,6 +52,43 @@ except ImportError:
         return None
 
 
+# Import shared XMLTV helpers
+try:
+    from xmltv_helpers import build_enhanced_description, build_enhanced_title
+except ImportError:
+    # Fallback if not in path
+    def build_enhanced_title(event):
+        import re
+        # Get title - never use synopsis/description
+        title = event.get("title")
+        
+        # Fallback if title is missing or empty
+        if not title or not title.strip():
+            # Use channel_name as last resort, never synopsis
+            title = event.get("channel_name") or "Sports Event"
+        
+        # Clean feed suffixes
+        feed_pattern = r'\s*-\s*(Home Feed|Away Feed|National Feed|Local Feed|Main Feed|Alternate Feed)$'
+        title = re.sub(feed_pattern, '', title, flags=re.IGNORECASE)
+        return title.strip().rstrip('-').strip()
+    
+    def build_enhanced_description(event, provider_name=None):
+        import re
+        synopsis = event.get("synopsis") or event.get("synopsis_brief") or event.get("title") or "Sports Event"
+        
+        # Clean polluted synopsis
+        if synopsis:
+            synopsis = re.sub(r'^\([^)]+\)\s*-\s*[^-]+\s*-\s*\([^)]+\)\s*-\s*', '', synopsis)
+            synopsis = re.sub(r'^\([^)]+\)\s*-\s*', '', synopsis)
+            synopsis = re.sub(r'^[^-]+-\s*\([^)]+\)\s*-\s*', '', synopsis)
+            synopsis = re.sub(r'\s*-\s*Available on [^-]+$', '', synopsis)
+            synopsis = synopsis.strip()
+        
+        if provider_name:
+            return f"{synopsis} - Available on {provider_name}"
+        return synopsis
+
+
 # -------------------- Deprecated Services --------------------
 # Services that have been removed and should be filtered out from preferences
 DEPRECATED_SERVICES = {
@@ -349,7 +386,7 @@ def build_direct_xmltv(
 
     for idx, event in enumerate(events, start=1):
         chan_id = stable_channel_id(event, epg_prefix)
-        title = event.get("title") or f"Sports Event {idx}"
+        title = build_enhanced_title(event)
         channel_name = event.get("channel_name") or "Sports"
         event_id = event.get("id", "")
 
@@ -363,7 +400,7 @@ def build_direct_xmltv(
             if deeplink_url and deeplink_url.startswith("sportscenter://"):
                 try:
                     cur.execute(
-                        """SELECT provider, espn_graph_id
+                        """SELECT provider, espn_graph_id, logical_service
                            FROM playables
                            WHERE event_id = ?""",
                         (event_id,),
@@ -398,76 +435,50 @@ def build_direct_xmltv(
                     json.dumps(payload, separators=(",", ":"), ensure_ascii=False), safe=""
                 )
 
-        # Determine human-readable provider for XML
-        # Start from channel-based guess, but prefer logical_service_mapper when available.
-        provider = get_provider_from_channel(channel_name) or "Sports"
+        # Determine human-readable provider from the SELECTED deeplink
+        provider = None
         
-        # Try to determine provider from best available playable, even if filtered out
-        if FILTERING_AVAILABLE:
+        if FILTERING_AVAILABLE and deeplink_url:
             try:
-                from logical_service_mapper import (
-                    get_logical_service_for_playable,
-                    get_service_display_name,
-                )
+                from logical_service_mapper import get_service_display_name, get_logical_service_for_playable
                 from provider_utils import extract_provider_from_url
                 
-                # If we have a deeplink, use it
-                if deeplink_url:
-                    raw_provider = extract_provider_from_url(deeplink_url) or ""
-                    playable_url = deeplink_url if deeplink_url.startswith("http") else None
-                    
+                # Extract provider from the actual deeplink URL scheme
+                scheme = extract_provider_from_url(deeplink_url)
+                if scheme and scheme not in ("http", "https"):
+                    # For non-web deeplinks, get the logical service
                     logical_service = get_logical_service_for_playable(
-                        provider=raw_provider,
+                        provider=scheme,
                         deeplink_play=deeplink_url,
                         deeplink_open=None,
-                        playable_url=playable_url,
+                        playable_url=None,
                         event_id=event_id,
                         conn=conn,
                     )
-                    if logical_service:
-                        provider = get_service_display_name(logical_service)
-                else:
-                    # No deeplink, but check playables for provider metadata
-                    cur = conn.cursor()
-                    cur.execute("""
-                        SELECT provider, deeplink_play, deeplink_open, playable_url, priority, espn_graph_id
-                        FROM playables
-                        WHERE event_id = ?
-                        ORDER BY priority DESC
-                        LIMIT 1
-                    """, (event_id,))
-                    playable = cur.fetchone()
-                    
-                    if playable:
-                        raw_provider = (playable["provider"] or "").strip()
-                        deeplink_play = (playable["deeplink_play"] or "").strip()
-                        deeplink_open = (playable["deeplink_open"] or "").strip()
-                        playable_url_str = (playable["playable_url"] or "").strip()
-                        espn_graph_id = (playable.get("espn_graph_id") or "").strip() if "espn_graph_id" in playable.keys() else ""
-                        
-                        # ESPN FIX: Prefer ESPN Graph ID for ESPN playables
-                        if espn_graph_id and raw_provider.lower() in ('sportscenter', 'espn', 'espn+'):
-                            try:
-                                parts = espn_graph_id.split(':')
-                                if len(parts) >= 2:
-                                    play_id = parts[1]
-                                    deeplink_play = f"sportscenter://x-callback-url/showWatchStream?playID={play_id}"
-                            except Exception:
-                                pass
-                        
-                        logical_service = get_logical_service_for_playable(
-                            provider=raw_provider,
-                            deeplink_play=deeplink_play or None,
-                            deeplink_open=deeplink_open or None,
-                            playable_url=playable_url_str or None,
-                            event_id=event_id,
-                            conn=conn,
-                        )
-                        if logical_service:
-                            provider = get_service_display_name(logical_service)
+                    provider = get_service_display_name(logical_service)
+                elif scheme in ("http", "https"):
+                    # For web URLs, check the domain for better labeling
+                    if "victoryplus.com" in deeplink_url:
+                        provider = "Victory+"
+                    elif "gothamfc.com" in deeplink_url:
+                        provider = "Gotham FC"
+                    elif "gothamsports.com" in deeplink_url:
+                        provider = "Gotham Sports"
+                    elif "watch.tbs.com" in deeplink_url or "watchtbs" in deeplink_url:
+                        provider = "TBS"
+                    elif "watch.fanatiz.com" in deeplink_url or "fanatiz.com" in deeplink_url:
+                        provider = "Fanatiz Soccer"
+                    elif "beinsports.com" in deeplink_url or "bein" in deeplink_url.lower():
+                        provider = "beIN Sports"
+                    else:
+                        provider = "Web"
             except Exception as e:
-                # Fall back to channel-based provider if mapping fails
-                provider = provider or "Sports"
+                # Fall back to database channel_name if detection fails
+                pass
+        
+        # Final fallback: use database channel_name provider
+        if not provider:
+            provider = get_provider_from_channel(channel_name) or "Sports"
 
         # Channel element
         chan = ET.SubElement(tv, "channel", id=chan_id)
@@ -509,28 +520,14 @@ def build_direct_xmltv(
         )
         ET.SubElement(prog, "title").text = title
 
-        base_desc = event.get("synopsis") or event.get("synopsis_brief") or title
-        sport_label = None
-        genres_json = event.get("genres_json")
-        if genres_json:
-            try:
-                genres = json.loads(genres_json)
-                if isinstance(genres, list):
-                    cands = [g for g in genres if g and g not in (provider, "Sports")]
-                    if cands:
-                        sport_label = max(cands, key=len)
-            except Exception:
-                pass
-        if sport_label and provider:
-            desc_text = f"{base_desc} - {sport_label} - on {provider}"
-        elif provider:
-            desc_text = f"{base_desc} - on {provider}"
-        else:
-            desc_text = base_desc
+        # Build enhanced description (ESPN-style)
+        desc_text = build_enhanced_description(event, provider_name=provider)
         ET.SubElement(prog, "desc").text = desc_text
 
+        # Categories
         ET.SubElement(prog, "category").text = provider
         ET.SubElement(prog, "category").text = "Sports"
+        genres_json = event.get("genres_json")
         if genres_json:
             try:
                 for g in json.loads(genres_json) or []:
@@ -625,7 +622,7 @@ def build_direct_m3u(
 
             try:
                 cur.execute(
-                    """SELECT provider, playable_url, deeplink_play, deeplink_open, priority, espn_graph_id
+                    """SELECT provider, playable_url, deeplink_play, deeplink_open, priority, espn_graph_id, logical_service
                            FROM playables
                            WHERE event_id = ?""",
                     (event_id,),
@@ -765,30 +762,45 @@ def build_direct_m3u(
                 skipped_no_deeplink += 1
                 continue
 
-            actual_provider = provider
-            try:
-                if FILTERING_AVAILABLE:
-                    from logical_service_mapper import (
-                        get_logical_service_for_playable,
-                        get_service_display_name,
-                    )
+            # Determine actual provider from the SELECTED deeplink, not the database channel_name
+            actual_provider = None
+            
+            if FILTERING_AVAILABLE:
+                try:
+                    from logical_service_mapper import get_service_display_name, get_logical_service_for_playable
                     from provider_utils import extract_provider_from_url
-
+                    
+                    # Extract provider from the actual deeplink URL scheme
                     scheme = extract_provider_from_url(deeplink_url)
-                    if scheme:
-                        try:
-                            logical_service = get_logical_service_for_playable(
-                                provider=scheme if scheme not in ("http", "https") else scheme,
-                                deeplink_play=deeplink_url,
-                                deeplink_open=None,
-                                playable_url=None,
-                                event_id=event_id,
-                                conn=conn,
-                            )
-                            actual_provider = get_service_display_name(logical_service)
-                        except Exception:
-                            actual_provider = provider
-            except Exception:
+                    if scheme and scheme not in ("http", "https"):
+                        # For non-web deeplinks, get the logical service
+                        logical_service = get_logical_service_for_playable(
+                            provider=scheme,
+                            deeplink_play=deeplink_url,
+                            deeplink_open=None,
+                            playable_url=None,
+                            event_id=event_id,
+                            conn=conn,
+                        )
+                        actual_provider = get_service_display_name(logical_service)
+                    elif scheme in ("http", "https"):
+                        # For web URLs, check the domain for better labeling
+                        if "victoryplus.com" in deeplink_url:
+                            actual_provider = "Victory+"
+                        elif "gothamfc.com" in deeplink_url:
+                            actual_provider = "Gotham FC"
+                        elif "gothamsports.com" in deeplink_url:
+                            actual_provider = "Gotham Sports"
+                        elif "watch.tbs.com" in deeplink_url or "watchtbs" in deeplink_url:
+                            actual_provider = "TBS"
+                        else:
+                            actual_provider = "Web"
+                except Exception as e:
+                    # If detection fails, we'll use fallback below
+                    pass
+            
+            # Fallback: use database channel_name provider only if detection completely failed
+            if not actual_provider:
                 actual_provider = provider
 
             if reason:

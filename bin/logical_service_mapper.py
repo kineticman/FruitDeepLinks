@@ -25,6 +25,12 @@ LOGICAL_SERVICE_MAP = {
     'tv.apple.com': 'apple_tv',  # Special - needs league lookup
     'kayosports.com.au': 'kayo_web',
     'www.kayosports.com.au': 'kayo_web',
+    'watch.fanatiz.com': 'fanatiz_web',
+    'www.fanatiz.com': 'fanatiz_web',
+    'gothamsports.com': 'gotham',
+    'www.gothamsports.com': 'gotham',
+    'beinsports.com': 'bein',
+    'www.beinsports.com': 'bein',
 }
 
 # Display names for logical services
@@ -59,11 +65,17 @@ SERVICE_DISPLAY_NAMES = {
     'mlb': 'MLB.TV',
     'nhl': 'NHL.TV',
     
+    # Niche sports services
+    'victory': 'Victory+',
+    'gotham': 'Gotham Sports',
+    'bein': 'beIN Sports',
+    
     # Web-based (new logical services)
     'peacock_web': 'Peacock (Web)',
     'max': 'Max',
     'f1tv': 'F1 TV',
     'kayo_web': 'Kayo Sports',
+    'fanatiz_web': 'Fanatiz Soccer',
     'apple_mls': 'Apple MLS',
     'apple_mlb': 'Apple MLB',
     'apple_nba': 'Apple NBA',
@@ -270,6 +282,18 @@ def get_logical_service_for_playable(
     if provider == 'kayo':
         return 'kayo_web'
     
+    # Victory+ provider: map to victory
+    if provider == 'victory':
+        return 'victory'
+    
+    # Gotham Sports provider: map to gotham
+    if provider == 'gotham':
+        return 'gotham'
+    
+    # beIN Sports provider: map to bein
+    if provider == 'bein':
+        return 'bein'
+    
     # Non-web providers: use provider as-is
     if provider not in ('http', 'https', None, ''):
         return provider
@@ -428,6 +452,10 @@ def get_logical_service_priority(service_code: str) -> int:
         'open.dazn.com': 17,
         'f1tv': 18,
         'kayo_web': 19,  # Kayo Sports (Australia)
+        'bein': 19,  # beIN Sports (international/regional)
+        'fanatiz_web': 20,  # Fanatiz Soccer (Latin America / international)
+        'victory': 19,   # Victory+ (WHL, LOVB, other niche sports)
+        'gotham': 20,    # Gotham Sports (MSG/YES Network - NYC regional)
         'marquee': 20,   # Marquee Sports Network (Chicago regional)
         'vixapp': 21,
         'aiv_vix_premium': 21,       # ViX on Amazon - same as direct

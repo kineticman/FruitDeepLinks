@@ -330,7 +330,12 @@ def main(argv=None):
     parser.add_argument(
         "--skip-scrape",
         action="store_true",
-        help="Skip scraping steps, only run ingest and export from existing data.",
+        help="Skip all scraping steps (Apple TV, Kayo, Fanatiz, beIN, Victory+, Gotham, ESPN). Use existing data files.",
+    )
+    parser.add_argument(
+        "--force-apple-import",
+        action="store_true",
+        help="Force Apple TV import even if database hasn't changed (used with --skip-scrape).",
     )
     args = parser.parse_args(argv)
 
@@ -360,11 +365,12 @@ def main(argv=None):
     print(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
-    # Total steps in this pipeline
-    total_steps = 13
+    # Total steps in this pipeline (updated for beIN Sports)
+    total_steps = 15  # Was 13, now 15 (added beIN scrape + import)
 
-    # Get --skip-scrape flag from parsed arguments
+    # Get flags from parsed arguments
     skip_scrape = args.skip_scrape
+    force_apple_import = args.force_apple_import
 
     # Fresh-install defensive step: bootstrap Apple UTS auth tokens if missing/invalid.
     # Prevents brand new installs from failing with:
@@ -436,6 +442,39 @@ def main(argv=None):
             "python3", "kayo_scrape.py",
             "--out", str(kayo_json),
             "--days", kayo_days,
+        ]):
+            return 1
+
+    # Step 2a: Scrape Fanatiz Soccer
+    # Note: No --days filter - Fanatiz returns ~1,300 future events (full season, ~10 months)
+    fanatiz_json = OUT_DIR / "fanatiz_raw.json"
+
+    if skip_scrape:
+        print("\n" + "=" * 60)
+        print(f"[2a/{total_steps}] Scraping Fanatiz Soccer (all future events). SKIPPED")
+        print("=" * 60)
+        if not fanatiz_json.exists():
+            print(f"WARNING: --skip-scrape set but {fanatiz_json} not found; Fanatiz ingest will be skipped.")
+    else:
+        if not run_step("2a", total_steps, "Scraping Fanatiz Soccer (all future events)", [
+            "python3", "fanatiz_scrape.py",
+            "--out", str(fanatiz_json),
+        ]):
+            return 1
+
+    # Step 2b: Scrape beIN Sports
+    bein_json = OUT_DIR / "bein_snapshot.json"
+    
+    if skip_scrape:
+        print("\n" + "=" * 60)
+        print(f"[2b/{total_steps}] Scraping beIN Sports EPG. SKIPPED")
+        print("=" * 60)
+        if not bein_json.exists():
+            print(f"WARNING: --skip-scrape set but {bein_json} not found; beIN ingest will be skipped.")
+    else:
+        if not run_step("2b", total_steps, "Scraping beIN Sports EPG", [
+            "python3", "bein_scrape.py",
+            "--out", str(bein_json),
         ]):
             return 1
 
@@ -536,7 +575,6 @@ def main(argv=None):
     # Step 6: Import Apple TV events (DB-to-DB from apple_events.db)
     # NOTE: Step 6 can be slow (GZIP + JSON parse). If --skip-scrape was used and the Apple DB
     # hasn't changed since the last successful import, we skip this step to keep "Skip Scrape" fast.
-    force_apple_import = "--force-apple-import" in sys.argv
 
     if (skip_scrape or skip_apple) and (not force_apple_import) and _apple_import_is_fresh(APPLE_DB_PATH):
         print("\n" + "=" * 60)
@@ -606,6 +644,77 @@ def main(argv=None):
             return 1
     else:
         print(f"\n[7/{total_steps}] Kayo data not found at {kayo_json}, skipping ingest")
+
+    # Step 7-fanatiz: Import Fanatiz events
+    fanatiz_json = OUT_DIR / "fanatiz_raw.json"
+    if fanatiz_json.exists():
+        if not run_step("7-fanatiz", total_steps, "Importing Fanatiz events to database", [
+            "python3", "ingest_fanatiz.py",
+            "--db", str(DB_PATH),
+            "--fanatiz-json", str(fanatiz_json),
+        ]):
+            return 1
+    else:
+        print(f"\n[7-fanatiz/{total_steps}] Fanatiz data not found at {fanatiz_json}, skipping ingest")
+
+    # Step 7-bein: Import beIN Sports events
+    bein_json = OUT_DIR / "bein_snapshot.json"
+    if bein_json.exists():
+        if not run_step("7-bein", total_steps, "Importing beIN Sports events to database", [
+            "python3", "bein_import.py",
+            "--bein-json", str(bein_json),
+            "--fruit-db", str(DB_PATH),
+        ]):
+            return 1
+    else:
+        print(f"\n[7-bein/{total_steps}] beIN data not found at {bein_json}, skipping ingest")
+
+    # Step 7a: Scrape Victory+ events
+    # Victory+ uses guest authentication (no user credentials required)
+    # Session is cached in the database, so authentication only happens once
+    if skip_scrape:
+        print("\n" + "=" * 60)
+        print(f"[7a/{total_steps}] Scraping Victory+ events. SKIPPED")
+        print("=" * 60)
+    else:
+        print("\n" + "=" * 60)
+        print(f"[7a/{total_steps}] Scraping Victory+ events")
+        print("=" * 60)
+        # Victory+ scrape is non-fatal - don't stop pipeline if it fails
+        # The scraper handles import internally (no separate ingest step needed)
+        run_step("7a", total_steps, "Scraping Victory+ events (WHL, LOVB, niche sports)", [
+            "python3", "victory_scraper.py",
+            "--fruit-db", str(DB_PATH),
+        ], allow_fail=True)
+
+    # Step 7a-gotham: Scrape Gotham Sports (MSG/YES Network)
+    # Self-contained scraper that handles both scraping and ingestion
+    # NYC regional sports: Knicks, Rangers, Islanders, Devils, Yankees, Nets
+    if skip_scrape:
+        print("\n" + "=" * 60)
+        print(f"[7a-gotham/{total_steps}] Scraping Gotham Sports. SKIPPED")
+        print("=" * 60)
+    else:
+        gotham_enabled = os.getenv("GOTHAM_ENABLED", "true").lower() not in ("0", "false", "no")
+        if gotham_enabled:
+            gotham_days = os.getenv("GOTHAM_DAYS", "7")
+            gotham_zone = os.getenv("GOTHAM_ZONE", "zone-1")
+            print("\n" + "=" * 60)
+            print(f"[7a-gotham/{total_steps}] Scraping Gotham Sports (MSG/YES - {gotham_days} days)")
+            print("=" * 60)
+            # Gotham scrape is non-fatal - don't stop pipeline if it fails
+            # The scraper handles import internally (no separate ingest step needed)
+            run_step("7a-gotham", total_steps, f"Scraping Gotham Sports ({gotham_zone}, {gotham_days} days)", [
+                "python3", "gotham_integration.py",
+                "--db", str(DB_PATH),
+                "--days", gotham_days,
+                "--zone", gotham_zone,
+            ], allow_fail=True)
+        else:
+            print("\n" + "=" * 60)
+            print(f"[7a-gotham/{total_steps}] Scraping Gotham Sports. DISABLED")
+            print("=" * 60)
+            print("Set GOTHAM_ENABLED=true to enable")
 
     # Step 7b: Scrape ESPN Watch Graph (skippable, runs after Apple TV import)
     espn_days = os.getenv("ESPN_DAYS", "7")
