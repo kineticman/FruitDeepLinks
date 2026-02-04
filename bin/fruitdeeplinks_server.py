@@ -2539,6 +2539,10 @@ def api_wipe_event_data():
             fruit_db = Path(DB_PATH)
             if fruit_db.exists():
                 log(f"Wiping event data from {fruit_db}", "INFO")
+                
+                # Store original size for comparison
+                original_size = fruit_db.stat().st_size
+                
                 conn = sqlite3.connect(str(fruit_db))
                 cur = conn.cursor()
                 
@@ -2546,49 +2550,71 @@ def api_wipe_event_data():
                     # Enable foreign keys for CASCADE behavior
                     cur.execute("PRAGMA foreign_keys = ON")
                     
+                    # Helper function to check if table exists
+                    def table_exists(table_name):
+                        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+                        return cur.fetchone() is not None
+                    
+                    # Helper function to safely count rows
+                    def safe_count(table_name):
+                        if table_exists(table_name):
+                            cur.execute(f"SELECT COUNT(*) FROM {table_name}")
+                            return cur.fetchone()[0]
+                        return 0
+                    
+                    # Helper function to safely delete from table
+                    def safe_delete(table_name, description=None):
+                        if table_exists(table_name):
+                            desc = description or table_name
+                            log(f"Deleting {desc}...", "INFO")
+                            cur.execute(f"DELETE FROM {table_name}")
+                            return True
+                        else:
+                            log(f"Skipping {table_name} (table doesn't exist)", "INFO")
+                            return False
+                    
                     # Count before deletion
-                    cur.execute("SELECT COUNT(*) FROM events")
-                    stats["events_deleted"] = cur.fetchone()[0]
+                    stats["events_deleted"] = safe_count("events")
+                    stats["playables_deleted"] = safe_count("playables")
                     
-                    cur.execute("SELECT COUNT(*) FROM playables")
-                    stats["playables_deleted"] = cur.fetchone()[0]
-                    
-                    cur.execute("SELECT COUNT(*) FROM lanes")
-                    lane_count = cur.fetchone()[0]
-                    cur.execute("SELECT COUNT(*) FROM adb_lanes")
-                    adb_lane_count = cur.fetchone()[0]
+                    lane_count = safe_count("lanes")
+                    adb_lane_count = safe_count("adb_lanes")
                     stats["lanes_deleted"] = lane_count + adb_lane_count
                     
                     # Wipe event data tables
                     log("Deleting events (CASCADE will handle playables, event_images)...", "INFO")
-                    cur.execute("DELETE FROM events")
+                    safe_delete("events")
                     
                     # Explicitly delete playables and event_images (defensive, in case CASCADE doesn't fire)
-                    log("Deleting playables and event_images...", "INFO")
-                    cur.execute("DELETE FROM playables")
-                    cur.execute("DELETE FROM event_images")
+                    safe_delete("playables", "playables")
+                    safe_delete("event_images", "event_images")
                     
-                    log("Deleting lanes and lane_events...", "INFO")
-                    cur.execute("DELETE FROM lane_events")
-                    cur.execute("DELETE FROM lanes")
+                    # Delete lane data
+                    safe_delete("lane_events", "lane events")
+                    safe_delete("lanes", "lanes")
+                    safe_delete("adb_lanes", "ADB lanes")
                     
-                    log("Deleting ADB lanes...", "INFO")
-                    cur.execute("DELETE FROM adb_lanes")
+                    # Delete Amazon scraped data (may not exist in older databases)
+                    amazon_deleted = []
+                    if safe_delete("amazon_channels", "Amazon channels"):
+                        amazon_deleted.append("amazon_channels")
+                    if safe_delete("amazon_channel_history", "Amazon channel history"):
+                        amazon_deleted.append("amazon_channel_history")
                     
-                    log("Deleting Amazon scraped data...", "INFO")
-                    cur.execute("DELETE FROM amazon_channels")
-                    cur.execute("DELETE FROM amazon_channel_history")
+                    if amazon_deleted:
+                        log(f"✓ Deleted Amazon data: {', '.join(amazon_deleted)}", "INFO")
                     
-                    # Reset sqlite_sequence for auto-increment tables
-                    cur.execute("DELETE FROM sqlite_sequence WHERE name IN ('adb_lanes', 'amazon_channel_history')")
+                    # Reset sqlite_sequence for auto-increment tables (only if they exist)
+                    if table_exists("sqlite_sequence"):
+                        cur.execute("SELECT name FROM sqlite_sequence WHERE name IN ('adb_lanes', 'amazon_channel_history')")
+                        sequence_tables = [row[0] for row in cur.fetchall()]
+                        if sequence_tables:
+                            placeholders = ','.join(['?' for _ in sequence_tables])
+                            cur.execute(f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})", sequence_tables)
+                            log(f"✓ Reset auto-increment for: {', '.join(sequence_tables)}", "INFO")
                     
                     conn.commit()
                     log(f"✅ Wiped {stats['events_deleted']} events, {stats['playables_deleted']} playables, {stats['lanes_deleted']} lanes", "INFO")
-                    
-                    # Compact database (must be outside transaction)
-                    log("Compacting database (VACUUM)...", "INFO")
-                    cur.execute("VACUUM")
-                    log("✅ Database compacted", "INFO")
                     
                 except Exception as e:
                     conn.rollback()
@@ -2596,7 +2622,29 @@ def api_wipe_event_data():
                     log(error_msg, "ERROR")
                     stats["errors"].append(error_msg)
                 finally:
+                    # Close connection before VACUUM
                     conn.close()
+                
+                # VACUUM must be run in a separate connection outside any transaction
+                try:
+                    log("Compacting database (VACUUM)...", "INFO")
+                    vacuum_conn = sqlite3.connect(str(fruit_db))
+                    # Isolation level None allows VACUUM to run outside transaction
+                    vacuum_conn.isolation_level = None
+                    vacuum_cur = vacuum_conn.cursor()
+                    vacuum_cur.execute("VACUUM")
+                    vacuum_conn.close()
+                    
+                    # Check new size
+                    new_size = fruit_db.stat().st_size
+                    size_diff = original_size - new_size
+                    size_diff_mb = size_diff / (1024 * 1024)
+                    log(f"✅ Database compacted - freed {size_diff_mb:.2f} MB", "INFO")
+                    stats["space_freed_mb"] = round(size_diff_mb, 2)
+                except Exception as e:
+                    error_msg = f"Error vacuuming database: {str(e)}"
+                    log(error_msg, "WARNING")
+                    stats["errors"].append(error_msg)
             
             # Delete Amazon GTI cache file
             amazon_cache = fruit_db.parent / "amazon_gti_cache.pkl"
@@ -2617,10 +2665,15 @@ def api_wipe_event_data():
                 try:
                     conn = sqlite3.connect(str(apple_db))
                     cur = conn.cursor()
-                    cur.execute("DELETE FROM apple_events")
-                    conn.commit()
+                    # Check if table exists before deleting
+                    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='apple_events'")
+                    if cur.fetchone():
+                        cur.execute("DELETE FROM apple_events")
+                        conn.commit()
+                        log("✅ Wiped apple_events.db cache", "INFO")
+                    else:
+                        log("⚠️ apple_events table not found in apple_events.db", "WARNING")
                     conn.close()
-                    log("✅ Wiped apple_events.db cache", "INFO")
                 except Exception as e:
                     error_msg = f"Error wiping apple_events.db: {str(e)}"
                     log(error_msg, "WARNING")
@@ -2633,11 +2686,17 @@ def api_wipe_event_data():
                 try:
                     conn = sqlite3.connect(str(espn_db))
                     cur = conn.cursor()
-                    cur.execute("DELETE FROM events")
-                    cur.execute("DELETE FROM feeds")
-                    conn.commit()
+                    # Check which tables exist
+                    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('events', 'feeds')")
+                    existing_tables = [row[0] for row in cur.fetchall()]
+                    if existing_tables:
+                        for table in existing_tables:
+                            cur.execute(f"DELETE FROM {table}")
+                        conn.commit()
+                        log(f"✅ Wiped espn_graph.db cache ({', '.join(existing_tables)})", "INFO")
+                    else:
+                        log("⚠️ No expected tables found in espn_graph.db", "WARNING")
                     conn.close()
-                    log("✅ Wiped espn_graph.db cache", "INFO")
                 except Exception as e:
                     error_msg = f"Error wiping espn_graph.db: {str(e)}"
                     log(error_msg, "WARNING")
