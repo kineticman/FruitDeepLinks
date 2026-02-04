@@ -2,7 +2,7 @@
 
 **Universal Sports Aggregator for Channels DVR**
 
-FruitDeepLinks leverages Apple TV's Sports aggregation APIs to build a unified sports EPG with deeplinks to 19+ streaming services. One guide to rule them all.
+FruitDeepLinks leverages Apple TV's Sports aggregation APIs to build a unified sports EPG with deeplinks to 23+ streaming services. One guide to rule them all.
 
 [![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org)
@@ -29,7 +29,42 @@ FruitDeepLinks creates virtual TV channels in Channels DVR with deeplinks that l
 
 ## 🆕 What's New
 
-### Latest Features
+### Latest Features (February 2026)
+
+**🛒 Amazon Channel Integration (Major Update)**
+- Advanced scraping system identifies which Amazon Prime Video Channel is required for each event
+- Discovers NBA League Pass, Peacock Premium, DAZN, FOX One, ViX Premium, Max, and 10+ other channels
+- Tracks channel requirements in new `amazon_channels` database table
+- `v_amazon_playables_with_channels` view provides comprehensive channel mapping
+- Async/parallel scraping with smart 7-day caching for performance
+- Detects "stale" events (404s) to maintain data accuracy
+- Foundation for future user-selectable Amazon channel filtering
+
+**🆕 Four New Streaming Services (Experimental)**
+- **Victory+** - Regional college sports content
+- **Fanatiz Soccer** - International soccer leagues
+- **beIN Sports** - International soccer, rugby, motorsports  
+- **Gotham Sports** - NYC regional sports (Knicks, Rangers, Islanders, Devils, Yankees, Nets)
+- Note: These services are marked EXPERIMENTAL - deeplink formats still being discovered
+- Event data scraped successfully, seeking community help to identify working deeplink patterns
+
+**✨ Enhanced Title Formatting**
+- ESPN-style league/sport prefixes for better event organization
+- Consistent title formatting across all export types
+- Improved metadata presentation in EPG
+
+**🎯 Genre Normalization**
+- Automatic cleanup of malformed categories
+- Prevents bad genre data from affecting filters
+- More reliable sports/league classification
+
+**⚡ Performance Improvements**
+- Hybrid scraping approach (Selenium + HTTP) for faster data collection
+- Improved `--skip-scrape` flag handling for rapid refreshes
+- Better provider detection in exports
+- 5,000 line log buffer (up from 500) for better debugging
+
+### Previous Features
 
 **🔥 ESPN Watch Graph API Integration**
 - Fixes ESPN deeplink compatibility with Fire TV and Android TV devices
@@ -208,12 +243,12 @@ If you’re unsure, **start with direct channels only** and ignore lanes/ADB unt
 
 ## 📺 Supported Services
 
-### Premium Sports (19+ Services)
+### Premium Sports (23+ Services)
 
 | Service       | Deeplink Type                 | Notes / Status                                      |
 |--------------|-------------------------------|-----------------------------------------------------|
 | ESPN+        | Native (`sportscenter://`) + API enrichment | ESPN Watch Graph API provides Fire TV-compatible deeplinks for 71.7% of events |
-| Prime Video  | Native (`aiv://`)             | Amazon sports deep links still being explored       |
+| Prime Video  | Native (`aiv://`)             | Amazon sports + 10+ channels (NBA League Pass, Peacock, DAZN, FOX One, etc.) - Advanced channel detection system identifies requirements |
 | Peacock      | Native + Web                  | NBC Sports & Peacock events                         |
 | Paramount+ (CBS Sports) | Native (`pplus://`)           | CBS Sports / Paramount+ competitions (preferred label) |
 | CBS Sports app | Native (`cbssportsapp://`)    | Direct CBS Sports app deeplinks (less common)          |
@@ -225,11 +260,17 @@ If you’re unsure, **start with direct channels only** and ignore lanes/ADB unt
 | Apple NBA    | Web                           | Apple TV NBA games                                  |
 | Apple NHL    | Web                           | Apple TV NHL games                                  |
 | DAZN         | Native (`dazn://`)            | DAZN sports                                         |
-| Kayo Sports  | Web (`kayo_web`)          | Australian sports (Cricket, AFL, NRL, Rugby, etc.) - Full integration | Australian sports (Cricket, AFL, NRL, etc.)         |
+| Kayo Sports  | Web (`kayo_web`)              | Australian sports (Cricket, AFL, NRL, Rugby, etc.) - Full integration |
 | F1 TV        | Web                           | F1 TV Pro content                                   |
 | ViX          | Native (`vixapp://`)          | Spanish-language sports                             |
 | NFL+         | Native (`nflctv://`)          | NFL+ games & replays                                |
-| TNT/truTV    | Native (`watchtbs://`)         | Turner Sports via Watch TBS app                     |
+| TNT/truTV    | Native (`watchtbs://`)        | Turner Sports via Watch TBS app                     |
+| **Victory+** | **EXPERIMENTAL**              | **Regional college sports - deeplinks being discovered** |
+| **Fanatiz**  | **EXPERIMENTAL**              | **International soccer - deeplinks being discovered** |
+| **beIN Sports** | **EXPERIMENTAL**           | **International soccer/rugby/motorsports - deeplinks being discovered** |
+| **Gotham Sports** | **EXPERIMENTAL**         | **NYC regional sports (Knicks, Rangers, etc.) - deeplinks being discovered** |
+
+**Note:** Services marked EXPERIMENTAL have full event scraping but deeplink formats are still being identified. Community help welcome!
 
 Actual event counts vary by season and scrape window.
 
@@ -503,8 +544,15 @@ FruitDeepLinks/
 │   ├── fruit_ingest_espn_graph.py # ESPN Watch Graph API scraper
 │   ├── fruit_enrich_espn.py      # ESPN Graph ID enrichment
 │   ├── fruit_import_appletv.py   # Import Apple TV data into SQLite
+│   ├── amazon2.py                # Amazon Prime Video Channel scraper (async/parallel)
 │   ├── kayo_scrape.py            # Kayo Sports scraper (Australia)
 │   ├── ingest_kayo.py            # Kayo data importer
+│   ├── fanatiz_scrape.py         # Fanatiz Soccer scraper [EXPERIMENTAL]
+│   ├── ingest_fanatiz.py         # Fanatiz data importer
+│   ├── bein_scrape.py            # beIN Sports scraper [EXPERIMENTAL]
+│   ├── bein_import.py            # beIN Sports importer
+│   ├── victory_scraper.py        # Victory+ scraper [EXPERIMENTAL]
+│   ├── gotham_integration.py     # Gotham Sports integration [EXPERIMENTAL]
 │   ├── fruit_build_lanes.py      # Build scheduled lanes (multisource_lanes) [BETA]
 │   ├── fruit_export_hybrid.py    # Direct channels XMLTV + M3U
 │   ├── fruit_export_lanes.py     # Lanes XMLTV + M3U [BETA]
@@ -513,15 +561,19 @@ FruitDeepLinks/
 │   ├── fruitdeeplinks_server.py  # Web dashboard + API + CDVR Detector
 │   ├── filter_integration.py     # Filtering logic
 │   ├── logical_service_mapper.py # Logical service mapping
+│   ├── adb_provider_mapper.py    # ADB provider mapping utilities
 │   ├── provider_utils.py         # Provider helpers
 │   ├── deeplink_converter.py     # Deeplink format conversion
 │   ├── xmltv_helpers.py          # XMLTV generation utilities
+│   ├── genre_utils.py            # Genre normalization utilities
+│   ├── reset_databases.py        # Database reset utility
 │   ├── migrate_*.py              # Database schema migrations
 │   └── (legacy peacock scripts)  # Backward compatibility
 ├── data/                         # SQLite databases
-│   ├── fruit_events.db           # Main event database
+│   ├── fruit_events.db           # Main event database (includes amazon_channels table)
 │   ├── apple_events.db           # Apple TV scraper cache
 │   ├── espn_graph.db             # ESPN Watch Graph data
+│   ├── amazon_gti_cache.pkl      # Amazon scraper 7-day cache
 │   └── apple_uts_auth.json       # Apple auth tokens
 ├── out/                          # Generated files
 │   ├── direct.xml                # Direct XMLTV
@@ -531,7 +583,10 @@ FruitDeepLinks/
 │   ├── multisource_lanes_chrome.m3u  # Chrome Capture M3U [BETA]
 │   ├── adb_lanes.xml             # ADB lanes XMLTV [BETA]
 │   ├── adb_lanes_*.m3u           # Provider-specific M3U files [BETA]
-│   └── kayo_raw.json             # Kayo scraper output
+│   ├── kayo_raw.json             # Kayo scraper output
+│   ├── fanatiz_raw.json          # Fanatiz scraper output
+│   ├── bein_snapshot.json        # beIN Sports scraper output
+│   └── amazon_scrape_*.csv       # Amazon scraper debug CSVs
 ├── templates/                    # Flask HTML templates
 │   ├── events.html               # Main event listing
 │   ├── filters.html              # Filter configuration
@@ -648,7 +703,7 @@ Your Streaming Apps (via Deeplinks)
 
 ### Example 3: Premium Everything
 
-**Enabled Services:** All 19.
+**Enabled Services:** All 23 (including 4 experimental).
 
 **Disabled Leagues:**
 
@@ -709,14 +764,14 @@ docker port fruitdeeplinks
 From real deployment (example):
 
 ```text
-Database: 1,483 total events
-After filtering: 133 events (91% reduction)
-Services enabled: 12 out of 19
+Database: ~1,500 total events (varies by season)
+After filtering: 100-200 events (depends on service selection)
+Services available: 23 total (19 stable + 4 experimental)
 
-Scrape time: ~8 minutes
+Scrape time: ~10 minutes (with all services enabled)
 Filter apply time: ~10 seconds
 Memory usage: ~600MB
-Database size: ~15MB
+Database size: ~18MB
 ```
 
 ---
@@ -725,6 +780,11 @@ Database size: ~15MB
 
 ### Recently Completed
 
+- [x] **Amazon Channel Integration** - Advanced scraping system identifies which Prime Video Channel events require (NBA League Pass, Peacock, DAZN, FOX One, Max, ViX, and more)
+- [x] **Four New Streaming Services (Experimental)** - Victory+, Fanatiz, beIN Sports, Gotham Sports integrations
+- [x] **Enhanced Title Formatting** - ESPN-style league/sport prefixes across all exports
+- [x] **Genre Normalization** - Automatic cleanup of malformed categories
+- [x] **Performance Improvements** - Hybrid scraping (Selenium + HTTP), improved --skip-scrape handling, 5,000 line log buffer
 - [x] **ESPN Watch Graph API Integration** - Fire TV-compatible deeplinks for ESPN events (71.7% match rate)
 - [x] **Database Event Cleanup** - Automatic removal of old events to improve performance
 - [x] **CDVR Detector** - Automatic app launching when tuning to Fruit Lanes
@@ -736,10 +796,12 @@ Database size: ~15MB
 
 ### Coming Soon
 
-- [ ] Stabilize Chrome Capture (HTTP deeplink mapping + docs).
-- [ ] Team-based filtering.
-- [ ] Time-of-day filters.
-- [ ] Multi-user profiles.
+- [ ] User-selectable Amazon Prime Video Channel filtering (NBA League Pass, Peacock via Prime, etc.)
+- [ ] Complete deeplink discovery for experimental services (Victory+, Fanatiz, beIN, Gotham)
+- [ ] Stabilize Chrome Capture (HTTP deeplink mapping + docs)
+- [ ] Team-based filtering
+- [ ] Time-of-day filters
+- [ ] Multi-user profiles
 
 ### Future
 
