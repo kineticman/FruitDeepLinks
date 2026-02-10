@@ -117,6 +117,9 @@ class NesinIngestAdapter:
             logger.warning("Event missing external_id")
             return None
         
+        # Use airing_type from scraper (replay/premiere/live)
+        airing_type = raw_event.get("airing_type", "premiere")
+        
         normalized = {
             "id": external_id,
             "pvid": external_id,  # CRITICAL: Provider ID for M3U export
@@ -127,7 +130,7 @@ class NesinIngestAdapter:
             "synopsis_brief": raw_event.get("description", "")[:100],
             "channel_name": raw_event.get("channel", "NESN"),
             "channel_provider_id": self.PROVIDER,
-            "airing_type": "premiere",
+            "airing_type": airing_type,  # "premiere", "replay", or "live"
             "classification_json": '[]',
             "genres_json": json.dumps(self._get_filtered_genres(raw_event.get("categories", []))),
             "content_segments_json": '[]',
@@ -147,6 +150,8 @@ class NesinIngestAdapter:
                 "show_code": raw_event.get("show_code", ""),
                 "channel_uuid": raw_event.get("channel_uuid", ""),
                 "xmltv_id": raw_event.get("xmltv_id", ""),
+                "sub_type": raw_event.get("sub_type"),  # Original XMLTV value: "(R)", "NEW", "LIVE"
+                "is_replay": raw_event.get("replay", False),
             })
         }
         

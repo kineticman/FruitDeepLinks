@@ -222,7 +222,30 @@ def parse_xmltv(root: ET.Element, channel_name: str, channel_config: Dict) -> Li
                 desc_elem = prog.find('desc')
                 description = desc_elem.text if desc_elem is not None else ""
                 
-                # Extract duration (in seconds)
+                # Extract sub-type from XMLTV
+                # Values: "(R)" = Replay/Repeat, "NEW" = New episode, "LIVE" = Live broadcast
+                sub_type_elem = prog.find('sub-type')
+                sub_type = sub_type_elem.text.strip() if sub_type_elem is not None and sub_type_elem.text else None
+                
+                # Map XMLTV sub-type to replay flag and airing_type
+                is_replay = False
+                airing_type = "premiere"  # Default
+                
+                if sub_type:
+                    if sub_type == "(R)":
+                        # (R) = Replay/Repeat - established content
+                        is_replay = True
+                        airing_type = "replay"
+                    elif sub_type == "NEW":
+                        # NEW = First airing/new episode
+                        is_replay = False
+                        airing_type = "premiere"
+                    elif sub_type == "LIVE":
+                        # LIVE = Live broadcast
+                        is_replay = False
+                        airing_type = "live"
+                
+                # Duration extraction
                 duration_elem = prog.find('length')
                 duration_secs = 0
                 if duration_elem is not None and duration_elem.text:
@@ -313,7 +336,9 @@ def parse_xmltv(root: ET.Element, channel_name: str, channel_config: Dict) -> Li
                     "image_url": image_url,
                     "sport": "",  # NESN has mixed content
                     "categories": categories,
-                    "replay": False
+                    "sub_type": sub_type,  # XMLTV value: "(R)", "NEW", "LIVE"
+                    "airing_type": airing_type,  # Mapped value: "replay", "premiere", "live"
+                    "replay": is_replay  # Boolean: True if (R), False otherwise
                 }
                 
                 events.append(event)

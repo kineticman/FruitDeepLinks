@@ -110,10 +110,14 @@ def is_live_broadcast(event: Dict) -> bool:
     
     Returns True if event is likely a live broadcast, False otherwise.
     """
-    # Check airing_type field
+    # Check airing_type field - explicitly exclude replays
     airing_type = event.get("airing_type", "")
-    if airing_type and "live" in str(airing_type).lower():
-        return True
+    if airing_type:
+        if airing_type == "replay":
+            # Replays are never marked as live
+            return False
+        if "live" in str(airing_type).lower():
+            return True
     
     # Check raw_attributes_json for provider-specific markers
     raw_json = event.get("raw_attributes_json")

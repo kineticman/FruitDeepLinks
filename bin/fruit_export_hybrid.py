@@ -538,7 +538,11 @@ def build_direct_xmltv(
         if img_url:
             ET.SubElement(prog, "icon", src=img_url)
 
-        ET.SubElement(prog, "live").text = "1"
+        # Only mark as live if it's truly live or a premiere (not a replay)
+        # Replays should not be marked as live content
+        airing_type = event.get('airing_type')
+        if airing_type not in ('replay',):
+            ET.SubElement(prog, "live").text = "1"
 
         # Post-event placeholders (24h in 1h blocks)
         current = event_end
