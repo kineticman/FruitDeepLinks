@@ -79,18 +79,33 @@ class NesinIngestAdapter:
             logger.error(f"✗ Schema verification failed: {e}")
             sys.exit(1)
     
-    def generate_deeplinks(self, event_id: str) -> Dict[str, str]:
+    def generate_deeplinks(self, normalized: Dict) -> Dict[str, str]:
         """
-        Generate NESN deeplinks for an event.
+        Generate NESN deeplinks for an event using programme_id.
+        
+        NESN uses ViewLift backend which expects programme IDs in the URL.
+        Format: https://watch.nesn.com/{programme_id}
         
         Args:
-            event_id: External event ID (e.g., "tvschedule-1707440400000-BEC")
+            normalized: Normalized event dict containing raw_attributes_json with programme_id
         
         Returns:
             Dictionary with android_deeplink and web_url
         """
-        android_deeplink = f"com.nesn.nesnplayer://play/{event_id}"
-        web_url = f"https://watch.nesn.com/play/{event_id}"
+        # Extract programme_id from raw_attributes_json (it's nested there during normalization)
+        raw_attrs_json = normalized.get("raw_attributes_json", "{}")
+        try:
+            raw_attrs = json.loads(raw_attrs_json) if isinstance(raw_attrs_json, str) else raw_attrs_json
+        except json.JSONDecodeError:
+            raw_attrs = {}
+        
+        programme_id = raw_attrs.get("programme_id")
+        
+        if not programme_id:
+            raise ValueError(f"programme_id required to generate deeplinks for event {normalized.get('id')}")
+        
+        android_deeplink = f"com.nesn.nesnplayer://play/{programme_id}"
+        web_url = f"https://watch.nesn.com/{programme_id}"
         
         return {
             "android_deeplink": android_deeplink,
@@ -298,11 +313,13 @@ class NesinIngestAdapter:
                 exists = self.cursor.fetchone() is not None
                 
                 if exists:
-                    # Update existing playable
-                    update_fields = ["deeplink_play = ?", "playable_url = ?", "priority = ?"]
+                    # Update existing playable - include http_deeplink_url
+                    update_fields = ["deeplink_play = ?", "deeplink_open = ?", "playable_url = ?", "http_deeplink_url = ?", "priority = ?"]
                     update_values = [
                         playable["deeplink_play"],
+                        playable["deeplink_open"],
                         playable["playable_url"],
+                        playable["http_deeplink_url"],
                         playable["priority"],
                         playable["event_id"],
                         playable["playable_id"]
@@ -377,7 +394,7 @@ class NesinIngestAdapter:
                     continue
                 
                 # Generate and insert deeplinks
-                deeplinks = self.generate_deeplinks(normalized["id"])
+                deeplinks = self.generate_deeplinks(normalized)
                 if not self.insert_playables(normalized["id"], deeplinks):
                     continue
                 
