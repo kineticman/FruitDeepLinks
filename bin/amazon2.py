@@ -266,9 +266,9 @@ def extract_gtis(
                     JOIN events e ON e.id = p.event_id
                     WHERE p.provider='aiv'
                       AND (e.start_utc IS NULL OR e.start_utc <= datetime('now', ?))
-                      AND (e.end_utc IS NULL OR e.end_utc >= datetime('now', ?))
+                      AND (e.start_utc IS NULL OR e.start_utc >= datetime('now'))
                 """
-                cur = conn.execute(sql, (future_mod, past_mod))
+                cur = conn.execute(sql, (future_mod,))
                 for row in cur.fetchall():
                     gtis.extend(_extract_gtis_from_row(row))
 
@@ -434,12 +434,16 @@ async def scrape_one(playwright, browser, gti: str, timeout_ms: int, retries: in
 
             resp = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
             resp_status = resp.status if resp else 0
+            LOG.debug("[GOTO] Success for GTI=%s status=%d", gti, resp_status)
 
             # Wait for network to be idle (no pending requests) to avoid "page is navigating" errors
             try:
+                LOG.debug("[WAIT] Starting networkidle wait for GTI=%s", gti)
                 await page.wait_for_load_state("networkidle", timeout=5000)
-            except Exception:
+                LOG.debug("[WAIT] networkidle complete for GTI=%s", gti)
+            except Exception as wait_err:
                 # If networkidle times out, continue anyway - we have domcontentloaded
+                LOG.debug("[WAIT] networkidle timeout/error for GTI=%s: %s", gti, wait_err)
                 pass
 
             # light wait for client-rendered data without requiring full load
@@ -452,9 +456,12 @@ async def scrape_one(playwright, browser, gti: str, timeout_ms: int, retries: in
             html = ""
             for content_attempt in range(3):
                 try:
+                    LOG.debug("[CONTENT] Attempt %d for GTI=%s", content_attempt + 1, gti)
                     html = await page.content()
+                    LOG.debug("[CONTENT] Success for GTI=%s (attempt %d)", gti, content_attempt + 1)
                     break
                 except Exception as e:
+                    LOG.debug("[CONTENT] Error on attempt %d for GTI=%s: %s", content_attempt + 1, gti, e)
                     if content_attempt < 2 and "navigating and changing" in str(e):
                         # Transient navigation error - retry after brief wait
                         await page.wait_for_timeout(500)
@@ -522,10 +529,17 @@ async def scrape_one(playwright, browser, gti: str, timeout_ms: int, retries: in
             # retry with fresh context
         except Exception as e:
             last_err = f"{type(e).__name__}: {e}"
-            status = "ERROR"
-            failure_reason = last_err
-            LOG.warning("[RESULT] %d/%d GTI=%s status=ERROR attempt=%d error=%s",
-                        progress_idx, total, gti, attempt + 1, last_err)
+            # Treat transient navigation errors as STALE (unknown) rather than ERROR
+            # This allows them to be retried next run instead of being permanently marked as ERROR
+            if "navigating and changing" in str(e) or "page is navigating" in str(e):
+                status = "STALE"
+                failure_reason = "TRANSIENT_NAVIGATION_ERROR"
+                LOG.warning("[STALE] %d/%d GTI=%s attempt=%d reason=transient_navigation", progress_idx, total, gti, attempt + 1)
+            else:
+                status = "ERROR"
+                failure_reason = last_err
+                LOG.warning("[RESULT] %d/%d GTI=%s status=ERROR attempt=%d error=%s",
+                            progress_idx, total, gti, attempt + 1, last_err)
         finally:
             try:
                 if page:
