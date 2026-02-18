@@ -304,6 +304,10 @@ def get_logical_service_for_playable(
     if provider == 'nesn':
         return 'nesn'
     
+    # MLB At Bat provider (Apple TV uses mlbatbat:// scheme for MLB.TV)
+    if provider == 'mlbatbat':
+        return 'mlb'
+    
     # Non-web providers: use provider as-is
     if provider not in ('http', 'https', None, ''):
         return provider

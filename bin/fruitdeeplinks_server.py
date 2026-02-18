@@ -1420,7 +1420,7 @@ def extract_service_name(deeplink: str) -> str:
         (["peacock://", "peacocktv.com"], "Peacock"),
         (["max.com", "max://", "hbomax.com"], "Max"),
         (["formula1.com", "f1tv://"], "F1 TV"),
-        (["mlb.com/tv", "mlbtv://"], "MLB.tv"),
+        (["mlb.com/tv", "mlbtv://", "mlbatbat://"], "MLB.TV"),
         (["open.dazn.com://", "dazn.com"], "DAZN"),
         (["kayosports.com.au"], "Kayo Sports"),
         (["nba.com/watch", "watch.nba.com"], "NBA League Pass"),
