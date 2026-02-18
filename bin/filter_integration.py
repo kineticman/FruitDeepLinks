@@ -404,7 +404,19 @@ def get_filtered_playables(
 
             # Filter by enabled services
             if enabled_services:  # If list not empty, filter
-                if playable["logical_service"] in enabled_services:
+                ls = playable["logical_service"]
+                # Direct match
+                if ls in enabled_services:
+                    playables.append(playable)
+                # OLD-STYLE: 'aiv' alone with no specific aiv_* sub-services = all Amazon allowed.
+                # This handles legacy prefs (e.g. ["aiv", "espn_plus"]) that predate the
+                # per-service Amazon UI. If the user has explicitly listed any aiv_* sub-services,
+                # those are the source of truth and this wildcard does NOT apply.
+                elif (
+                    ls.startswith("aiv")
+                    and "aiv" in enabled_services
+                    and not any(s.startswith("aiv_") for s in enabled_services)
+                ):
                     playables.append(playable)
             else:
                 # No filtering - include all
@@ -594,60 +606,42 @@ def get_best_deeplink_for_event(
 def expand_enabled_services_for_amazon(
     conn: sqlite3.Connection, enabled_services: List[str]
 ) -> List[str]:
-    """Expand 'aiv' wildcard to include all aiv_* logical services in the database.
+    """Resolve Amazon service filtering from enabled_services.
 
-    Historically we stored a single 'aiv' master toggle in enabled_services,
-    but playables use sub-service schemes like 'aiv_aggregator', 'aiv_vix_premium', etc.
-    Treating 'aiv' as enabling all aiv_* schemes preserves backward compatibility
-    so existing filter configs don't silently drop all Amazon events.
+    Handles two historical pref formats:
 
-    Legacy DB aliases (e.g. 'aiv_fox') are mapped to their canonical form ('aiv_fox_one')
-    so that disabling the canonical in the UI correctly excludes the aliased playables.
-    The actual alias normalization at filter-check time is done in get_filtered_playables.
+    1. OLD-STYLE (pre per-service UI): enabled_services contains only 'aiv'
+       with no individual aiv_* entries. Treat 'aiv' as a wildcard — all
+       Amazon sub-services are allowed. Return enabled_services unchanged;
+       get_filtered_playables handles the wildcard check.
+
+    2. NEW-STYLE (per-service UI): enabled_services contains specific aiv_*
+       entries alongside 'aiv'. The individual entries are the source of
+       truth — 'aiv' is just the master toggle. Return as-is; the explicit
+       aiv_* list drives filtering in get_filtered_playables.
+
+    Also normalizes legacy DB aliases (e.g. 'aiv_fox' -> 'aiv_fox_one').
 
     Args:
         conn: Database connection
         enabled_services: List of enabled service codes from user preferences
 
     Returns:
-        Expanded list with all matching aiv_* services added when 'aiv' is present
+        Normalized enabled_services list (aliases resolved, no expansion)
     """
-    # Map legacy DB logical_service values -> canonical UI filter codes.
-    # get_filtered_playables normalizes these aliases at check time,
-    # so only the canonical form needs to be in the enabled set.
     _ALIASES: Dict[str, str] = {
         "aiv_fox": "aiv_fox_one",   # legacy code still present in some playables rows
     }
 
     try:
-        if not enabled_services or "aiv" not in enabled_services:
+        if not enabled_services:
             return enabled_services
 
-        expanded = set(enabled_services)
+        # Normalize any legacy aliases in the stored list
+        normalized = [_ALIASES.get(s, s) for s in enabled_services]
+        return normalized
 
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT DISTINCT logical_service
-            FROM playables
-            WHERE provider='aiv'
-              AND logical_service IS NOT NULL
-              AND logical_service LIKE 'aiv_%'
-            """
-        )
-        for (ls,) in cur.fetchall():
-            if not ls:
-                continue
-            # Only add canonical form - alias normalization happens at filter time
-            canonical = _ALIASES.get(ls, ls)
-            expanded.add(canonical)
-
-        # Ensure the aggregator bucket is always covered
-        expanded.add("aiv_aggregator")
-
-        return sorted(expanded)
     except Exception:
-        # Fail safe: never break export on expansion issues
         return enabled_services
 
 

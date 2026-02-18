@@ -2942,6 +2942,85 @@ def api_filters_preferences():
             )
 
 
+@app.route("/api/filters/clear-stale", methods=["POST"])
+def api_filters_clear_stale():
+    """Remove enabled services that have no current events in the DB.
+
+    A service is considered stale if it has zero events ending in the future.
+    This cleans up services that were enabled weeks ago but no longer have content.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"status": "error", "message": "Database not available"}), 500
+
+    try:
+        prefs = get_user_preferences()
+        enabled = prefs.get("enabled_services", [])
+
+        if not enabled:
+            return jsonify({"status": "ok", "removed": [], "message": "No enabled services to check"})
+
+        # Find which logical services have at least one future event
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT DISTINCT p.logical_service
+            FROM playables p
+            JOIN events e ON p.event_id = e.id
+            WHERE datetime(e.end_utc) > datetime('now')
+              AND p.logical_service IS NOT NULL
+              AND p.logical_service != ''
+        """)
+        active_services = {row[0] for row in cur.fetchall()}
+        conn.close()
+
+        # Also consider 'aiv' active if any aiv_* service is active
+        if any(s.startswith("aiv") for s in active_services):
+            active_services.add("aiv")
+
+        # Find stale: enabled but not in active services
+        # Always keep 'aiv' master toggle if any Amazon sub-service is active
+        stale = [s for s in enabled if s not in active_services]
+        cleaned = [s for s in enabled if s in active_services]
+
+        if not stale:
+            return jsonify({"status": "ok", "removed": [], "message": "No stale services found"})
+
+        prefs["enabled_services"] = cleaned
+        if save_user_preferences(prefs):
+            log(f"Cleared {len(stale)} stale service(s): {', '.join(stale)}", "INFO")
+            return jsonify({"status": "ok", "removed": stale, "kept": cleaned})
+        else:
+            return jsonify({"status": "error", "message": "Failed to save preferences"}), 500
+
+    except Exception as e:
+        log(f"Error clearing stale services: {e}", "ERROR")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/filters/reset", methods=["POST"])
+def api_filters_reset():
+    """Reset all filter preferences to allow-all defaults.
+
+    Clears enabled_services (empty = all allowed), disabled_sports,
+    disabled_leagues. Preserves priority and Amazon penalty settings.
+    """
+    try:
+        prefs = get_user_preferences()
+        prefs["enabled_services"] = []
+        prefs["disabled_sports"] = []
+        prefs["disabled_leagues"] = []
+        prefs["amazon_master_enabled"] = True
+
+        if save_user_preferences(prefs):
+            log("Filter preferences reset to defaults", "INFO")
+            return jsonify({"status": "ok"})
+        else:
+            return jsonify({"status": "error", "message": "Failed to save preferences"}), 500
+    except Exception as e:
+        log(f"Error resetting preferences: {e}", "ERROR")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 
 
 # ==================== Provider Lanes API ====================

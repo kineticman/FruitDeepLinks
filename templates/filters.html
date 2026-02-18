@@ -454,7 +454,8 @@ Hide specific leagues or competitions. Disabled leagues will be excluded from yo
 <div class="actions">
 <button class="btn btn-success" onclick="savePreferences()">Save Settings</button>
 <button class="btn" style="background: #f59e0b;" onclick="applyFilters()">⚡ Apply Filters Now</button>
-<button class="btn" onclick="resetToDefaults()">Reset to Defaults</button>
+<button class="btn" style="background: #8b5cf6;" onclick="clearStaleServices()" title="Remove enabled services that have no current events in the database">🧹 Clear Stale Services</button>
+<button class="btn" style="background: #64748b;" onclick="resetToDefaults()">Reset to Defaults</button>
 <div class="status-message" id="status-message"></div>
 </div>
 </div>
@@ -967,21 +968,37 @@ showStatus('Error applying filters', 'error');
 }
 
 function resetToDefaults() {
-if (confirm('Reset all filters to defaults? This will enable all services and sports.')) {
-currentPreferences = {
-enabled_services: availableFilters.providers.map(p => p.scheme),
-disabled_sports: [],
-disabled_leagues: [],
-service_priorities: {}, // Will use defaults from backend
-amazon_penalty: true,
-language_preference: 'en'
-};
-renderProviders();
-renderSports();
-renderLeagues();
-renderPriorities();
-loadSelectionExamples();
-showStatus('Reset to defaults. Click Save to apply.', 'success');
+if (confirm('Reset ALL filters to defaults? This will allow all services and sports through (nothing blocked).')) {
+const res = fetch('/api/filters/reset', { method: 'POST' });
+res.then(r => r.json()).then(data => {
+if (data.status === 'ok') {
+// Reload everything fresh from server
+loadFilters();
+showStatus('Reset to defaults — all services now allowed. Click Apply Filters Now to regenerate.', 'success');
+} else {
+showStatus('Failed to reset: ' + (data.message || 'unknown error'), 'error');
+}
+}).catch(() => showStatus('Error resetting filters', 'error'));
+}
+}
+
+async function clearStaleServices() {
+if (!confirm('Remove any enabled services that have no current events in the database? Your other settings will be preserved.')) return;
+try {
+const res = await fetch('/api/filters/clear-stale', { method: 'POST' });
+const data = await res.json();
+if (data.status === 'ok') {
+if (data.removed && data.removed.length > 0) {
+showStatus(`Removed ${data.removed.length} stale service(s): ${data.removed.join(', ')}. Reloading...`, 'success');
+setTimeout(() => loadFilters(), 1500);
+} else {
+showStatus('No stale services found — everything looks current!', 'success');
+}
+} else {
+showStatus('Failed: ' + (data.message || 'unknown error'), 'error');
+}
+} catch (err) {
+showStatus('Error clearing stale services', 'error');
 }
 }
 
