@@ -13,9 +13,13 @@ The reliable join key is the broadcast GTI embedded in the deeplink:
   broadcast=amzn1.dv.gti.<uuid>
 That broadcast GTI maps directly to amazon_channels.gti (populated by the Amazon scraper).
 
+Fallback: if the broadcast GTI is stale/empty in amazon_channels, fall back to the
+content GTI (gti= param). This handles cases where Amazon 404s the broadcast GTI page
+but the content GTI has valid channel metadata (e.g., Tennis Channel per-match feeds).
+
 This script:
-1) Extracts broadcast GTIs from playables.deeplink_play / deeplink_open for provider='aiv'
-2) Looks up amazon_channels rows for those GTIs (preferring non-stale rows)
+1) Extracts broadcast + content GTIs from playables.deeplink_play / deeplink_open for provider='aiv'
+2) Looks up amazon_channels rows, preferring non-stale broadcast GTI, falling back to content GTI
 3) Normalizes amazon_channels.channel_id / channel_name into canonical aiv_* logical services
 4) Updates playables.logical_service accordingly; leaves unmapped as aiv_aggregator
 
@@ -32,10 +36,11 @@ import datetime as _dt
 import re
 import sqlite3
 import sys
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 BROADCAST_RX = re.compile(r"broadcast=(amzn1\.dv\.gti\.[^&\s]+)", re.IGNORECASE)
+CONTENT_GTI_RX = re.compile(r"[?&]gti=(amzn1\.dv\.gti\.[a-f0-9-]{36})", re.IGNORECASE)
 GTI_RX = re.compile(r"(amzn1\.dv\.gti\.[a-f0-9-]{36})", re.IGNORECASE)
 
 
@@ -43,27 +48,70 @@ def utcnow_iso() -> str:
     return _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
 
-def extract_broadcast_gti(deeplink_play: Optional[str], deeplink_open: Optional[str]) -> Optional[str]:
+def extract_gtis(deeplink_play: Optional[str], deeplink_open: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     """
-    Extract GTI from deeplink, preferring broadcast= parameter but falling back to any GTI found.
+    Extract (broadcast_gti, content_gti) from deeplink URLs.
+
+    broadcast_gti: from broadcast= param (most reliable for multi-feed events)
+    content_gti:   from gti= param (the content/event GTI)
+
+    Both may be None if not found.
     """
+    broadcast_gti: Optional[str] = None
+    content_gti: Optional[str] = None
+
     for s in (deeplink_play, deeplink_open):
         if not s:
             continue
-        # Prefer broadcast= parameter (most reliable for multi-feed events)
-        m = BROADCAST_RX.search(s)
-        if m:
-            return m.group(1)
-    
-    # Fallback: find any GTI in the deeplink (for single-feed events like Willow)
-    for s in (deeplink_play, deeplink_open):
-        if not s:
+        if not broadcast_gti:
+            m = BROADCAST_RX.search(s)
+            if m:
+                broadcast_gti = m.group(1)
+        if not content_gti:
+            m = CONTENT_GTI_RX.search(s)
+            if m:
+                content_gti = m.group(1)
+
+    return broadcast_gti, content_gti
+
+
+def _has_channel_data(ac: sqlite3.Row) -> bool:
+    """Return True if this amazon_channels row has usable channel metadata."""
+    return bool((ac["channel_id"] or "").strip() or (ac["channel_name"] or "").strip())
+
+
+def resolve_channel(
+    by_gti: Dict[str, sqlite3.Row],
+    broadcast_gti: Optional[str],
+    content_gti: Optional[str],
+) -> Optional[sqlite3.Row]:
+    """
+    Resolve the best amazon_channels row for a playable.
+
+    Priority:
+      1. Non-stale broadcast GTI with channel data
+      2. Non-stale content GTI with channel data
+      3. Stale broadcast GTI with channel data (last resort)
+      4. Stale content GTI with channel data (last resort)
+
+    Returns None if no usable channel data found in either GTI.
+    """
+    candidates: List[Tuple[int, int, sqlite3.Row]] = []  # (is_stale, is_content, row)
+
+    for gti, is_content in ((broadcast_gti, 0), (content_gti, 1)):
+        if not gti:
             continue
-        m = GTI_RX.search(s)
-        if m:
-            return m.group(1)
-    
-    return None
+        row = by_gti.get(gti)
+        if row and _has_channel_data(row):
+            is_stale = int(row["is_stale"] or 0)
+            candidates.append((is_stale, is_content, row))
+
+    if not candidates:
+        return None
+
+    # Sort: prefer non-stale (is_stale=0) then broadcast (is_content=0)
+    candidates.sort(key=lambda x: (x[0], x[1]))
+    return candidates[0][2]
 
 
 def normalize_service(channel_id: Optional[str], channel_name: Optional[str]) -> Optional[str]:
@@ -73,7 +121,7 @@ def normalize_service(channel_id: Optional[str], channel_name: Optional[str]) ->
     """
     cid = (channel_id or "").strip()
     cname = (channel_name or "").strip()
-    
+
     # If amazon_channels already provides a canonical aiv_* id, trust it (future-proof)
     cid_l = cid.lower()
     if cid_l.startswith("aiv_") and cid_l not in {"aiv_aggregator"}:
@@ -94,11 +142,11 @@ def normalize_service(channel_id: Optional[str], channel_name: Optional[str]) ->
         "aiv_max": "aiv_max",
         "aiv_dazn": "aiv_dazn",
         "aiv_vix_premium": "aiv_vix_premium",
-        "aiv_vix_gratis": "aiv_vix",  # if you use aiv_vix lane
+        "aiv_vix_gratis": "aiv_vix",
         "aiv_fanduel": "aiv_fanduel",
         "aiv_willow": "aiv_willow",
         "aiv_prime": "aiv_prime",
-        "prime_included": "aiv_prime",  # normalize
+        "prime_included": "aiv_prime",
         "aiv_prime_included": "aiv_prime",
         "aiv_prime_free": "aiv_free",
         "aiv_join_prime": "aiv_prime",
@@ -113,7 +161,6 @@ def normalize_service(channel_id: Optional[str], channel_name: Optional[str]) ->
     # Channel name normalization (covers amzn1.dv.channel.*, amzn1.dv.spid.*, free trials, etc.)
     name_l = cname.lower()
 
-    # Treat "Free trial of X" as X
     if "nba league pass" in name_l:
         return "aiv_nba_league_pass"
     if "wnba league pass" in name_l:
@@ -121,13 +168,9 @@ def normalize_service(channel_id: Optional[str], channel_name: Optional[str]) ->
     if "fox one" in name_l:
         return "aiv_fox_one"
     if "peacock" in name_l:
-        # "Peacock Premium Plus" etc.
         return "aiv_peacock"
     if name_l == "max" or "max" in name_l:
-        # handle "Subscribe for $18.49/month" -> this is Max live events benefitId sometimes
-        # Prefer Max if channel_id hinted it, otherwise only if name mentions Max
         if "subscribe for" in name_l and "max" not in name_l:
-            # this is ambiguous; only map if cid was maxliveeventsus (handled above)
             return None
         return "aiv_max"
     if "dazn" in name_l:
@@ -141,19 +184,17 @@ def normalize_service(channel_id: Optional[str], channel_name: Optional[str]) ->
     if "willow" in name_l:
         return "aiv_willow"
     if "prime" in name_l and "join" not in name_l:
-        # "Prime Included" / "Prime Exclusive"
         return "aiv_prime"
 
     return None
 
 
-def _table_columns(cur: sqlite3.Cursor, table: str) -> set[str]:
+def _table_columns(cur: sqlite3.Cursor, table: str) -> set:
     """Return set of column names for `table`."""
     cur.execute(f"PRAGMA table_info({table})")
     rows = cur.fetchall()
     cols = set()
     for r in rows:
-        # row: (cid, name, type, notnull, dflt_value, pk) or sqlite3.Row
         name = r["name"] if isinstance(r, sqlite3.Row) else r[1]
         cols.add(str(name))
     return cols
@@ -165,18 +206,12 @@ def ensure_amazon_channels_schema(conn: sqlite3.Connection) -> None:
     Idempotent / safe to run repeatedly.
     """
     cur = conn.cursor()
-
     cols = _table_columns(cur, "amazon_channels")
 
-    # Older DBs may not have is_stale; default to 0 (not stale).
     if "is_stale" not in cols:
         cur.execute("ALTER TABLE amazon_channels ADD COLUMN is_stale INTEGER DEFAULT 0")
 
     conn.commit()
-
-
-
-
 
 
 def migrate(db_path: str) -> int:
@@ -204,7 +239,7 @@ def migrate(db_path: str) -> int:
     """)
     ac_rows = cur.fetchall()
 
-    # Build mapping gti -> best row
+    # Build mapping gti -> best row (prefer non-stale when there are duplicates)
     by_gti: Dict[str, sqlite3.Row] = {}
     for r in ac_rows:
         gti = (r["gti"] or "").strip()
@@ -234,23 +269,38 @@ def migrate(db_path: str) -> int:
     no_broadcast = 0
     no_match = 0
     unmapped = 0
+    content_gti_fallbacks = 0
 
     # Update in a transaction
-    now = utcnow_iso()
     conn.execute("BEGIN")
 
     for r in plays:
         rowid = r["rowid"]
         current_ls = (r["logical_service"] or "").strip() or "aiv_aggregator"
-        bgti = extract_broadcast_gti(r["deeplink_play"], r["deeplink_open"])
-        if not bgti:
+
+        broadcast_gti, content_gti = extract_gtis(r["deeplink_play"], r["deeplink_open"])
+
+        if not broadcast_gti and not content_gti:
             no_broadcast += 1
             continue
 
-        ac = by_gti.get(bgti)
-        if not ac:
-            no_match += 1
+        ac = resolve_channel(by_gti, broadcast_gti, content_gti)
+
+        if ac is None:
+            # Check if we at least found the GTI but it had no channel data
+            found_any = any(
+                gti and gti in by_gti
+                for gti in (broadcast_gti, content_gti)
+            )
+            if found_any:
+                unmapped += 1
+            else:
+                no_match += 1
             continue
+
+        # Track when we had to fall back to content GTI
+        if broadcast_gti and ac["gti"] != broadcast_gti:
+            content_gti_fallbacks += 1
 
         new_ls = normalize_service(ac["channel_id"], ac["channel_name"])
         if not new_ls:
@@ -275,6 +325,7 @@ def migrate(db_path: str) -> int:
     print(f"No broadcast GTI: {no_broadcast}")
     print(f"Broadcast GTI not in amazon_channels: {no_match}")
     print(f"Unmapped channel metadata: {unmapped}")
+    print(f"Content GTI fallbacks used: {content_gti_fallbacks}")
     print()
 
     # Breakdown after migration
