@@ -732,14 +732,17 @@ def scrape_search_term(driver, conn: sqlite3.Connection, search_term: str,
     new_shelf = 0
     skipped = 0
     
+    total_seeds = len(seed_ids)
+    log_every = max(1, total_seeds // 4)  # ~4 progress lines across the batch
+
     for i, event_id in enumerate(seed_ids, 1):
         already_full = event_exists_as_full(conn, event_id)
-        
-        if already_full:
-            print(f"  [Seed {i}/{len(seed_ids)}] {event_id} (checking for new shelf events)")
-        else:
-            print(f"  [Seed {i}/{len(seed_ids)}] {event_id}")
-        
+
+        if not already_full:
+            print(f"  [Seed {i}/{total_seeds}] {event_id} (new)")
+        elif i % log_every == 0 or i == total_seeds:
+            print(f"  [Seed {i}/{total_seeds}] ...")
+
         try:
             # Use hybrid API client (requests first, Selenium fallback)
             data = api_client.fetch_event_v3(event_id)
@@ -788,8 +791,8 @@ def scrape_search_term(driver, conn: sqlite3.Connection, search_term: str,
                                 new_shelf += 1
                                 shelf_discovered += 1
                 
-                if already_full and shelf_discovered > 0:
-                    print(f"    -> Found {shelf_discovered} new shelf events")
+                if shelf_discovered > 0:
+                    print(f"    -> [{i}/{total_seeds}] {event_id}: {shelf_discovered} new shelf events")
                 
                 conn.commit()
                 

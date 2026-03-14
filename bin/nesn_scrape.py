@@ -77,15 +77,19 @@ def extract_date_from_programme_id(programme_id: str) -> Optional[Tuple[int, str
             day = 1
         else:
             return None
-        
+
+        if not (1 <= month <= 12 and 1 <= day <= 31):
+            logger.debug(f"Skipping programme_id '{programme_id}': not a date-based ID")
+            return None
+
         # Convert YY to YYYY (assume 20xx for 00-99)
         year = 2000 + year_yy if year_yy <= 99 else year_yy
-        
+
         # Create date object
         dt = datetime(year, month, day, 0, 0, 0, tzinfo=timezone.utc)
         unix_timestamp_ms = int(dt.timestamp() * 1000)
         date_str = dt.strftime("%Y-%m-%d")
-        
+
         return (unix_timestamp_ms, date_str)
     except (ValueError, OverflowError) as e:
         logger.warning(f"Failed to parse date from programme_id '{programme_id}': {e}")

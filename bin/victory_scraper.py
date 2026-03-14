@@ -284,6 +284,7 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
     
     imported = 0
     skipped = 0
+    capped = 0
     
     for event in events:
         event_id = f"victory-{event['id']}"
@@ -332,7 +333,7 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
         # Victory+ API sometimes returns 12-hour broadcast windows
         MAX_DURATION_HOURS = 4
         if runtime_secs > MAX_DURATION_HOURS * 3600:
-            log(f"  Warning: {event_id} has {runtime_secs/3600:.1f}h duration, capping at {MAX_DURATION_HOURS}h")
+            capped += 1
             runtime_secs = MAX_DURATION_HOURS * 3600
             end_epoch = start_epoch + runtime_secs
             end_utc = datetime.fromtimestamp(end_epoch, tz=timezone.utc).isoformat()
@@ -438,7 +439,8 @@ def import_victory_events(conn: sqlite3.Connection, events: List[Dict], dry_run:
         imported += 1
     
     conn.commit()
-    log(f"Imported {imported} Victory+ events, skipped {skipped}")
+    cap_note = f", {capped} durations capped at {MAX_DURATION_HOURS}h (bad source data)" if capped else ""
+    log(f"Imported {imported} Victory+ events, skipped {skipped}{cap_note}")
 
 
 def main():

@@ -428,7 +428,7 @@ async def scrape_one(playwright, browser, gti: str, timeout_ms: int, retries: in
         ctx = None
         page = None
         try:
-            LOG.info("[SCRAPE] %d/%d GTI=%s URL=%s attempt=%d", progress_idx, total, gti, url, attempt + 1)
+            LOG.debug("[SCRAPE] %d/%d GTI=%s URL=%s attempt=%d", progress_idx, total, gti, url, attempt + 1)
             ctx = await browser.new_context()
             page = await ctx.new_page()
 
@@ -511,8 +511,8 @@ async def scrape_one(playwright, browser, gti: str, timeout_ms: int, retries: in
                 failure_reason = ""
 
             elapsed = int((time.time() - start) * 1000)
-            LOG.info("[RESULT] %d/%d GTI=%s status=%s channel_id=%s channel_name=%s benefit_id=%s elapsed_ms=%d",
-                     progress_idx, total, gti, status, channel_id, channel_name, benefit_id, elapsed)
+            LOG.debug("[RESULT] %d/%d GTI=%s status=%s channel_id=%s channel_name=%s benefit_id=%s elapsed_ms=%d",
+                      progress_idx, total, gti, status, channel_id, channel_name, benefit_id, elapsed)
 
             return ScrapeResult(
                 gti=gti, url=url, status=status,
