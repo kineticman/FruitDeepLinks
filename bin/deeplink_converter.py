@@ -345,6 +345,23 @@ def convert_marquee(punchout_url: str) -> Optional[str]:
     return "https://www.marqueesportsnetwork.com/watch"
 
 
+def convert_mlb(punchout_url: str) -> Optional[str]:
+    """
+    MLB At Bat / MLB.TV deeplink conversion.
+
+    Apple TV uses:  mlbatbat://mlbtv?gamepk=831545
+    PrismCast needs: https://www.mlb.com/tv/g831545
+
+    Also handles mlbtv:// scheme if encountered.
+    """
+    parsed = urlparse(punchout_url)
+    params = parse_qs(parsed.query)
+    gamepk = params.get("gamepk", [None])[0]
+    if gamepk:
+        return f"https://www.mlb.com/tv/g{gamepk}"
+    return None
+
+
 def convert_max(punchout_url: str) -> Optional[str]:
     """
     Max (HBO Max) - Convert sport landing page to direct video player
@@ -461,7 +478,10 @@ def generate_http_deeplink(
 
     if prov in ("marquee", "marquee sports network"):
         return convert_marquee(punchout_url)
-    
+
+    if prov in ("mlbatbat", "mlbtv", "mlb"):
+        return convert_mlb(punchout_url)
+
     if prov in ("max", "hbo max", "hbomax", "https"):
         # Try Max converter for play.hbomax.com URLs
         if "play.hbomax.com" in punchout_url:
