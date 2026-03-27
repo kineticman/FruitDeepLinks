@@ -937,16 +937,16 @@ def main(argv=None):
     ]):
         return 1
 
-    # Step 7e: Scrape Amazon channels (Playwright, headless)
+    # Step 7e: Scrape Amazon channels (HTTP-first with Playwright fallback)
     # Identifies which Amazon subscription is required for each event.
-    # Uses amazon2.py (Playwright) which is dramatically more stable than the legacy Selenium scraper.
+    # Uses amazon2.py with curl_cffi first, then Playwright fallback for degraded/shell pages.
     #
     # Defaults are horizon + cache (recommended):
-    #   python3 amazon2.py --db ... --horizon-hours 96 --past-hours 6 --rescrape-hours 48 --max 350 --workers 3 --timeout-ms 30000 --retries 1
+    #   python3 amazon2.py --db ... --horizon-hours 168 --past-hours 6 --rescrape-hours 48 --max 350 --workers 3 --timeout-ms 30000 --retries 1
     #
     # Env knobs (optional):
     #   AMAZON_MAX:               hard safety cap on GTIs to process (default 350; applied after horizon+cache)
-#   AMAZON_HORIZON_HOURS:     only consider events starting within next N hours (default 96)
+#   AMAZON_HORIZON_HOURS:     only consider events starting within next N hours (default 168)
 #   AMAZON_PAST_HOURS:        include events that ended within last N hours (default 6)
 #   AMAZON_RESCRAPE_HOURS:    skip GTIs scraped successfully within last N hours (default 48)
     #   AMAZON_WORKERS:     concurrency (default 3)
@@ -960,7 +960,7 @@ def main(argv=None):
         print("Amazon scraper skipped (--skip-scrape flag)")
     else:
         amazon_max = os.getenv("AMAZON_MAX", "350")  # safety cap (after horizon+cache)
-        amazon_horizon_hours = os.getenv("AMAZON_HORIZON_HOURS", "96")
+        amazon_horizon_hours = os.getenv("AMAZON_HORIZON_HOURS", "168")
         amazon_past_hours = os.getenv("AMAZON_PAST_HOURS", "6")
         amazon_rescrape_hours = os.getenv("AMAZON_RESCRAPE_HOURS", "48")
         amazon_workers = os.getenv("AMAZON_WORKERS", "3")
@@ -969,11 +969,11 @@ def main(argv=None):
         amazon_keep_debug = int(os.getenv("FRUIT_AMAZON_DEBUG_CSV_KEEP", "3") or "3")
 
         print("\n" + "=" * 60)
-        print(f"[7e/{total_steps}] Scraping Amazon channels (Playwright headless)")
+        print(f"[7e/{total_steps}] Scraping Amazon channels (HTTP-first, Playwright fallback)")
         print("=" * 60)
 
         # Amazon scrape is non-fatal - don't stop pipeline if it fails
-        run_step("7e", total_steps, "Scraping Amazon channel requirements (Playwright)", [
+        run_step("7e", total_steps, "Scraping Amazon channel requirements (HTTP-first, Playwright fallback)", [
             "python3", "amazon2.py",
             "--db", str(DB_PATH),
             "--max", str(amazon_max),

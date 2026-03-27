@@ -29,7 +29,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+
+try:
+    from curl_cffi import requests as curl_requests
+except Exception:
+    curl_requests = None
 
 LOG = logging.getLogger("amazon2")
 
@@ -98,6 +104,13 @@ class ScrapeResult:
     entitlement_text: str
     failure_reason: str
     elapsed_ms: int
+
+
+@dataclass
+class HttpProbeResult:
+    result: Optional[ScrapeResult]
+    needs_browser_fallback: bool
+    fallback_reason: str
 
 def _utcnow_iso() -> str:
     return _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
@@ -352,6 +365,15 @@ def _parse_benefit_id_from_text(text: str) -> str:
         return ""
     return _parse_benefit_id(text)
 
+
+def _extract_known_benefit_id_from_html(html: str) -> str:
+    if not html:
+        return ""
+    for benefit_id in BENEFIT_MAP:
+        if benefit_id and benefit_id in html:
+            return benefit_id
+    return ""
+
 async def _extract_benefit_id_from_links(page) -> str:
     try:
         hrefs = await page.eval_on_selector_all(
@@ -414,6 +436,215 @@ def _looks_blank_unusable_page(final_url: str, benefit_id: str, entitlement: str
         return True, "subscription_page_no_signals"
     return False, ""
 
+
+def _looks_unavailable_page(page_text: str, title: str) -> Tuple[bool, str]:
+    visible = f"{title or ''}\n{page_text or ''}".lower()
+    markers = (
+        "currently unavailable to watch in your location",
+        "currently unavailable to watch",
+        "video is currently unavailable",
+        "unavailable to watch in your location",
+        "this video is currently unavailable",
+    )
+    if any(marker in visible for marker in markers):
+        return True, "UNAVAILABLE_IN_LOCATION"
+    return False, ""
+
+
+def _looks_shell_page(final_url: str, title: str, page_text: str, benefit_id: str, entitlement: str, channel_id: str) -> Tuple[bool, str]:
+    has_real_signal = bool(
+        benefit_id
+        or entitlement
+        or (channel_id and channel_id not in ("aiv_amazon_error", "aiv_aggregator"))
+    )
+    if has_real_signal:
+        return False, ""
+
+    title_norm = (title or "").strip().lower()
+    visible = (page_text or "").lower()
+    final = (final_url or "").lower()
+
+    if "continue shopping" in visible:
+        return True, "continue_shopping_shell"
+    if title_norm == "amazon.com" and ("continue shopping" in visible or "/gp/video/detail/" in final):
+        return True, "generic_amazon_shell"
+    return False, ""
+
+
+def _extract_entitlement_text_from_html(html: str) -> str:
+    if not html:
+        return ""
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+    except Exception:
+        return ""
+
+    selectors = [
+        '[data-automation-id="entitlement-message"]',
+        '[data-testid="entitlement-message"]',
+        '#entitlement-message',
+    ]
+    for sel in selectors:
+        try:
+            node = soup.select_one(sel)
+        except Exception:
+            node = None
+        if node:
+            text = node.get_text(" ", strip=True)
+            if text:
+                return text
+    return ""
+
+
+def _build_scrape_result(
+    gti: str,
+    url: str,
+    resp_status: int,
+    final_url: str,
+    html: str,
+    title: str,
+    page_text: str,
+    benefit_id: str,
+    entitlement: str,
+    start_time: float,
+) -> HttpProbeResult:
+    channel_name, channel_id, unknown_reason = _normalize(benefit_id, entitlement, page_text)
+
+    is_unavailable, unavailable_reason = _looks_unavailable_page(page_text, title)
+    if is_unavailable:
+        return HttpProbeResult(
+            result=ScrapeResult(
+                gti=gti,
+                url=url,
+                status="ERROR",
+                channel_id="",
+                channel_name="",
+                benefit_id=benefit_id,
+                entitlement_text=entitlement,
+                failure_reason=unavailable_reason,
+                elapsed_ms=int((time.time() - start_time) * 1000),
+            ),
+            needs_browser_fallback=False,
+            fallback_reason="",
+        )
+
+    is_stale_404, _ = _looks_stale_404(
+        resp_status=resp_status,
+        title=title,
+        page_text=page_text,
+        benefit_id=benefit_id,
+        entitlement=entitlement,
+        channel_id=channel_id,
+    )
+    if is_stale_404:
+        return HttpProbeResult(
+            result=ScrapeResult(
+                gti=gti,
+                url=url,
+                status="STALE",
+                channel_id="",
+                channel_name="",
+                benefit_id=benefit_id,
+                entitlement_text=entitlement,
+                failure_reason="STALE_GTI_404",
+                elapsed_ms=int((time.time() - start_time) * 1000),
+            ),
+            needs_browser_fallback=False,
+            fallback_reason="",
+        )
+
+    is_shell, shell_reason = _looks_shell_page(
+        final_url=final_url,
+        title=title,
+        page_text=page_text,
+        benefit_id=benefit_id,
+        entitlement=entitlement,
+        channel_id=channel_id,
+    )
+    if is_shell:
+        return HttpProbeResult(result=None, needs_browser_fallback=True, fallback_reason=shell_reason)
+
+    is_blank_unusable, blank_detail = _looks_blank_unusable_page(
+        final_url=final_url,
+        benefit_id=benefit_id,
+        entitlement=entitlement,
+        channel_id=channel_id,
+        page_text=page_text,
+    )
+    if is_blank_unusable:
+        return HttpProbeResult(result=None, needs_browser_fallback=True, fallback_reason=blank_detail)
+
+    if unknown_reason and not benefit_id and not entitlement and not page_text.strip():
+        return HttpProbeResult(result=None, needs_browser_fallback=True, fallback_reason="no_http_signals")
+
+    return HttpProbeResult(
+        result=ScrapeResult(
+            gti=gti,
+            url=url,
+            status="SUCCESS",
+            channel_id=channel_id,
+            channel_name=channel_name,
+            benefit_id=benefit_id,
+            entitlement_text=entitlement,
+            failure_reason="",
+            elapsed_ms=int((time.time() - start_time) * 1000),
+        ),
+        needs_browser_fallback=False,
+        fallback_reason="",
+    )
+
+
+def _probe_http_once(gti: str, timeout_ms: int, start_time: float) -> HttpProbeResult:
+    url = gti_to_url(gti)
+    if curl_requests is None:
+        return HttpProbeResult(result=None, needs_browser_fallback=True, fallback_reason="curl_cffi_unavailable")
+
+    session = curl_requests.Session()
+    session.headers.update(
+        {
+            "Accept-Language": "en-US,en;q=0.9",
+            "Upgrade-Insecure-Requests": "1",
+        }
+    )
+
+    try:
+        resp = session.get(
+            url,
+            impersonate="chrome136",
+            timeout=max(1, int(timeout_ms / 1000)),
+            allow_redirects=True,
+        )
+        html = resp.text or ""
+        benefit_id = _parse_benefit_id_from_text(str(resp.url))
+        if not benefit_id:
+            benefit_id = _parse_benefit_id(html)
+        if not benefit_id:
+            benefit_id = _extract_known_benefit_id_from_html(html)
+
+        entitlement = _extract_entitlement_text_from_html(html)
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+            title = soup.title.get_text(" ", strip=True) if soup.title else ""
+            page_text = soup.get_text(" ", strip=True)[:20000]
+        except Exception:
+            title = ""
+            page_text = re.sub(r"\s+", " ", html)[:20000]
+
+        return _build_scrape_result(
+            gti=gti,
+            url=url,
+            resp_status=resp.status_code,
+            final_url=str(resp.url),
+            html=html,
+            title=title,
+            page_text=page_text,
+            benefit_id=benefit_id,
+            entitlement=entitlement,
+            start_time=start_time,
+        )
+    except Exception as e:
+        return HttpProbeResult(result=None, needs_browser_fallback=True, fallback_reason=f"http_error={type(e).__name__}: {e}")
+
 def _looks_stale_404(resp_status: int, title: str, page_text: str, benefit_id: str, entitlement: str, channel_id: str) -> Tuple[bool, str]:
     """Return (is_stale, reason_detail).
 
@@ -468,8 +699,8 @@ async def _extract_entitlement_text(page) -> str:
             continue
     return ""
 
-async def scrape_one(playwright, browser, gti: str, timeout_ms: int, retries: int,
-                    unknown_seen: set, progress_idx: int, total: int) -> ScrapeResult:
+async def _scrape_one_playwright(browser, gti: str, timeout_ms: int, retries: int,
+                                 unknown_seen: set, progress_idx: int, total: int) -> ScrapeResult:
     url = gti_to_url(gti)
     start = time.time()
     last_err = ""
@@ -643,6 +874,36 @@ async def scrape_one(playwright, browser, gti: str, timeout_ms: int, retries: in
         failure_reason=(failure_reason or last_err),
         elapsed_ms=elapsed
     )
+
+
+async def scrape_one(playwright, browser, gti: str, timeout_ms: int, retries: int,
+                    unknown_seen: set, progress_idx: int, total: int) -> ScrapeResult:
+    start = time.time()
+    http_probe = await asyncio.to_thread(_probe_http_once, gti, timeout_ms, start)
+    if http_probe.result is not None:
+        setattr(http_probe.result, "resolved_via", "http")
+        return http_probe.result
+
+    if http_probe.fallback_reason:
+        LOG.debug(
+            "[HTTP_FALLBACK] %d/%d GTI=%s reason=%s",
+            progress_idx,
+            total,
+            gti,
+            http_probe.fallback_reason,
+        )
+
+    result = await _scrape_one_playwright(
+        browser,
+        gti,
+        timeout_ms,
+        retries,
+        unknown_seen,
+        progress_idx,
+        total,
+    )
+    setattr(result, "resolved_via", "playwright")
+    return result
 
 def _debug_csv_path(db_path: str) -> str:
     ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -880,10 +1141,12 @@ async def run(
         cnt_timeout = 0
         cnt_stale = 0
         cnt_error = 0
+        cnt_http = 0
+        cnt_playwright = 0
         lock = asyncio.Lock()
 
         async def _note_result(r: ScrapeResult) -> None:
-            nonlocal done, cnt_success, cnt_timeout, cnt_stale, cnt_error
+            nonlocal done, cnt_success, cnt_timeout, cnt_stale, cnt_error, cnt_http, cnt_playwright
             async with lock:
                 done += 1
                 if r.status == "SUCCESS":
@@ -895,15 +1158,23 @@ async def run(
                 else:
                     cnt_error += 1
 
+                resolved_via = getattr(r, "resolved_via", "")
+                if resolved_via == "http":
+                    cnt_http += 1
+                elif resolved_via == "playwright":
+                    cnt_playwright += 1
+
                 if log_every and (done % log_every == 0 or done == total_gtis):
                     LOG.info(
-                        "[PROGRESS] %d/%d success=%d timeout=%d stale=%d error=%d",
+                        "[PROGRESS] %d/%d success=%d timeout=%d stale=%d error=%d http=%d playwright=%d",
                         done,
                         total_gtis,
                         cnt_success,
                         cnt_timeout,
                         cnt_stale,
                         cnt_error,
+                        cnt_http,
+                        cnt_playwright,
                     )
 
             # Per-item logging: keep it quieter when stable.
@@ -986,7 +1257,18 @@ async def run(
     timeouts = sum(1 for r in results if r.status == "TIMEOUT")
     stale = sum(1 for r in results if r.status == "STALE")
     err = sum(1 for r in results if r.status == "ERROR")
-    LOG.info("Summary: total=%d success=%d timeout=%d stale=%d error=%d", total, ok, timeouts, stale, err)
+    http_total = sum(1 for r in results if getattr(r, "resolved_via", "") == "http")
+    playwright_total = sum(1 for r in results if getattr(r, "resolved_via", "") == "playwright")
+    LOG.info(
+        "Summary: total=%d success=%d timeout=%d stale=%d error=%d http=%d playwright=%d",
+        total,
+        ok,
+        timeouts,
+        stale,
+        err,
+        http_total,
+        playwright_total,
+    )
 
     return 0
 
