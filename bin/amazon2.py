@@ -893,8 +893,12 @@ async def scrape_one(playwright, browser, gti: str, timeout_ms: int, retries: in
             http_probe.fallback_reason,
         )
 
+    browser_obj = browser
+    if callable(browser):
+        browser_obj = await browser()
+
     result = await _scrape_one_playwright(
-        browser,
+        browser_obj,
         gti,
         timeout_ms,
         retries,
@@ -1106,36 +1110,45 @@ async def run(
         LOG.debug("Preflight: process scan failed", exc_info=True)
 
     async with async_playwright() as p:
-        LOG.info("Launching Playwright Chromium (headless=True)")
-
         browser = None
+        browser_lock = asyncio.Lock()
         last_launch_err: Exception | None = None
-        for launch_attempt in range(3):
-            try:
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--disable-dev-shm-usage",
-                        "--no-sandbox",
-                        "--disable-blink-features=AutomationControlled",
-                    ],
-                )
-                break
-            except Exception as e:
-                last_launch_err = e
-                LOG.warning(
-                    "Browser launch attempt %d/3 failed: %s: %s",
-                    launch_attempt + 1,
-                    type(e).__name__,
-                    e,
-                )
-                await asyncio.sleep(0.5 * (launch_attempt + 1))
 
-        if browser is None:
-            raise RuntimeError(
-                "Failed to launch browser after 3 attempts: "
-                f"{type(last_launch_err).__name__}: {last_launch_err}"
-            )
+        async def _get_browser():
+            nonlocal browser, last_launch_err
+            if browser is not None:
+                return browser
+
+            async with browser_lock:
+                if browser is not None:
+                    return browser
+
+                LOG.info("Launching Playwright Chromium (headless=True) on first fallback")
+                for launch_attempt in range(3):
+                    try:
+                        browser = await p.chromium.launch(
+                            headless=True,
+                            args=[
+                                "--disable-dev-shm-usage",
+                                "--no-sandbox",
+                                "--disable-blink-features=AutomationControlled",
+                            ],
+                        )
+                        return browser
+                    except Exception as e:
+                        last_launch_err = e
+                        LOG.warning(
+                            "Browser launch attempt %d/3 failed: %s: %s",
+                            launch_attempt + 1,
+                            type(e).__name__,
+                            e,
+                        )
+                        await asyncio.sleep(0.5 * (launch_attempt + 1))
+
+                raise RuntimeError(
+                    "Failed to launch browser after 3 attempts: "
+                    f"{type(last_launch_err).__name__}: {last_launch_err}"
+                )
 
         results: List[ScrapeResult] = []
         sem = asyncio.Semaphore(max(1, workers))
@@ -1214,7 +1227,7 @@ async def run(
             async with sem:
                 r = await scrape_one(
                     p,
-                    browser,
+                    _get_browser,
                     gti,
                     timeout_ms,
                     retries,
