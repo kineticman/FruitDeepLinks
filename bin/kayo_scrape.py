@@ -18,6 +18,11 @@ from typing import Any, Dict, List
 
 import requests
 
+try:
+    from curl_cffi import requests as curl_requests
+except Exception:
+    curl_requests = None
+
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.kayosports.com.au/v3/content/types/landing/names/fixtures"
@@ -33,9 +38,6 @@ class KayoForbidden(Exception):
         self.body_snippet = body_snippet
 
 
-# Use a single session so headers + TLS settings remain consistent across requests.
-_SESSION = requests.Session()
-
 KAYO_HEADERS = {
     # Keep this intentionally "browser-ish" to avoid edge/bot blocking.
     "User-Agent": (
@@ -48,7 +50,25 @@ KAYO_HEADERS = {
     "Origin": "https://kayosports.com.au",
     "Referer": "https://kayosports.com.au/fixtures",
 }
-_SESSION.headers.update(KAYO_HEADERS)
+
+
+def _build_session():
+    """Create a session with browser-like defaults.
+
+    Prefer curl_cffi when available so the TLS/client fingerprint is more browser-like.
+    Fall back to requests if curl_cffi is unavailable.
+    """
+    if curl_requests is not None:
+        session = curl_requests.Session()
+        session.impersonate = "chrome136"
+    else:
+        session = requests.Session()
+    session.headers.update(KAYO_HEADERS)
+    return session
+
+
+# Use a single session so headers + TLS settings remain consistent across requests.
+_SESSION = _build_session()
 
 def get_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Kayo Sports scraper")
