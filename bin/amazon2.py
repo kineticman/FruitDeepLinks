@@ -918,6 +918,10 @@ def write_debug_csv(path: str, results: Sequence[ScrapeResult]) -> None:
         "failure_reason", "elapsed_ms",
     ]
     with open(path, "w", newline="", encoding="utf-8") as f:
+        # Note for future debugging:
+        # UNAVAILABLE_IN_LOCATION rows may still retain a discovered benefit_id/channel marker
+        # from the page HTML. That metadata can still be useful for cross-region diagnosis even
+        # though the row is not treated as SUCCESS in the current environment.
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
         for r in results:
