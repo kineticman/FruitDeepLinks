@@ -83,6 +83,7 @@ SERVICE_DISPLAY_NAMES = {
     'apple_mlb': 'Apple MLB',
     'apple_nba': 'Apple NBA',
     'apple_nhl': 'Apple NHL',
+    'apple_f1': 'Formula 1 (Apple TV)',
     'apple_other': 'Apple TV+',
     
     # NESN Regional Sports Network (NEW)
@@ -166,6 +167,11 @@ def get_league_from_event(conn: sqlite3.Connection, event_id: str) -> Optional[s
         
         classifications = json.loads(row[0])
         for item in classifications:
+            if isinstance(item, dict) and item.get('type') == 'sport':
+                sport = item.get('value', '').upper()
+                if 'MOTORSPORT' in sport:
+                    return 'MOTORSPORTS'
+        for item in classifications:
             if isinstance(item, dict) and item.get('type') == 'league':
                 league = item.get('value', '').upper()
                 # Normalize league names
@@ -177,7 +183,7 @@ def get_league_from_event(conn: sqlite3.Connection, event_id: str) -> Optional[s
                     return 'NBA'
                 elif 'NHL' in league or 'HOCKEY' in league:
                     return 'NHL'
-        
+
         return None
     except Exception as e:
         print(f"Error getting league for {event_id}: {e}")
@@ -343,6 +349,8 @@ def get_logical_service_for_playable(
                     return 'apple_nba'
                 elif league == 'NHL':
                     return 'apple_nhl'
+                elif league == 'MOTORSPORTS':
+                    return 'apple_f1'
                 else:
                     return 'apple_other'
             else:
@@ -465,7 +473,8 @@ def get_logical_service_priority(service_code: str) -> int:
         'apple_mlb': 12,
         'apple_nba': 13,
         'apple_nhl': 14,
-        'apple_other': 15,
+        'apple_f1': 15,
+        'apple_other': 16,
         
         # Niche/specialty
         'dazn': 16,
@@ -577,9 +586,9 @@ if __name__ == '__main__':
     print("="*80)
     
     # Show breakdown of web services specifically
-    web_services = {k: v for k, v in service_counts.items() 
-                   if k in ('peacock_web', 'max', 'f1tv', 'apple_mls', 'apple_mlb', 
-                           'apple_nba', 'apple_nhl', 'apple_other', 'https', 'http')}
+    web_services = {k: v for k, v in service_counts.items()
+                   if k in ('peacock_web', 'max', 'f1tv', 'apple_mls', 'apple_mlb',
+                           'apple_nba', 'apple_nhl', 'apple_f1', 'apple_other', 'https', 'http')}
     
     if web_services:
         print("WEB SERVICES BREAKDOWN:")

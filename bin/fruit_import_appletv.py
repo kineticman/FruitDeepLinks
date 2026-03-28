@@ -91,6 +91,7 @@ def normalize_provider(channel_name: Optional[str]) -> str:
     if "fubo" in s: return "fubo"
     if "mlb" in s: return "mlb-tv"
     if "nba" in s and "league" in s: return "nba-league-pass"
+    if "f1" in s: return "f1tv"
     return "other"
 
 def iso_to_ms(iso_str: Optional[str]) -> Optional[int]:
@@ -231,7 +232,28 @@ def normalize_event_structure(apple_event: Dict[str, Any]) -> Dict[str, Any]:
     
     # Keep as dict for consistency with extract_playables()
     playables_final = merged_playables if merged_playables else {}
-    
+
+    # Synthesize channel + playable for F1/Motorsports events blocked by SoftwareUpgradeRequired.
+    # Apple TV returns no playables for these events but the content metadata is fully present.
+    avail_status = (content.get("contentAvailability") or {}).get("availabilityStatus", "")
+    content_url = content.get("url", "")
+    if (
+        avail_status == "SoftwareUpgradeRequired"
+        and content.get("sportName") == "Motorsports"
+        and not channels
+        and not playables_final
+        and content_url
+    ):
+        channels = [{"name": "F1 TV", "id": "f1tv-synthetic"}]
+        synthetic_id = f"f1tv-synthetic-{event_id}"
+        playables_final = {
+            synthetic_id: {
+                "id": synthetic_id,
+                "punchoutUrls": {"open": content_url},
+                "serviceName": "F1 TV",
+            }
+        }
+
     # Flatten the structure
 
     # --- Time handling -----------------------------------------------------

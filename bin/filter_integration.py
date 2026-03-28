@@ -67,6 +67,7 @@ def get_default_service_priorities() -> Dict[str, int]:
         "max": 94,                 # Max (HBO Max) - Sports coverage
         "apple_mls": 92,           # Apple MLS Season Pass
         "apple_mlb": 92,           # Apple MLB Friday Night Baseball
+        "apple_f1": 92,            # Formula 1 (Apple TV)
         
         # Tier 2: Cable/Network Sports (70-89)
         "watchtnt": 88,            # TNT - NBA, NHL, MLB
