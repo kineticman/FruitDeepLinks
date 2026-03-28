@@ -31,6 +31,11 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+try:
+    from curl_cffi import requests as curl_requests
+except Exception:
+    curl_requests = None
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -79,17 +84,22 @@ class FanatizScraper:
         
     def _create_session(self) -> requests.Session:
         """Create requests session with retry logic"""
-        session = requests.Session()
+        if curl_requests is not None:
+            session = curl_requests.Session()
+            session.impersonate = "chrome136"
+        else:
+            session = requests.Session()
         
-        # Retry strategy
-        retry = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
-        )
-        adapter = HTTPAdapter(max_retries=retry)
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
+        # Retry strategy is only available on requests sessions.
+        if isinstance(session, requests.Session):
+            retry = Retry(
+                total=3,
+                backoff_factor=1,
+                status_forcelist=[429, 500, 502, 503, 504],
+            )
+            adapter = HTTPAdapter(max_retries=retry)
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
         
         # Default headers
         session.headers.update({
@@ -274,6 +284,10 @@ class FanatizScraper:
             Normalized event dict or None if invalid
         """
         try:
+            if not isinstance(raw, dict):
+                logger.warning("Skipping non-dict event payload")
+                return None
+
             # Event ID (use 'id' field, fallback to '_id')
             event_id = raw.get('id') or raw.get('_id')
             if not event_id:
@@ -294,8 +308,12 @@ class FanatizScraper:
             end_utc = self._calculate_end_time(start_utc, 150)
             
             # Extract team information
-            home_team_obj = raw.get('homeTeam', {})
-            away_team_obj = raw.get('awayTeam', {})
+            home_team_obj = raw.get('homeTeam') or {}
+            away_team_obj = raw.get('awayTeam') or {}
+            if not isinstance(home_team_obj, dict):
+                home_team_obj = {}
+            if not isinstance(away_team_obj, dict):
+                away_team_obj = {}
             
             home_team = home_team_obj.get('shortName') or home_team_obj.get('name', 'Home')
             away_team = away_team_obj.get('shortName') or away_team_obj.get('name', 'Away')
@@ -305,7 +323,10 @@ class FanatizScraper:
             
             # Extract tournament info
             # Tournament IDs are in __belong.Tournament[]
-            tournament_ids = raw.get('__belong', {}).get('Tournament', [])
+            belong_obj = raw.get('__belong') or {}
+            if not isinstance(belong_obj, dict):
+                belong_obj = {}
+            tournament_ids = belong_obj.get('Tournament', [])
             tournament_name = 'Soccer'  # Default
             
             # Sport type
@@ -314,11 +335,16 @@ class FanatizScraper:
             sport = self._normalize_sport(sport_type)
             
             # Event status filtering
-            event_status = raw.get('eventStatus', {})
+            event_status = raw.get('eventStatus') or {}
+            if not isinstance(event_status, dict):
+                event_status = {}
             status_category = raw.get('statusCategory', 'future')
             
             # Extract the event status name
-            event_status_name = event_status.get('name', {}).get('original', '')
+            status_name_obj = event_status.get('name') or {}
+            if not isinstance(status_name_obj, dict):
+                status_name_obj = {}
+            event_status_name = status_name_obj.get('original', '')
             
             # Filter out finished/canceled matches
             if event_status_name in ['After match', 'Canceled', 'Cancelled', 'Finished', 'Full-time', 'Complete']:
