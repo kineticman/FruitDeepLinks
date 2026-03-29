@@ -305,6 +305,13 @@ def build_lanes_with_placeholders(
     earliest_start = min(e.start for e in events)
     latest_end = max(e.end_padded for e in events)
 
+    print(f"[DEBUG] {len(events)} events to place across {lane_count} lanes")
+    print(f"[DEBUG] earliest_start={earliest_start.isoformat()}")
+    print(f"[DEBUG] latest_end={latest_end.isoformat()}")
+    top_end = sorted(events, key=lambda e: e.end_padded, reverse=True)[:5]
+    for te in top_end:
+        print(f"[DEBUG]   far-end event: {te.event_id} end_padded={te.end_padded.isoformat()} title={te.title!r}")
+
     now_floored = now.replace(minute=0, second=0, microsecond=0)
     placeholder_start_global = now_floored - timedelta(hours=1)
     earliest_floored = earliest_start.replace(minute=0, second=0, microsecond=0)
@@ -314,6 +321,12 @@ def build_lanes_with_placeholders(
     placeholder_end_global = (latest_end + timedelta(days=PLACEHOLDER_EXTRA_DAYS)).replace(
         minute=0, second=0, microsecond=0
     )
+    print(f"[DEBUG] placeholder_start={placeholder_start_global.isoformat()}")
+    print(f"[DEBUG] placeholder_end={placeholder_end_global.isoformat()}")
+    span_hours = (placeholder_end_global - placeholder_start_global).total_seconds() / 3600
+    estimated_placeholders = int(span_hours / (PLACEHOLDER_BLOCK_MINUTES / 60)) * lane_count
+    print(f"[DEBUG] span={span_hours:.1f}h, estimated max placeholders={estimated_placeholders:,}")
+
 
     lane_ends = [placeholder_start_global for _ in range(lane_count)]
     lane_events: List[List[Event]] = [[] for _ in range(lane_count)]
@@ -354,7 +367,12 @@ def build_lanes_with_placeholders(
         )
 
     placeholder_count = 0
+    empty_lanes = sum(1 for le in lane_events if not le)
+    print(f"[DEBUG] Lane distribution: {lane_count - empty_lanes} lanes have events, {empty_lanes} empty (full fill needed)")
+    print(f"[DEBUG] Starting lane fill loop ({lane_count} lanes)")
     for lane_id in range(1, lane_count + 1):
+        if lane_id % 50 == 1:
+            print(f"[DEBUG] Filling lane {lane_id}/{lane_count}, placeholders so far={placeholder_count:,}")
         blocks = lane_events[lane_id - 1]
         current = placeholder_start_global
         for ev in blocks:
@@ -430,6 +448,7 @@ def build_lanes_with_placeholders(
                 placeholder_count += 1
             current = gap_end
 
+    print(f"[DEBUG] Inserts done ({placeholder_count:,} placeholders), committing...")
     conn.commit()
     print(f"Created {placeholder_count} placeholders")
     print(f"Dropped {len(dropped)} events")
