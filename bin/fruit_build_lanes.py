@@ -180,6 +180,12 @@ def load_future_events(conn: sqlite3.Connection, days_ahead: int) -> List[Event]
         if end_dt < now or start_dt > cutoff:
             continue
 
+        # Cap end_dt to cutoff + 1 day to prevent events with bad/far-future
+        # end_utc from causing a massive placeholder loop across many lanes
+        max_end_dt = cutoff + timedelta(days=1)
+        if end_dt > max_end_dt:
+            end_dt = max_end_dt
+
         end_padded = end_dt + timedelta(minutes=PADDING_MINUTES)
         events.append(
             Event(event_id, pvid, slug, title, channel_name, start_dt, end_padded)
