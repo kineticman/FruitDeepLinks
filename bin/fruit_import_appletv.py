@@ -270,6 +270,11 @@ def normalize_event_structure(apple_event: Dict[str, Any]) -> Dict[str, Any]:
     start_ms = ti_start or lb_start or kickoff
     end_ms = ti_end or lb_end or None
 
+    # F1/Motorsports events with SoftwareUpgradeRequired have no end time from the API.
+    # Estimate 4 hours from start so end_utc-based filters don't exclude them.
+    if end_ms is None and start_ms and avail_status == "SoftwareUpgradeRequired":
+        end_ms = start_ms + 4 * 60 * 60 * 1000
+
     return {
         "id": event_id,
         "title": content.get("title") or content.get("shortTitle"),
