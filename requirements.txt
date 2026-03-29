@@ -16,6 +16,7 @@ lxml==4.9.3
 # HTTP
 requests==2.31.0
 urllib3==2.1.0
+curl_cffi==0.14.0
 
 # Data Processing
 python-dateutil==2.8.2
