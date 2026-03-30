@@ -29,9 +29,9 @@ def _get_int_env(names, default):
 
 
 PADDING_MINUTES = _get_int_env(["FRUIT_PADDING_MINUTES", "PEACOCK_PADDING_MINUTES"], 45)
-PLACEHOLDER_BLOCK_MINUTES = _get_int_env(
+PLACEHOLDER_BLOCK_MINUTES = max(1, _get_int_env(
     ["FRUIT_PLACEHOLDER_BLOCK_MINUTES", "PEACOCK_PLACEHOLDER_BLOCK_MINUTES"], 60
-)
+))
 PLACEHOLDER_EXTRA_DAYS = _get_int_env(
     ["FRUIT_PLACEHOLDER_EXTRA_DAYS", "PEACOCK_PLACEHOLDER_EXTRA_DAYS"], 5
 )
@@ -324,8 +324,9 @@ def build_lanes_with_placeholders(
     print(f"[DEBUG] placeholder_start={placeholder_start_global.isoformat()}")
     print(f"[DEBUG] placeholder_end={placeholder_end_global.isoformat()}")
     span_hours = (placeholder_end_global - placeholder_start_global).total_seconds() / 3600
-    estimated_placeholders = int(span_hours / (PLACEHOLDER_BLOCK_MINUTES / 60)) * lane_count
-    print(f"[DEBUG] span={span_hours:.1f}h, estimated max placeholders={estimated_placeholders:,}")
+    blocks_per_hour = 60 / PLACEHOLDER_BLOCK_MINUTES
+    estimated_placeholders = int(span_hours * blocks_per_hour) * lane_count
+    print(f"[DEBUG] span={span_hours:.1f}h block={PLACEHOLDER_BLOCK_MINUTES}min, estimated max placeholders={estimated_placeholders:,}")
 
 
     lane_ends = [placeholder_start_global for _ in range(lane_count)]
