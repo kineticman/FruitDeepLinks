@@ -415,6 +415,20 @@ def build_adb_lanes(db_path: str, provider_filter: Optional[str] = None) -> None
 
     total_inserted = 0
 
+    # Clear stale lanes for any provider no longer enabled before rebuilding.
+    # Previously only enabled providers were cleared (inside the loop), so
+    # disabled providers left orphaned rows that kept appearing in exports.
+    enabled_codes = {code for code, _ in providers}
+    cur = conn.cursor()
+    cur.execute("SELECT DISTINCT provider_code FROM adb_lanes")
+    existing_codes = {row[0] for row in cur.fetchall()}
+    stale_codes = existing_codes - enabled_codes
+    for stale in stale_codes:
+        log.info("Clearing stale adb_lanes for disabled provider: %s", stale)
+        cur.execute("DELETE FROM adb_lanes WHERE provider_code=?", (stale,))
+    if stale_codes:
+        conn.commit()
+
     for provider_code, lane_count in providers:
         clear_adb_lanes(conn, provider_code, log)
 
