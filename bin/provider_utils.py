@@ -3,82 +3,53 @@
 provider_utils.py - Utilities for handling streaming provider deeplinks
 
 Extracts provider from URL schemes and provides human-readable names.
+Display names and priorities delegate to core.service_catalog.
 """
 
-# Provider mapping: URL scheme -> Display name
-PROVIDER_MAP = {
-    # ESPN
-    'sportsonespn': 'ESPN+',
-    'sportscenter': 'ESPN',
-    
-    # CBS/Paramount
-    'pplus': 'Paramount+',
-    'cbssportsapp': 'CBS Sports',
-    'cbstve': 'CBS',
-    
-    # NBC/Peacock
-    'peacock': 'Peacock',
-    'peacocktv': 'Peacock',
-    'nbcsportstve': 'NBC Sports',
-    
-    # Amazon
-    'aiv': 'Prime Video',
-    
-    # NBA
-    'gametime': 'NBA',
-    
-    # Fox
-    'foxone': 'FOX Sports (App)',
-    'fsapp': 'FOX Sports (Alt)',
-    'watchtru': 'truTV',
-    'watchtnt': 'TNT',
-    
-    # Regional Sports Networks
-    'marquee': 'Marquee Sports Network',
-    'nesn': 'NESN 360',
-    'com.nesn.nesnplayer': 'NESN 360',  # Android app scheme
-    
-    # Other
-    'dazn': 'DAZN',
-    'open.dazn.com': 'DAZN',
-    'vixapp': 'ViX',
-    'f1tv': 'F1 TV',
-    'nflctv': 'NFL+',
-    'nflmobile': 'NFL',
-    'videos': 'Apple TV+',
-    
-    # Web fallbacks
-    'https': 'Web',
-    'http': 'Web',
-}
+import sys
+import os
 
-# Provider priority (lower = higher priority)
-# Users can customize this in settings
+# Prefer the canonical catalog; fall back gracefully if unavailable.
+try:
+    _bin = os.path.dirname(__file__)
+    if _bin not in sys.path:
+        sys.path.insert(0, _bin)
+    from core.service_catalog import (
+        DISPLAY_NAMES as PROVIDER_MAP,
+        get_display_name as _catalog_display_name,
+        get_internal_priority as _catalog_priority,
+    )
+    _CATALOG_AVAILABLE = True
+except ImportError:
+    _CATALOG_AVAILABLE = False
+    # Minimal fallback map for scheme-based lookups
+    PROVIDER_MAP = {
+        'sportsonespn': 'ESPN+', 'sportscenter': 'ESPN+', 'peacock': 'Peacock',
+        'peacocktv': 'Peacock', 'pplus': 'Paramount+', 'aiv': 'Prime Video',
+        'gametime': 'NBA', 'cbssportsapp': 'CBS Sports', 'cbstve': 'CBS',
+        'nbcsportstve': 'NBC Sports', 'foxone': 'FOX Sports (App)', 'fsapp': 'FOX Sports (Alt)',
+        'watchtru': 'truTV', 'watchtnt': 'TNT', 'marquee': 'Marquee Sports Network',
+        'nesn': 'NESN 360', 'dazn': 'DAZN', 'open.dazn.com': 'DAZN',
+        'vixapp': 'ViX', 'f1tv': 'F1 TV', 'nflctv': 'NFL+', 'nflmobile': 'NFL',
+        'https': 'Web', 'http': 'Web',
+    }
+
+# Legacy list form of priorities, used by filter_playables_by_services sort key.
+# Order matches INTERNAL_PRIORITY from service_catalog (lower index = higher priority).
 DEFAULT_PROVIDER_PRIORITY = [
-    'sportsonespn',     # ESPN+ (usually best quality)
-    'peacock',          # Peacock
-    'peacocktv',        # Peacock alt
-    'pplus',            # Paramount+
-    'aiv',              # Prime Video
-    'cbssportsapp',     # CBS Sports
-    'nbcsportstve',     # NBC Sports
-    'foxone',           # FOX Sports
-    'fsapp',            # FOX Sports alt
-    'dazn',             # DAZN
-    'vixapp',           # ViX
-    'f1tv',             # F1 TV
-    'marquee',          # Marquee Sports Network
-    'nesn',             # NESN 360 (New England regional)
-    'nflctv',           # NFL+
-    'videos',           # Apple TV+
-    'cbstve',           # CBS
-    'watchtnt',         # TNT
-    'watchtru',         # truTV
-    'gametime',         # NBA
-    'nflmobile',        # NFL
-    'sportscenter',     # ESPN (less reliable)
-    'https',            # Web fallback
-    'http',             # Web fallback
+    'espn_linear', 'sportsonespn', 'espn_plus', 'sportscenter',
+    'peacock', 'peacock_web', 'pplus', 'max',
+    'aiv_free', 'aiv_prime', 'aiv_peacock', 'aiv_max',
+    'cbssportsapp', 'cbstve', 'nbcsportstve',
+    'foxone', 'aiv_fox', 'aiv_fox_one', 'fsapp',
+    'apple_mls', 'apple_mlb', 'apple_nba', 'apple_nhl', 'apple_f1', 'apple_other',
+    'dazn', 'aiv_dazn', 'open.dazn.com', 'f1tv',
+    'kayo_web', 'bein', 'victory', 'nesn', 'nesn_web', 'fanatiz_web',
+    'gotham', 'marquee', 'vixapp', 'aiv_vix_premium', 'aiv_vix',
+    'aiv_tennis_channel', 'aiv_fanduel', 'nflctv',
+    'watchtru', 'ncaa_march_madness', 'watchtnt', 'watchtbs',
+    'nba', 'aiv_nba_league_pass', 'gametime', 'mlb', 'nhl', 'nflmobile',
+    'aiv', 'aiv_aggregator', 'https', 'http',
 ]
 
 
@@ -139,22 +110,17 @@ def get_display_name_from_domain(url: str) -> str:
 
 
 def get_provider_display_name(provider_scheme: str) -> str:
-    """
-    Get human-readable name for provider
-    
-    Examples:
-        sportsonespn -> ESPN+
-        pplus -> Paramount+
-        peacock -> Peacock
-    """
+    """Get human-readable name for a provider scheme."""
+    if _CATALOG_AVAILABLE:
+        return _catalog_display_name(provider_scheme)
     return PROVIDER_MAP.get(provider_scheme, provider_scheme.upper())
 
 
 def get_provider_priority(provider_scheme: str) -> int:
-    """
-    Get priority value for provider (lower = higher priority)
-    Returns 999 if not in priority list
-    """
+    """Get priority for provider (lower = higher priority). Returns 999 if unknown."""
+    if _CATALOG_AVAILABLE:
+        p = _catalog_priority(provider_scheme)
+        return p if p != 25 else 999  # 25 is the catalog default for unknowns
     try:
         return DEFAULT_PROVIDER_PRIORITY.index(provider_scheme)
     except ValueError:

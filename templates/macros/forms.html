@@ -1,0 +1,33 @@
+{% macro labeled_input(label, name, value='', type='text', hint='', placeholder='', required=false) %}
+<div style="margin-bottom:14px">
+  <label for="{{ name }}">{{ label }}{% if required %} <span style="color:#f87171">*</span>{% endif %}</label>
+  <input type="{{ type }}" id="{{ name }}" name="{{ name }}" value="{{ value }}"
+    {% if placeholder %}placeholder="{{ placeholder }}"{% endif %}
+    {% if required %}required{% endif %}
+    style="margin-top:5px">
+  {% if hint %}<p class="form-hint">{{ hint }}</p>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro toggle_row(label, name, checked, hint='') %}
+<div class="toggle-row">
+  <div>
+    <label for="{{ name }}" style="cursor:pointer">{{ label }}</label>
+    {% if hint %}<p class="form-hint">{{ hint }}</p>{% endif %}
+  </div>
+  <input type="checkbox" id="{{ name }}" name="{{ name }}"{% if checked %} checked{% endif %}
+    style="width:18px;height:18px;cursor:pointer;accent-color:var(--accent)">
+</div>
+{% endmacro %}
+
+{% macro select_input(label, name, options, selected='', hint='') %}
+<div style="margin-bottom:14px">
+  <label for="{{ name }}">{{ label }}</label>
+  <select id="{{ name }}" name="{{ name }}" style="margin-top:5px">
+    {% for val, display in options %}
+    <option value="{{ val }}"{% if val == selected %} selected{% endif %}>{{ display }}</option>
+    {% endfor %}
+  </select>
+  {% if hint %}<p class="form-hint">{{ hint }}</p>{% endif %}
+</div>
+{% endmacro %}

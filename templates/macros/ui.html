@@ -1,0 +1,26 @@
+{% macro stat_card(title, stats, card_id='') %}
+<div class="card"{% if card_id %} id="{{ card_id }}"{% endif %}>
+  <h2>{{ title }}</h2>
+  {% for label, value, value_class in stats %}
+  <div class="stat">
+    <span class="stat-label">{{ label }}</span>
+    <span class="stat-value{% if value_class %} {{ value_class }}{% endif %}">{{ value }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endmacro %}
+
+{% macro badge(text, color='gray') %}
+<span class="badge badge-{{ color }}">{{ text }}</span>
+{% endmacro %}
+
+{% macro spinner(label='Loading...') %}
+<span class="htmx-indicator status-muted">{{ label }}</span>
+{% endmacro %}
+
+{% macro section_header(title, subtitle='') %}
+<div style="margin-bottom:16px">
+  <h2 style="color:#60a5fa;font-size:18px">{{ title }}</h2>
+  {% if subtitle %}<p style="color:#94a3b8;font-size:13px;margin-top:4px">{{ subtitle }}</p>{% endif %}
+</div>
+{% endmacro %}

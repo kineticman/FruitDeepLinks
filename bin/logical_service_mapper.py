@@ -11,8 +11,26 @@ NOW INCLUDES: Amazon channel enrichment via amazon_channels table
 import sqlite3
 import json
 import re
+import sys
+import os
 from typing import Optional, Dict, Any
 from urllib.parse import urlparse
+
+# Import canonical service data from the core catalog.
+# Falls back to inline dicts if the package isn't on sys.path yet (e.g. CLI use).
+try:
+    _core = os.path.join(os.path.dirname(__file__), "core")
+    if _core not in sys.path:
+        sys.path.insert(0, os.path.dirname(__file__))
+    from core.service_catalog import (
+        DISPLAY_NAMES as SERVICE_DISPLAY_NAMES,
+        INTERNAL_PRIORITY as _PRIORITY_MAP,
+        get_display_name as get_service_display_name,
+        get_internal_priority as get_logical_service_priority,
+    )
+    _CATALOG_AVAILABLE = True
+except ImportError:
+    _CATALOG_AVAILABLE = False
 
 # Logical service definitions
 LOGICAL_SERVICE_MAP = {
@@ -35,83 +53,35 @@ LOGICAL_SERVICE_MAP = {
     'www.watch.nesn.com': 'nesn_web',
 }
 
-# Display names for logical services
-SERVICE_DISPLAY_NAMES = {
-    # App-based (existing)
-    'sportsonespn': 'ESPN+',
-    'sportscenter': 'ESPN',
-    'espn_linear': 'ESPN (Linear)',
-    'espn_plus': 'ESPN+',
-    'peacock': 'Peacock',
-    'peacocktv': 'Peacock',
-    'pplus': 'Paramount+',
-    'aiv': 'Prime Video',
-    'gametime': 'NBA',
-    'cbssportsapp': 'CBS Sports',
-    'cbstve': 'CBS',
-    'nbcsportstve': 'NBC Sports',
-    'foxone': 'FOX Sports (App)',
-    'fsapp': 'FOX Sports (Alt)',
-    'dazn': 'DAZN',
-    'open.dazn.com': 'DAZN',
-    'vixapp': 'ViX',
-    'nflctv': 'NFL+',
-    'nflmobile': 'NFL',
-    'watchtru': 'truTV',
-    'watchtnt': 'TNT',
-    'watchtbs': 'TBS',
-    'ncaa_march_madness': 'NCAA March Madness',
-    'marquee': 'Marquee Sports Network',
-    
-    # League-specific services
-    'nba': 'NBA League Pass',
-    'mlb': 'MLB.TV',
-    'nhl': 'NHL.TV',
-    
-    # Niche sports services
-    'victory': 'Victory+',
-    'gotham': 'Gotham Sports',
-    'bein': 'beIN Sports',
-    
-    # Web-based (new logical services)
-    'peacock_web': 'Peacock (Web)',
-    'max': 'Max',
-    'f1tv': 'F1 TV',
-    'kayo_web': 'Kayo Sports',
-    'fanatiz_web': 'Fanatiz Soccer',
-    'apple_mls': 'Apple MLS',
-    'apple_mlb': 'Apple MLB',
-    'apple_nba': 'Apple NBA',
-    'apple_nhl': 'Apple NHL',
-    'apple_f1': 'Formula 1 (Apple TV)',
-    'apple_other': 'Apple TV+',
-    
-    # NESN Regional Sports Network (NEW)
-    'nesn': 'NESN 360',
-    
-    # Amazon-hosted services (NEW)
-    'aiv_prime': 'Amazon - Prime Exclusive',
-    'aiv_nba_league_pass': 'Amazon - NBA League Pass',
-    'aiv_peacock': 'Amazon - Peacock',
-    'aiv_dazn': 'Amazon - DAZN',
-    'aiv_fox': 'Amazon - FOX One',       # legacy code (some playables rows)
-    'aiv_fox_one': 'Amazon - FOX One',   # canonical code (UI/filter standard)
-    'aiv_vix_premium': 'Amazon - ViX Premium',
-    'aiv_vix': 'Amazon - ViX',
-    'aiv_tennis_channel': 'Amazon - Tennis Channel',
-    'aiv_fanduel': 'Amazon - FanDuel Sports Network',
-    'aiv_max': 'Amazon - Max',
-    'aiv_paramount_plus': 'Amazon - Paramount+',
-    'aiv_willow': 'Amazon - Willow TV',
-    'aiv_wnba': 'Amazon - WNBA League Pass',
-    'aiv_squash': 'Amazon - SquashTV',
-    'aiv_free': 'Amazon - Free with Ads',
-    'aiv_aggregator': 'Amazon - Unknown',
-    
-    # Fallback
-    'https': 'Web - Other',
-    'http': 'Web - Other',
-}
+# Display names for logical services.
+# When _CATALOG_AVAILABLE is True these are already imported from service_catalog;
+# this inline dict is only used as a last-resort fallback.
+if not _CATALOG_AVAILABLE:
+    SERVICE_DISPLAY_NAMES = {
+        'sportsonespn': 'ESPN+', 'sportscenter': 'ESPN+', 'espn_linear': 'ESPN (Linear)',
+        'espn_plus': 'ESPN+', 'peacock': 'Peacock', 'peacocktv': 'Peacock',
+        'peacock_web': 'Peacock (Web)', 'pplus': 'Paramount+', 'aiv': 'Prime Video',
+        'gametime': 'NBA', 'cbssportsapp': 'CBS Sports', 'cbstve': 'CBS',
+        'nbcsportstve': 'NBC Sports', 'foxone': 'FOX Sports (App)', 'fsapp': 'FOX Sports (Alt)',
+        'dazn': 'DAZN', 'open.dazn.com': 'DAZN', 'vixapp': 'ViX', 'nflctv': 'NFL+',
+        'nflmobile': 'NFL', 'watchtru': 'truTV', 'watchtnt': 'TNT', 'watchtbs': 'TBS',
+        'ncaa_march_madness': 'NCAA March Madness', 'marquee': 'Marquee Sports Network',
+        'nba': 'NBA League Pass', 'mlb': 'MLB.TV', 'nhl': 'NHL.TV',
+        'victory': 'Victory+', 'gotham': 'Gotham Sports', 'bein': 'beIN Sports',
+        'max': 'Max', 'f1tv': 'F1 TV', 'kayo_web': 'Kayo Sports', 'fanatiz_web': 'Fanatiz Soccer',
+        'apple_mls': 'Apple MLS', 'apple_mlb': 'Apple MLB', 'apple_nba': 'Apple NBA',
+        'apple_nhl': 'Apple NHL', 'apple_f1': 'Formula 1 (Apple TV)', 'apple_other': 'Apple TV+',
+        'nesn': 'NESN 360', 'nesn_web': 'NESN 360',
+        'aiv_prime': 'Amazon - Prime Exclusive', 'aiv_nba_league_pass': 'Amazon - NBA League Pass',
+        'aiv_peacock': 'Amazon - Peacock', 'aiv_dazn': 'Amazon - DAZN',
+        'aiv_fox': 'Amazon - FOX One', 'aiv_fox_one': 'Amazon - FOX One',
+        'aiv_vix_premium': 'Amazon - ViX Premium', 'aiv_vix': 'Amazon - ViX',
+        'aiv_tennis_channel': 'Amazon - Tennis Channel', 'aiv_fanduel': 'Amazon - FanDuel Sports Network',
+        'aiv_max': 'Amazon - Max', 'aiv_paramount_plus': 'Amazon - Paramount+',
+        'aiv_willow': 'Amazon - Willow TV', 'aiv_wnba': 'Amazon - WNBA League Pass',
+        'aiv_squash': 'Amazon - SquashTV', 'aiv_free': 'Amazon - Free with Ads',
+        'aiv_aggregator': 'Amazon - Unknown', 'https': 'Web - Other', 'http': 'Web - Other',
+    }
 
 
 def extract_host_from_url(url: str) -> Optional[str]:
@@ -433,89 +403,30 @@ def get_all_logical_services_with_counts(conn: sqlite3.Connection) -> Dict[str, 
     return service_counts
 
 
-def get_logical_service_priority(service_code: str) -> int:
-    """
-    Get priority for service (lower = higher priority).
-    Used for selecting best playable when multiple options available.
-    
-    NEW: Amazon services now have granular priorities instead of blanket penalty
-    """
-    PRIORITY_MAP = {
-        # Premium sports services (highest priority)
-        'espn_linear': 0,    # ESPN linear channels (ESPN, ESPN2, ESPN Deportes, ESPNU, ESPNews)
-        'sportsonespn': 1,   # ESPN+ legacy
-        'espn_plus': 1,      # ESPN+ streaming service
-        'sportscenter': 1,   # ESPN app - fallback for unmapped
-        'peacock': 2,
-        'peacock_web': 3,  # Web version slightly lower priority
-        
-        # General streaming (prefer direct services)
-        'pplus': 4,
-        'max': 5,
-        
-        # Amazon services (NEW - granular priorities)
-        'aiv_free': 1,               # Free content - same as ESPN+
-        'aiv_prime': 4,              # True Prime content - same as Paramount+
-        'aiv_peacock': 5,            # Compete with direct Peacock (web)
-        'aiv_max': 5,                # Compete with direct Max
-        
-        # Sports-specific
-        'cbssportsapp': 6,
-        'cbstve': 7,
-        'nbcsportstve': 8,
-        'foxone': 9,
-        'aiv_fox': 9,                # FOX on Amazon - legacy code
-        'aiv_fox_one': 9,            # FOX on Amazon - canonical code
-        'fsapp': 10,
-        
-        # Apple services
-        'apple_mls': 11,
-        'apple_mlb': 12,
-        'apple_nba': 13,
-        'apple_nhl': 14,
-        'apple_f1': 15,
-        'apple_other': 16,
-        
-        # Niche/specialty
-        'dazn': 16,
-        'aiv_dazn': 16,              # DAZN on Amazon - same as direct
-        'open.dazn.com': 17,
-        'f1tv': 18,
-        'kayo_web': 19,  # Kayo Sports (Australia)
-        'bein': 19,  # beIN Sports (international/regional)
-        'fanatiz_web': 20,  # Fanatiz Soccer (Latin America / international)
-        'victory': 19,   # Victory+ (WHL, LOVB, other niche sports)
-        'gotham': 20,    # Gotham Sports (MSG/YES Network - NYC regional)
-        'marquee': 20,   # Marquee Sports Network (Chicago regional)
-        'nesn': 19,      # NESN 360 (New England regional sports)
-        'vixapp': 21,
-        'aiv_vix_premium': 21,       # ViX on Amazon - same as direct
-        'aiv_vix': 21,
-        'aiv_tennis_channel': 22,    # Tennis Channel on Amazon
-        'aiv_fanduel': 22,           # FanDuel Sports Network
-        'nflctv': 22,
-        'watchtru': 23,
-        'watchtnt': 24,
-        'watchtbs': 25,  # TBS - College sports, MLB, NBA
-        'ncaa_march_madness': 24,
-        
-        # League-specific services (direct subscriptions)
-        'nba': 26,        # NBA League Pass (direct)
-        'aiv_nba_league_pass': 26,  # NBA League Pass on Amazon - SAME priority as direct
-        'gametime': 26,   # NBA app (same priority as League Pass)
-        'mlb': 26,        # MLB.TV
-        'nhl': 26,        # NHL.TV / NHL Power Play
-        
-        # Amazon aggregator/unknown (deprioritized)
-        'aiv': 27,                   # Old generic Amazon (deprecated)
-        'aiv_aggregator': 27,        # Unknown Amazon content - penalized
-        
-        # Generic web (lowest priority)
-        'https': 30,
-        'http': 31,
-    }
-    
-    return PRIORITY_MAP.get(service_code, 25)
+# Fallback implementations used only when core.service_catalog is unavailable.
+if not _CATALOG_AVAILABLE:
+    def get_service_display_name(service_code: str) -> str:
+        return SERVICE_DISPLAY_NAMES.get(service_code, service_code.upper())
+
+    def get_logical_service_priority(service_code: str) -> int:
+        _FALLBACK = {
+            'espn_linear': 0, 'sportsonespn': 1, 'espn_plus': 1, 'sportscenter': 1,
+            'peacock': 2, 'peacock_web': 3, 'pplus': 4, 'max': 5,
+            'aiv_free': 1, 'aiv_prime': 4, 'aiv_peacock': 5, 'aiv_max': 5,
+            'cbssportsapp': 6, 'cbstve': 7, 'nbcsportstve': 8,
+            'foxone': 9, 'aiv_fox': 9, 'aiv_fox_one': 9, 'fsapp': 10,
+            'apple_mls': 11, 'apple_mlb': 12, 'apple_nba': 13, 'apple_nhl': 14,
+            'apple_f1': 15, 'apple_other': 16, 'dazn': 16, 'aiv_dazn': 16,
+            'open.dazn.com': 17, 'f1tv': 18, 'kayo_web': 19, 'bein': 19,
+            'victory': 19, 'nesn': 19, 'nesn_web': 19, 'fanatiz_web': 20,
+            'gotham': 20, 'marquee': 20, 'vixapp': 21,
+            'aiv_vix_premium': 21, 'aiv_vix': 21,
+            'aiv_tennis_channel': 22, 'aiv_fanduel': 22, 'nflctv': 22,
+            'watchtru': 23, 'ncaa_march_madness': 24, 'watchtnt': 24, 'watchtbs': 25,
+            'nba': 26, 'aiv_nba_league_pass': 26, 'gametime': 26, 'mlb': 26, 'nhl': 26,
+            'aiv': 27, 'aiv_aggregator': 27, 'https': 30, 'http': 31,
+        }
+        return _FALLBACK.get(service_code, 25)
 
 
 if __name__ == '__main__':
