@@ -34,7 +34,8 @@ def _find_template_dir() -> Path:
 def create_app() -> Flask:
     """Create and configure the Flask application."""
     template_dir = _find_template_dir()
-    app = Flask(__name__, template_folder=str(template_dir))
+    app = Flask(__name__, template_folder=str(template_dir),
+                static_folder=str(template_dir), static_url_path="/static")
     app.config["TEMPLATES_AUTO_RELOAD"] = True
 
     if CORS is not None:

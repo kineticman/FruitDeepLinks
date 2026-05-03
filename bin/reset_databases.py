@@ -218,8 +218,6 @@ def main():
     print()
     print("Next steps:")
     print("  1. Run: python3 daily_refresh.py")
-    print("  2. Watch hybrid performance stats")
-    print("  3. See 10x speedup on Step 1b (shelf upgrade)")
     print()
     
     return 0

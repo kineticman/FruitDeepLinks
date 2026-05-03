@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}FruitDeepLinks{% endblock %}</title>
+<link rel="icon" type="image/png" href="/static/logo.png">
 {% block head_extra %}{% endblock %}
 <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js" defer></script>
 <style>
@@ -49,10 +50,17 @@ a:hover { color: #93c5fd; }
 
 .title-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 14px;
   flex-wrap: wrap;
   margin-bottom: 4px;
+}
+.title-logo {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+  flex-shrink: 0;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,0.5));
 }
 h1 { color: #60a5fa; }
 .subtitle { color: var(--text-muted); margin-bottom: 24px; font-size: 14px; }
@@ -298,6 +306,7 @@ tr:hover td { background: #111827; }
 <!-- Page header -->
 {% block page_header %}
 <div class="title-row">
+  <img src="/static/logo.png" alt="" class="title-logo" aria-hidden="true">
   <h1>{% block page_title %}FruitDeepLinks{% endblock %}</h1>
   {% block title_extras %}{% endblock %}
 </div>
