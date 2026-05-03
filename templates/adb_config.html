@@ -59,10 +59,130 @@ code { background:var(--bg-inset); padding:2px 6px; border-radius:4px; font-size
 
 <div class="card" style="margin-bottom:16px">
   <h2>Integration Files</h2>
-  <p class="section-desc">After configuring and saving your ADB lanes, each enabled provider generates its own set of files for ADBTuner or ChromeCapture integration.</p>
+  <p class="section-desc">Generated M3U and XMLTV files, one set per enabled provider. Point ADBTuner or ChromeCapture at a file's URL to add those channels. Files are regenerated each time you run Apply Filters.</p>
   <div id="integration-files-loading" class="status-muted">Loading available files…</div>
   <div id="integration-files-list" style="display:none"></div>
-  <p class="section-desc" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">Files are generated when you run "Apply Filters" or trigger a refresh after saving your ADB configuration.</p>
+</div>
+
+<div class="card" style="margin-bottom:16px">
+  <h2>Device Profiles</h2>
+  <div class="section-desc">
+    <p>Each ADB lanes M3U is available in two <em>device profiles</em> that control which deep link style is embedded. Use the <code>/m3u/adb</code> endpoint and pass a <code>profile</code> query parameter to select the style your client expects.</p>
+  </div>
+
+  <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px">
+    <thead>
+      <tr style="border-bottom:1px solid var(--border)">
+        <th style="text-align:left;padding:8px 10px">Profile</th>
+        <th style="text-align:left;padding:8px 10px">Endpoint</th>
+        <th style="text-align:left;padding:8px 10px">Link style</th>
+        <th style="text-align:left;padding:8px 10px">Best for</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:8px 10px"><strong>fire</strong> <span style="color:var(--text-muted)">(default)</span></td>
+        <td style="padding:8px 10px"><code>/m3u/adb</code> or <code>/m3u/adb?profile=fire</code></td>
+        <td style="padding:8px 10px"><code>aiv://</code>, <code>sportscenter://</code>, … (native app scheme)</td>
+        <td style="padding:8px 10px">Fire TV, Android (ADBTuner)</td>
+      </tr>
+      <tr>
+        <td style="padding:8px 10px"><strong>apple</strong></td>
+        <td style="padding:8px 10px"><code>/m3u/adb?profile=apple</code></td>
+        <td style="padding:8px 10px"><code>https://app.primevideo.com/…</code>, <code>https://www.espn.com/watch/…</code>, … (HTTPS)</td>
+        <td style="padding:8px 10px">Apple TV, iOS, web clients (CC4C, PrismCast)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="section-desc">
+    <p><strong>Per-provider files</strong> follow the same convention — the apple variant adds <code>_apple</code> before the extension:</p>
+    <ul>
+      <li><code>/out/adb_lanes_aiv.m3u</code> → Fire TV / Android</li>
+      <li><code>/out/adb_lanes_aiv_apple.m3u</code> → Apple TV / HTTPS</li>
+    </ul>
+  </div>
+
+  <div class="section-desc" style="margin-bottom:0">
+    <p><strong>How each scheme converts for the Apple profile:</strong></p>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border);color:var(--text-muted)">
+          <th style="text-align:left;padding:6px 10px">Provider</th>
+          <th style="text-align:left;padding:6px 10px">Scheme URL (fire profile)</th>
+          <th style="text-align:left;padding:6px 10px">HTTPS URL (apple profile)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 10px">Prime Video</td>
+          <td style="padding:6px 10px"><code>aiv://aiv/detail?gti=…</code></td>
+          <td style="padding:6px 10px"><code>https://app.primevideo.com/detail?gti=…</code></td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 10px">ESPN / ESPN+</td>
+          <td style="padding:6px 10px"><code>sportscenter://…showWatchStream?playID=…</code></td>
+          <td style="padding:6px 10px"><code>https://www.espn.com/watch/player/_/id/…</code></td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 10px">Paramount+</td>
+          <td style="padding:6px 10px"><code>pplus://www.paramountplus.com/live-tv/…</code></td>
+          <td style="padding:6px 10px"><code>https://www.paramountplus.com/live-tv/…</code></td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 10px">CBS TVE</td>
+          <td style="padding:6px 10px"><code>cbstve://www.cbs.com/live-tv/…</code></td>
+          <td style="padding:6px 10px"><code>https://www.cbs.com/live-tv/…</code></td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 10px">DAZN</td>
+          <td style="padding:6px 10px"><code>open.dazn.com://media/open/…</code></td>
+          <td style="padding:6px 10px"><code>https://open.dazn.com/media/open/…</code></td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 10px">Fox Sports</td>
+          <td style="padding:6px 10px"><code>fsapp://live/FS1?eventId=…</code></td>
+          <td style="padding:6px 10px"><code>https://www.foxsports.com/live/fs1?eventId=…</code></td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 10px">Max</td>
+          <td style="padding:6px 10px"><code>https://play.hbomax.com/sport/…</code></td>
+          <td style="padding:6px 10px"><code>https://play.hbomax.com/video/watch-sport/…</code> (transformed)</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 10px">NBA GameTime</td>
+          <td style="padding:6px 10px"><code>gametime://game/…</code></td>
+          <td style="padding:6px 10px"><code>https://www.nba.com/game/…</code></td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 10px">MLB</td>
+          <td style="padding:6px 10px"><code>mlbatbat://mlbtv?gamepk=…</code></td>
+          <td style="padding:6px 10px"><code>https://www.mlb.com/tv/g…</code></td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 10px">CBS Sports</td>
+          <td style="padding:6px 10px"><code>cbssportsapp://home/watch/LET-…</code></td>
+          <td style="padding:6px 10px"><code>https://www.cbssports.com/watch/…/LET-…</code></td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 10px">VIX</td>
+          <td style="padding:6px 10px"><code>vixapp://live/transmission-matchid-…</code></td>
+          <td style="padding:6px 10px"><code>https://vix.com/es-es/live/transmission-matchid-…</code></td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border)">
+          <td style="padding:6px 10px">NBC Sports TVE</td>
+          <td style="padding:6px 10px"><code>nbcsportstve://watch/…</code></td>
+          <td style="padding:6px 10px"><code>https://www.nbcsports.com/watch/schedule</code> <span style="color:var(--warning)">(landing page — no event-level URL)</span></td>
+        </tr>
+        <tr>
+          <td style="padding:6px 10px">NFL+</td>
+          <td style="padding:6px 10px"><code>nflctv://livestream/…</code></td>
+          <td style="padding:6px 10px"><code>https://www.nfl.com/plus/</code> <span style="color:var(--warning)">(landing page — no event-level URL)</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="margin-top:10px;color:var(--text-muted)">Services that already return HTTPS URLs (e.g. Peacock) pass through unchanged in both profiles.</p>
+  </div>
 </div>
 
 <div class="card">
@@ -190,18 +310,22 @@ async function loadIntegrationFiles() {
       listEl.innerHTML = '<p class="status-muted" style="font-style:italic">No files generated yet. Save your ADB configuration and run Apply Filters.</p>';
       listEl.style.display = 'block'; return;
     }
-    const adbFiles = Object.entries(data.files).filter(([n]) =>
-      n.includes('adb_lanes') || n.includes('_lanes.m3u') || n.includes('_lanes.xml')
-    );
+    const adbFiles = Object.entries(data.files).filter(([n]) => n.startsWith('adb_lanes'));
     if (!adbFiles.length) {
       listEl.innerHTML = '<p class="status-muted" style="font-style:italic">No ADB files found. Generate them by running Apply Filters after saving your configuration.</p>';
       listEl.style.display = 'block'; return;
     }
-    const globalFiles = adbFiles.filter(([n]) => ['adb_lanes.m3u','adb_lanes.xml','adb_lanes_chrome.m3u'].includes(n));
-    const provFiles   = adbFiles.filter(([n]) => !['adb_lanes.m3u','adb_lanes.xml','adb_lanes_chrome.m3u'].includes(n));
+    const GLOBAL_FILES = ['adb_lanes.m3u','adb_lanes_apple.m3u','adb_lanes.xml','adb_lanes_chrome.m3u'];
+    const globalFiles = adbFiles.filter(([n]) => GLOBAL_FILES.includes(n));
+    const provFiles   = adbFiles.filter(([n]) => !GLOBAL_FILES.includes(n));
+    const PROFILE_LABELS = {
+      'adb_lanes.m3u':        ' <span style="color:var(--text-muted);font-size:11px">— Fire TV / Android (scheme URLs)</span>',
+      'adb_lanes_apple.m3u':  ' <span style="color:var(--text-muted);font-size:11px">— Apple TV / web (HTTPS URLs)</span>',
+    };
     const fileRow = ([name, info]) => {
       const mb = (info.size > 0 ? Math.max(0.01, info.size/1024/1024) : 0).toFixed(2);
-      return `<li><a href="/out/${name}">${name}</a><span style="color:var(--text-muted);font-size:11px">${mb} MB</span></li>`;
+      const label = PROFILE_LABELS[name] || '';
+      return `<li><a href="/out/${name}">${name}</a>${label}<span style="color:var(--text-muted);font-size:11px">${mb} MB</span></li>`;
     };
     let html = '';
     if (globalFiles.length) {
@@ -209,11 +333,21 @@ async function loadIntegrationFiles() {
     }
     const groups = {};
     provFiles.forEach(([name, info]) => {
-      const m = name.match(/^(.+?)_lanes/); if (!m) return;
-      (groups[m[1]] = groups[m[1]]||[]).push([name, info]);
+      // Group by the provider segment: adb_lanes_{provider}[_apple].{ext}
+      const m = name.match(/^adb_lanes_([^.]+?)(?:_apple)?\.[^.]+$/);
+      const key = m ? m[1] : name;
+      (groups[key] = groups[key]||[]).push([name, info]);
     });
+    const provFileRow = ([name, info]) => {
+      const mb = (info.size > 0 ? Math.max(0.01, info.size/1024/1024) : 0).toFixed(2);
+      const isApple = name.includes('_apple.');
+      const badge = isApple
+        ? ' <span style="color:var(--text-muted);font-size:11px">— Apple TV / HTTPS</span>'
+        : ' <span style="color:var(--text-muted);font-size:11px">— Fire TV / scheme</span>';
+      return `<li><a href="/out/${name}">${name}</a>${badge}<span style="color:var(--text-muted);font-size:11px">${mb} MB</span></li>`;
+    };
     Object.keys(groups).sort().forEach(p => {
-      html += `<div class="file-section"><h3 style="color:#60a5fa">${p.toUpperCase()}</h3><ul class="file-list">${groups[p].map(fileRow).join('')}</ul></div>`;
+      html += `<div class="file-section"><h3 style="color:#60a5fa">${p.toUpperCase()}</h3><ul class="file-list">${groups[p].map(provFileRow).join('')}</ul></div>`;
     });
     listEl.innerHTML = html; listEl.style.display = 'block';
   } catch (err) {

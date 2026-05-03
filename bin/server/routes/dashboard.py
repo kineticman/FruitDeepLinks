@@ -13,12 +13,13 @@ Routes:
   GET /out/<filename>
   GET /xmltv/lanes
   GET /m3u/lanes
+  GET /m3u/adb[?profile=fire|android|apple]
   GET /xmltv/direct
   GET /m3u/direct
   GET /lanes/<lane_id>/stream.m3u8
 """
 
-from flask import Blueprint, jsonify, redirect, send_file
+from flask import Blueprint, jsonify, redirect, request, send_file
 
 from server.config import cfg
 
@@ -100,6 +101,17 @@ def serve_direct_xmltv():
 @bp.route("/m3u/direct")
 def serve_direct_m3u():
     return send_file(str(cfg.OUT_DIR / "direct.m3u"))
+
+
+@bp.route("/m3u/adb")
+def serve_adb_m3u():
+    """ADB lanes M3U — ?profile=fire|android (default) or apple."""
+    profile = (request.args.get("profile") or "fire").lower()
+    filename = "adb_lanes_apple.m3u" if profile == "apple" else "adb_lanes.m3u"
+    fp = cfg.OUT_DIR / filename
+    if not fp.exists():
+        return jsonify({"error": f"{filename} not found — run export first"}), 404
+    return send_file(str(fp), mimetype="audio/x-mpegurl")
 
 
 @bp.route("/lanes/<int:lane_id>/stream.m3u8")

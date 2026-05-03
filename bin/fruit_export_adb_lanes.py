@@ -179,7 +179,8 @@ def cleanup_disabled_adb_files(conn: sqlite3.Connection, out_dir: Path, log: log
     if not out_dir.exists():
         return
     
-    # Map of provider to file suffixes (without extension)
+    # Map of provider to file suffixes (without extension).
+    # Each entry lists the base name; both the scheme and _apple variants are cleaned up.
     provider_files = {
         'aiv': ['adb_lanes_aiv', 'adb_lanes_aiv_exclusive'],
         'gametime': ['adb_lanes_gametime'],
@@ -187,20 +188,21 @@ def cleanup_disabled_adb_files(conn: sqlite3.Connection, out_dir: Path, log: log
         'pplus': ['adb_lanes_pplus'],
         'sportscenter': ['adb_lanes_sportscenter']
     }
-    
-    # Remove files for disabled providers
+
+    # Remove files for disabled providers (both scheme and apple profile variants)
     for provider_code, file_prefixes in provider_files.items():
         if provider_code not in enabled_providers:
             for prefix in file_prefixes:
-                for ext in ['.m3u', '.xml']:
-                    filepath = out_dir / f"{prefix}{ext}"
-                    if filepath.exists():
-                        filepath.unlink()
-                        log.info("Removed %s (provider '%s' is disabled)", filepath.name, provider_code)
-    
+                for variant in ['', '_apple']:
+                    for ext in ['.m3u', '.xml']:
+                        filepath = out_dir / f"{prefix}{variant}{ext}"
+                        if filepath.exists():
+                            filepath.unlink()
+                            log.info("Removed %s (provider '%s' is disabled)", filepath.name, provider_code)
+
     # Also clean up main adb_lanes files if NO providers are enabled
     if not enabled_providers:
-        for filename in ['adb_lanes.m3u', 'adb_lanes.xml']:
+        for filename in ['adb_lanes.m3u', 'adb_lanes_apple.m3u', 'adb_lanes.xml']:
             filepath = out_dir / filename
             if filepath.exists():
                 filepath.unlink()
@@ -428,8 +430,10 @@ def export_adb_lanes(db_path: Path, out_dir: Path, server_url: str) -> Path:
         tree = ET.ElementTree(tv)
         tree.write(out_path, encoding="utf-8", xml_declaration=True)
         log.info("Wrote XMLTV file: %s", out_path)
-        # Also build an ADB-specific M3U playlist that matches these channel IDs.
-        build_adb_m3u(conn, m3u_path, server_url, log)
+        # Build M3U playlists: scheme (Fire TV / Android) and http (Apple TV).
+        build_adb_m3u(conn, m3u_path, server_url, log, deeplink_format="scheme")
+        apple_m3u_path = out_dir / "adb_lanes_apple.m3u"
+        build_adb_m3u(conn, apple_m3u_path, server_url, log, deeplink_format="http")
         return out_path
     finally:
         conn.close()
@@ -441,13 +445,18 @@ def build_adb_m3u(
     m3u_path: Path,
     server_url: str,
     log: logging.Logger,
+    deeplink_format: str = "scheme",
 ) -> None:
     """Build M3U playlists for ADB lanes.
 
     - Writes a *global* playlist at ``m3u_path`` that contains one entry
       per (provider_code, lane_number).
     - Also writes a *provider-specific* playlist for each provider at
-      ``adb_lanes_<provider_code>.m3u`` in the same directory.
+      ``adb_lanes_<provider_code>.m3u`` in the same directory (or
+      ``adb_lanes_<provider_code>_apple.m3u`` for the http profile).
+
+    deeplink_format: 'scheme' (default, Fire TV / Android — aiv:// style)
+                     'http' (Apple TV — https://app.primevideo.com/ style)
     """
     cur = conn.cursor()
     cur.execute(
@@ -470,8 +479,16 @@ def build_adb_m3u(
     for row in rows:
         by_provider.setdefault(row["provider_code"], []).append(row)
 
+    profile_suffix = "_apple" if deeplink_format == "http" else ""
+
+    def _make_stream_url(provider_code: str, lane_number: int) -> str:
+        base = f"/api/adb/lanes/{provider_code}/{lane_number}/deeplink?format=text"
+        if deeplink_format != "scheme":
+            base += f"&deeplink_format={deeplink_format}"
+        return server_url.rstrip("/") + base
+
     # 1) Global M3U with ALL providers.
-    log.info("ADB M3U (global): %d virtual channels", len(rows))
+    log.info("ADB M3U (global, %s): %d virtual channels", deeplink_format, len(rows))
     m3u_path.parent.mkdir(parents=True, exist_ok=True)
     with m3u_path.open("w", encoding="utf-8") as f:
         f.write("#EXTM3U\n\n")
@@ -485,10 +502,7 @@ def build_adb_m3u(
             name = f"{provider_display} {lane_number:02d}"
             chno = lane_number
 
-            stream_url = (
-                server_url.rstrip("/")
-                + f"/api/adb/lanes/{provider_code}/{lane_number}/deeplink?format=text"
-            )
+            stream_url = _make_stream_url(provider_code, lane_number)
 
             f.write(
                 f'#EXTINF:-1 tvg-id="{channel_id}" tvg-chno="{chno}" '
@@ -498,13 +512,14 @@ def build_adb_m3u(
 
     log.info("Wrote global ADB lanes M3U: %s", m3u_path)
 
-    # 2) Per-provider M3Us: adb_lanes_<provider_code>.m3u
+    # 2) Per-provider M3Us: adb_lanes_<provider_code>[_apple].m3u
     base_dir = m3u_path.parent
     for provider_code, provider_rows in sorted(by_provider.items()):
-        provider_file = base_dir / f"adb_lanes_{provider_code}.m3u"
+        provider_file = base_dir / f"adb_lanes_{provider_code}{profile_suffix}.m3u"
         log.info(
-            "ADB M3U (%s): %d virtual channels",
+            "ADB M3U (%s, %s): %d virtual channels",
             provider_code,
+            deeplink_format,
             len(provider_rows),
         )
         with provider_file.open("w", encoding="utf-8") as f:
@@ -518,10 +533,7 @@ def build_adb_m3u(
                 name = f"{provider_display} {lane_number:02d}"
                 chno = lane_number
 
-                stream_url = (
-                    server_url.rstrip("/")
-                    + f"/api/adb/lanes/{provider_code}/{lane_number}/deeplink?format=text"
-                )
+                stream_url = _make_stream_url(provider_code, lane_number)
 
                 f.write(
                     f'#EXTINF:-1 tvg-id="{channel_id}" tvg-chno="{chno}" '
