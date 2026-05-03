@@ -63,6 +63,7 @@ code { font-family:var(--mono); font-size:12px; background:var(--bg-inset); padd
   <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/m3u/direct</code> Direct channels M3U playlist</div>
   <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/xmltv/lanes</code> Virtual lanes XMLTV guide</div>
   <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/m3u/lanes</code> Virtual lanes M3U playlist</div>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/m3u/adb</code> ADB lanes M3U — <code>?profile=fire</code> (default) or <code>?profile=apple</code></div>
   <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/out/&lt;filename&gt;</code> Generic file download (any .xml, .m3u in /out)</div>
   <pre># Download direct channels
 curl -o direct.xml "$BASE/xmltv/direct"
@@ -72,13 +73,19 @@ curl -o direct.m3u "$BASE/m3u/direct"
 curl -o lanes.xml "$BASE/xmltv/lanes"
 curl -o lanes.m3u "$BASE/m3u/lanes"
 
-# Download ADB lanes (global)
-curl -o adb_lanes.xml "$BASE/out/adb_lanes.xml"
-curl -o adb_lanes.m3u "$BASE/out/adb_lanes.m3u"
+# Download ADB lanes — Fire TV / Android (aiv:// scheme URLs, default)
+curl -o adb_lanes.m3u "$BASE/m3u/adb"
+curl -o adb_lanes.m3u "$BASE/m3u/adb?profile=fire"
 
-# Download provider-specific ADB lanes
-curl -o sportscenter.m3u "$BASE/out/adb_lanes_sportscenter.m3u"
-curl -o pplus.m3u "$BASE/out/adb_lanes_pplus.m3u"</pre>
+# Download ADB lanes — Apple TV (https:// URLs)
+curl -o adb_lanes_apple.m3u "$BASE/m3u/adb?profile=apple"
+
+# Download ADB XMLTV guide
+curl -o adb_lanes.xml "$BASE/out/adb_lanes.xml"
+
+# Download provider-specific ADB lanes (fire and apple variants)
+curl -o aiv.m3u       "$BASE/out/adb_lanes_aiv.m3u"
+curl -o aiv_apple.m3u "$BASE/out/adb_lanes_aiv_apple.m3u"</pre>
 </div>
 
 <!-- ADB LANES API -->
@@ -97,7 +104,7 @@ curl -o pplus.m3u "$BASE/out/adb_lanes_pplus.m3u"</pre>
     <div><span class="param-name">provider_code</span>: Provider scheme (sportscenter, pplus, aiv, peacock, max, etc.)</div>
     <div><span class="param-name">lane_number</span>: Lane number (1, 2, 3, …)</div>
     <div><span class="param-name">format</span> (query): <code>json</code> (default) or <code>text</code></div>
-    <div><span class="param-name">deeplink_format</span> (query): <code>scheme</code> (default, for Apple TV) or <code>http</code> (for Android/Fire TV)</div>
+    <div><span class="param-name">deeplink_format</span> (query): <code>scheme</code> (default) — native app URI (e.g. <code>aiv://</code>, <code>sportscenter://</code>) for Fire TV / Android; <code>http</code> — HTTPS URL for Apple TV / web clients</div>
   </div>
   <div class="note">
     <div class="note-title">Provider-locked + filter-aware</div>
@@ -106,38 +113,31 @@ curl -o pplus.m3u "$BASE/out/adb_lanes_pplus.m3u"</pre>
       <li><strong>Filter-aware:</strong> if <code>enabled_services</code> is set and does not include the provider, the endpoint returns <code>deeplink=null</code> (JSON) / empty (text) with a message like <code>"Provider sportscenter filtered out"</code>.</li>
     </ul>
   </div>
-  <pre># Plain text deeplink (for ADBTuner on Apple TV)
-curl "$BASE/api/adb/lanes/sportscenter/1/deeplink?format=text"
-# Returns: sportscenter://x-callback-url/showWatchStream?playID=...
+  <pre># Fire TV / Android — scheme URL (default)
+curl "$BASE/api/adb/lanes/aiv/1/deeplink?format=text"
+# Returns: aiv://aiv/detail?gti=amzn1.dv.gti.XXX&amp;action=watch&amp;type=live&amp;...
 
-# HTTP format for Android/Fire TV
-curl "$BASE/api/adb/lanes/aiv/2/deeplink?format=text&amp;deeplink_format=http"
+# Apple TV / web — HTTPS URL
+curl "$BASE/api/adb/lanes/aiv/1/deeplink?format=text&amp;deeplink_format=http"
 # Returns: https://app.primevideo.com/detail?gti=amzn1.dv.gti.XXX
 
 # JSON format (for debugging)
 curl "$BASE/api/adb/lanes/sportscenter/1/deeplink?format=json&amp;deeplink_format=http"
 # Returns: {"status": "success", "deeplink": "https://...", "deeplink_format": "http", ...}</pre>
   <div class="note">
-    <div class="note-title">Android/Fire TV Support</div>
-    Use <code>deeplink_format=http</code> to get HTTP deeplinks instead of app schemes. This converts:
-    <ul style="margin:8px 0 0 20px;padding:0">
-      <li><code>aiv://…</code> → <code>https://app.primevideo.com/…</code></li>
-      <li><code>sportscenter://…</code> → <code>https://www.espn.com/watch/player/…</code></li>
-      <li><code>peacock://…</code> → <code>https://www.peacocktv.com/watch/playback/…</code></li>
-      <li><code>cbssportsapp://home/watch/LET-XXX</code> → <code>https://www.cbssports.com/watch/college-basketball/LET-XXX</code> (league-aware)</li>
-    </ul>
-    Scheme format (default) works for Apple TV. HTTP format required for Android/Fire TV devices.<br><br>
-    <strong>CBS Sports League Support:</strong> CBS Sports HTTP deeplinks automatically include the correct league path segment (e.g., <code>college-basketball</code>, <code>serie-a</code>, <code>uefa-conference-league</code>) extracted from event metadata to ensure valid URLs.
+    <div class="note-title">Scheme vs HTTP deeplinks</div>
+    <code>deeplink_format=scheme</code> (default) returns the native app URI scraped from Apple TV's API — works for Fire TV and Android devices where the streaming app handles the URI directly. <code>deeplink_format=http</code> converts to HTTPS — needed for Apple TV Universal Links and web-based clients (CC4C, PrismCast). See the <a href="/adb#device-profiles">Device Profiles</a> section for the full per-service conversion table.<br><br>
+    <strong>CBS Sports:</strong> HTTP deeplinks include the correct league path segment (e.g., <code>serie-a</code>, <code>college-basketball</code>) extracted from event metadata automatically.
   </div>
   <div class="note">
-    <div class="note-title">ADBTuner Integration</div>
-    Configure each provider as a separate Custom Channels source in Channels DVR:
+    <div class="note-title">ADBTuner / Channels DVR Integration</div>
+    Use <code>/m3u/adb</code> instead of the raw <code>/out/</code> files — it serves the correct profile and returns a proper 404 if the export hasn't run yet:
     <ul style="margin:8px 0 0 20px;padding:0">
-      <li>M3U URL: <code>http://SERVER:6655/out/adb_lanes_sportscenter.m3u</code></li>
-      <li>Each channel in the M3U points to: <code>/api/adb/lanes/sportscenter/&lt;N&gt;/deeplink?format=text</code></li>
-      <li>When you tune to a channel, Channels calls this endpoint and gets the current deeplink</li>
-      <li>Repeat for each provider: pplus, aiv, peacock, max, etc.</li>
+      <li>Fire TV / Android: <code>http://SERVER:6655/m3u/adb</code> or <code>?profile=fire</code></li>
+      <li>Apple TV / web: <code>http://SERVER:6655/m3u/adb?profile=apple</code></li>
+      <li>Per-provider: <code>/out/adb_lanes_aiv.m3u</code> (fire) / <code>/out/adb_lanes_aiv_apple.m3u</code> (apple)</li>
     </ul>
+    Each M3U channel URL points back to <code>/api/adb/lanes/&lt;provider&gt;/&lt;N&gt;/deeplink</code> with the correct <code>deeplink_format</code> already embedded, so the right style is returned automatically at tune time.
   </div>
 </div>
 
