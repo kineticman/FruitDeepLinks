@@ -370,17 +370,37 @@ def _get_enabled_services_from_db(db_path: Path) -> list:
         return []
 
 
+def _get_scraper_setting_from_db(env_var: str):
+    """Return the DB-stored bool for a scraper toggle, or None if not set."""
+    key = f"setting:{env_var.lower()}"
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=5)
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM user_preferences WHERE key = ?", (key,))
+        row = cur.fetchone()
+        conn.close()
+        if row and row[0] is not None:
+            return bool(json.loads(row[0]))
+    except Exception:
+        pass
+    return None
+
+
 def _scraper_enabled(env_var: str, logical_services: list, enabled_services: list) -> bool:
     """Decide whether a dedicated scraper should run.
 
     Priority order:
-    1. Env var set to false/0/no  → disabled (explicit override)
-    2. enabled_services is non-empty AND none of the scraper's logical service
+    1. Env var set to false/0/no  → disabled (explicit hard override)
+    2. DB/UI setting set to false → disabled (user toggled off in settings page)
+    3. enabled_services is non-empty AND none of the scraper's logical service
        codes appear in it  → disabled (user filtered them all out)
-    3. Otherwise → enabled
+    4. Otherwise → enabled
     """
     env_val = os.getenv(env_var, "true").lower()
     if env_val in ("0", "false", "no"):
+        return False
+    db_val = _get_scraper_setting_from_db(env_var)
+    if db_val is not None and not db_val:
         return False
     if enabled_services:  # non-empty means an explicit filter is active
         if not any(s in enabled_services for s in logical_services):

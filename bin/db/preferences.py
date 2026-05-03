@@ -222,6 +222,42 @@ SETTINGS_DEFS: Dict[str, tuple] = {
         "Auto-Refresh Time (HH:MM)",
         "Daily refresh time in 24-hour format (local server time).",
     ),
+    # Scraper toggles — env var is a hard override; DB setting is the UI control
+    "kayo_enabled": (
+        "KAYO_ENABLED", "bool", True,
+        "Kayo Sports",
+        "Scrape Kayo Sports (Australian sports — Cricket, AFL, NRL).",
+    ),
+    "fanatiz_enabled": (
+        "FANATIZ_ENABLED", "bool", True,
+        "Fanatiz Soccer",
+        "Scrape Fanatiz (Latin American soccer leagues, ~1,300 future events).",
+    ),
+    "bein_enabled": (
+        "BEIN_ENABLED", "bool", True,
+        "beIN Sports",
+        "Scrape beIN Sports (international soccer, rugby, motorsports).",
+    ),
+    "nesn_enabled": (
+        "NESN_ENABLED", "bool", True,
+        "NESN",
+        "Scrape NESN (New England Sports Network — Red Sox, Bruins).",
+    ),
+    "victory_enabled": (
+        "VICTORY_ENABLED", "bool", True,
+        "Victory+",
+        "Scrape Victory+ (WHL, LOVB, niche sports).",
+    ),
+    "gotham_enabled": (
+        "GOTHAM_ENABLED", "bool", True,
+        "Gotham Sports (MSG/YES)",
+        "Scrape Gotham Sports (NYC: Knicks, Rangers, Islanders, Devils, Yankees, Nets).",
+    ),
+    "espn_enabled": (
+        "ESPN_ENABLED", "bool", True,
+        "ESPN Watch Graph",
+        "Scrape ESPN Watch Graph API for Fire TV deeplink enrichment.",
+    ),
 }
 
 _SETTING_KEY_PREFIX = "setting:"
