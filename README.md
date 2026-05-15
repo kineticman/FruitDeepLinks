@@ -1,6 +1,6 @@
 # 🍎 FruitDeepLinks
 
-**Universal Sports Streaming Aggregator — v1.0.0**
+**Universal Sports Streaming Aggregator — v2.0.0**
 
 FruitDeepLinks scrapes Apple TV's Sports aggregation API plus 10 regional services to build a unified sports EPG with deeplinks to 24+ streaming apps. Export M3U/XMLTV for Channels DVR, ADBTuner, CC4C, and PrismCast.
 
@@ -27,7 +27,7 @@ FruitDeepLinks creates virtual TV channels in Channels DVR with deeplinks that l
 
 ---
 
-## 🆕 What's New in v1.0.0
+## 🆕 What's New in v2.0.0
 
 ### v2 Server Refactor
 
@@ -317,7 +317,7 @@ Database size: ~20 MB
 
 ## 🗓️ Roadmap
 
-### Completed in v1.0.0
+### Completed in v2.0.0
 
 - [x] Flask v2 app factory with blueprint routing
 - [x] Settings page — full UI config, no .env required
