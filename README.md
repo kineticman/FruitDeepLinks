@@ -1,4 +1,6 @@
-# 🍎 FruitDeepLinks
+# FruitDeepLinks
+
+<img src="templates/logo.png" alt="FruitDeepLinks" width="320">
 
 **Universal Sports Streaming Aggregator — v2.0.0**
 
