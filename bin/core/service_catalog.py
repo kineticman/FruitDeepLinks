@@ -40,7 +40,7 @@ DISPLAY_NAMES: dict[str, str] = {
     "aiv_fox": "Amazon - FOX One",        # legacy code
     "aiv_fox_one": "Amazon - FOX One",    # canonical code
     "aiv_nba_league_pass": "Amazon - NBA League Pass",
-    "aiv_wnba": "Amazon - WNBA League Pass",
+    "aiv_wnba_league_pass": "Amazon - WNBA League Pass",
     "aiv_dazn": "Amazon - DAZN",
     "aiv_vix_premium": "Amazon - ViX Premium",
     "aiv_vix": "Amazon - ViX",
@@ -264,7 +264,7 @@ DEFAULT_USER_PRIORITY: dict[str, int] = {
     "aiv_fanduel": 14,
     "aiv_paramount_plus": 13,
     "aiv_willow": 12,
-    "aiv_wnba": 12,
+    "aiv_wnba_league_pass": 12,
     "aiv_squash": 11,
     "aiv": 10,
     "aiv_aggregator": 5,

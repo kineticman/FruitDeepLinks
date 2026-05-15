@@ -32,7 +32,7 @@ ADB_PROVIDER_MAP = {
     'aiv_max': 'aiv',
     'aiv_willow': 'aiv',
     'aiv_paramount_plus': 'aiv',
-    'aiv_wnba': 'aiv',
+    'aiv_wnba_league_pass': 'aiv',
     'aiv_squash': 'aiv',
     'aiv_free': 'aiv',
     'aiv_aggregator': 'aiv',

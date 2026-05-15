@@ -78,7 +78,7 @@ if not _CATALOG_AVAILABLE:
         'aiv_vix_premium': 'Amazon - ViX Premium', 'aiv_vix': 'Amazon - ViX',
         'aiv_tennis_channel': 'Amazon - Tennis Channel', 'aiv_fanduel': 'Amazon - FanDuel Sports Network',
         'aiv_max': 'Amazon - Max', 'aiv_paramount_plus': 'Amazon - Paramount+',
-        'aiv_willow': 'Amazon - Willow TV', 'aiv_wnba': 'Amazon - WNBA League Pass',
+        'aiv_willow': 'Amazon - Willow TV', 'aiv_wnba_league_pass': 'Amazon - WNBA League Pass',
         'aiv_squash': 'Amazon - SquashTV', 'aiv_free': 'Amazon - Free with Ads',
         'aiv_aggregator': 'Amazon - Unknown', 'https': 'Web - Other', 'http': 'Web - Other',
     }
