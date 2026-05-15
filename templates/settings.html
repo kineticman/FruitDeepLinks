@@ -13,6 +13,12 @@
 .setting-hint { font-size: 11px; color: var(--text-muted); margin-top: 3px; line-height: 1.4; }
 .setting-env  { font-size: 10px; color: #475569; font-family: var(--mono); margin-top: 2px; }
 .save-bar { position: sticky; bottom: 0; background: var(--bg-page); border-top: 1px solid var(--border); padding: 12px 0; display: flex; align-items: center; gap: 12px; }
+details.advanced-section { margin-top: 8px; }
+details.advanced-section summary { font-size: 14px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; padding-bottom: 6px; border-bottom: 1px solid var(--border); cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; user-select: none; }
+details.advanced-section summary::-webkit-details-marker { display: none; }
+details.advanced-section summary::before { content: '▶'; font-size: 10px; transition: transform 0.15s; }
+details.advanced-section[open] summary::before { transform: rotate(90deg); }
+details.advanced-section .setting-group { margin-top: 12px; margin-bottom: 0; }
 @media (max-width: 640px) {
   .setting-row { grid-template-columns: 1fr; gap: 6px; }
 }
@@ -36,11 +42,15 @@
 <script>
 const GROUPS = {
   'Server': ['server_url', 'channels_dvr_ip', 'channels_source_name'],
-  'Lanes': ['num_lanes', 'lane_start_ch', 'direct_start_ch'],
-  'Scraper': ['days_ahead', 'padding_minutes', 'headless'],
+  'Lanes': ['num_lanes'],
+  'Pipeline': ['days_ahead', 'padding_minutes'],
   'Auto Refresh': ['auto_refresh_enabled', 'auto_refresh_time'],
-  'Logging': ['log_level'],
   'Scrapers': ['kayo_enabled', 'fanatiz_enabled', 'bein_enabled', 'nesn_enabled', 'victory_enabled', 'gotham_enabled', 'espn_enabled'],
+};
+
+const ADVANCED = {
+  'Channel Numbers': ['lane_start_ch', 'direct_start_ch'],
+  'Debugging': ['headless', 'log_level'],
 };
 
 let _schema = {};
@@ -59,27 +69,40 @@ async function loadSettings() {
   }
 }
 
+function renderGroup(groupName, keys) {
+  const rows = keys.filter(k => _schema[k]);
+  if (!rows.length) return '';
+  let html = `<div class="setting-group"><h3>${groupName}</h3>`;
+  for (const key of rows) {
+    const s = _schema[key];
+    const val = _current[key] ?? s.default;
+    html += `<div class="setting-row">
+      <div>
+        <div class="setting-label">${s.label}</div>
+        <div class="setting-hint">${s.description}</div>
+        <div class="setting-env">env: ${s.env_var}</div>
+      </div>
+      <div>${renderInput(key, s, val)}</div>
+    </div>`;
+  }
+  return html + '</div>';
+}
+
 function renderSettings() {
   const body = document.getElementById('settings-body');
   let html = '';
 
   for (const [groupName, keys] of Object.entries(GROUPS)) {
-    const rows = keys.filter(k => _schema[k]);
-    if (!rows.length) continue;
-    html += `<div class="setting-group"><h3>${groupName}</h3>`;
-    for (const key of rows) {
-      const s = _schema[key];
-      const val = _current[key] ?? s.default;
-      html += `<div class="setting-row">
-        <div>
-          <div class="setting-label">${s.label}</div>
-          <div class="setting-hint">${s.description}</div>
-          <div class="setting-env">env: ${s.env_var}</div>
-        </div>
-        <div>${renderInput(key, s, val)}</div>
-      </div>`;
-    }
-    html += '</div>';
+    html += renderGroup(groupName, keys);
+  }
+
+  // Advanced section — collapsible, closed by default
+  let advancedHtml = '';
+  for (const [groupName, keys] of Object.entries(ADVANCED)) {
+    advancedHtml += renderGroup(groupName, keys);
+  }
+  if (advancedHtml) {
+    html += `<details class="advanced-section"><summary>Advanced</summary>${advancedHtml}</details>`;
   }
 
   body.innerHTML = html || '<span style="color:var(--text-muted)">No settings available.</span>';

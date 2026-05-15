@@ -125,7 +125,13 @@ def save(conn: sqlite3.Connection, prefs: Dict[str, Any]) -> bool:
 
 
 def load_auto_refresh(conn: sqlite3.Connection) -> Dict[str, Any]:
-    """Return auto-refresh settings (enabled + time) with env/DB fallback."""
+    """Return auto-refresh settings (enabled + time) with env/DB fallback.
+
+    Reads both the legacy unprefixed keys ('auto_refresh_enabled', written by
+    /api/auto-refresh) and the settings-prefixed keys ('setting:auto_refresh_enabled',
+    written by the Settings page via save_settings()).  The setting: prefix wins when
+    both exist so the Settings page takes precedence.
+    """
     settings = {
         "enabled": os.getenv("AUTO_REFRESH_ENABLED", "1").lower() not in ("0", "false", "no"),
         "time": os.getenv("AUTO_REFRESH_TIME", "02:30"),
@@ -138,19 +144,27 @@ def load_auto_refresh(conn: sqlite3.Connection) -> Dict[str, Any]:
         if not cur.fetchone():
             return settings
         cur.execute(
-            "SELECT key, value FROM user_preferences WHERE key IN ('auto_refresh_enabled', 'auto_refresh_time')"
+            "SELECT key, value FROM user_preferences WHERE key IN ("
+            "'auto_refresh_enabled', 'auto_refresh_time',"
+            " 'setting:auto_refresh_enabled', 'setting:auto_refresh_time'"
+            ")"
         )
-        for key, value in cur.fetchall():
-            if key == "auto_refresh_enabled":
-                try:
-                    settings["enabled"] = bool(json.loads(value))
-                except Exception:
-                    pass
-            elif key == "auto_refresh_time":
-                try:
-                    settings["time"] = json.loads(value)
-                except Exception:
-                    settings["time"] = value
+        raw = {key: value for key, value in cur.fetchall()}
+
+        # Prefer setting:-prefixed value (Settings page) over unprefixed (API endpoint).
+        enabled_val = raw.get("setting:auto_refresh_enabled", raw.get("auto_refresh_enabled"))
+        if enabled_val is not None:
+            try:
+                settings["enabled"] = bool(json.loads(enabled_val))
+            except Exception:
+                pass
+
+        time_val = raw.get("setting:auto_refresh_time", raw.get("auto_refresh_time"))
+        if time_val is not None:
+            try:
+                settings["time"] = json.loads(time_val)
+            except Exception:
+                settings["time"] = time_val
     except Exception:
         pass
     return settings
@@ -275,7 +289,10 @@ def _cast_setting(value: str, type_hint: str):
             return int(json.loads(value))
         except Exception:
             return int(value)
-    return value  # str
+    try:
+        return json.loads(value)
+    except Exception:
+        return value
 
 
 def get_setting(conn: sqlite3.Connection, key: str, fallback=None):

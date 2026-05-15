@@ -4214,26 +4214,6 @@ def serve_direct_m3u():
     return send_file(str(OUT_DIR / "direct.m3u"))
 
 
-@app.route("/m3u/adb")
-def serve_adb_m3u():
-    """Serve ADB lanes M3U playlist.
-
-    Query params:
-      profile: 'fire' or 'android' (default) → adb_lanes.m3u  (aiv:// scheme URLs)
-               'apple'                        → adb_lanes_apple.m3u (https:// URLs)
-    """
-    profile = (request.args.get("profile") or "fire").lower()
-    if profile == "apple":
-        filename = "adb_lanes_apple.m3u"
-    else:
-        filename = "adb_lanes.m3u"
-
-    file_path = OUT_DIR / filename
-    if not file_path.exists():
-        return jsonify({"error": f"{filename} not found — run export first"}), 404
-    return send_file(str(file_path), mimetype="audio/x-mpegurl")
-
-
 # ==================== Stream Proxying (Future) ====================
 @app.route("/lanes/<int:lane_id>/stream.m3u8")
 def lane_stream(lane_id):
