@@ -17,7 +17,7 @@ from typing import Optional
 
 def resolve_db_path() -> Path:
     """Return the database path from the environment or fall back to default."""
-    env_path = os.environ.get("FRUIT_DB_PATH")
+    env_path = os.environ.get("FRUIT_DB_PATH") or os.environ.get("PEACOCK_DB_PATH")
     if env_path:
         return Path(env_path)
     # Docker default; local dev can set FRUIT_DB_PATH

@@ -85,22 +85,34 @@ def serve_file(filename):
 
 @bp.route("/xmltv/lanes")
 def serve_lanes_xmltv():
-    return send_file(str(cfg.OUT_DIR / "peacock_lanes.xml"))
+    fp = cfg.OUT_DIR / "multisource_lanes.xml"
+    if not fp.exists():
+        return jsonify({"error": "multisource_lanes.xml not found — run export first"}), 404
+    return send_file(str(fp))
 
 
 @bp.route("/m3u/lanes")
 def serve_lanes_m3u():
-    return send_file(str(cfg.OUT_DIR / "peacock_lanes.m3u"))
+    fp = cfg.OUT_DIR / "multisource_lanes.m3u"
+    if not fp.exists():
+        return jsonify({"error": "multisource_lanes.m3u not found — run export first"}), 404
+    return send_file(str(fp), mimetype="audio/x-mpegurl")
 
 
 @bp.route("/xmltv/direct")
 def serve_direct_xmltv():
-    return send_file(str(cfg.OUT_DIR / "direct.xml"))
+    fp = cfg.OUT_DIR / "direct.xml"
+    if not fp.exists():
+        return jsonify({"error": "direct.xml not found — run export first"}), 404
+    return send_file(str(fp))
 
 
 @bp.route("/m3u/direct")
 def serve_direct_m3u():
-    return send_file(str(cfg.OUT_DIR / "direct.m3u"))
+    fp = cfg.OUT_DIR / "direct.m3u"
+    if not fp.exists():
+        return jsonify({"error": "direct.m3u not found — run export first"}), 404
+    return send_file(str(fp), mimetype="audio/x-mpegurl")
 
 
 @bp.route("/m3u/adb")

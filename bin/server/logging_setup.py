@@ -12,7 +12,7 @@ Provides:
 import logging
 import threading
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime
 
 from server.config import cfg
 
@@ -65,7 +65,7 @@ def log(message: str, level: str = "INFO") -> None:
     """Format and append a server-generated log line."""
     if not _should_emit(level):
         return
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     append_log_line(f"[{ts}] [{level}] {message}")
     print(f"[{ts}] [{level}] {message}", flush=True)
 

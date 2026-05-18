@@ -196,17 +196,16 @@ def api_wipe_event_data():
     if refresh_status["running"]:
         return jsonify({"error": "Cannot wipe while refresh is running"}), 409
 
-    def _run_wipe():
-        refresh_status["running"] = True
-        refresh_status["current_step"] = "Wiping event data..."
-        log("Starting database wipe (preserving settings)", "INFO")
+    result = {"events_deleted": 0, "playables_deleted": 0, "lanes_deleted": 0, "errors": []}
+    db_path = resolve_db_path()
+    refresh_status["running"] = True
+    refresh_status["current_step"] = "Wiping event data..."
+    log("Starting database wipe (preserving settings)", "INFO")
 
-        result = {"events_deleted": 0, "playables_deleted": 0, "lanes_deleted": 0, "errors": []}
-        db_path = resolve_db_path()
-
-        try:
-            if db_path.exists():
-                conn = sqlite3.connect(str(db_path))
+    try:
+        if db_path.exists():
+            conn = sqlite3.connect(str(db_path))
+            try:
                 cur = conn.cursor()
                 cur.execute("PRAGMA foreign_keys = ON")
 
@@ -214,59 +213,62 @@ def api_wipe_event_data():
                     cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (t,))
                     return cur.fetchone() is not None
 
-                def _safe_count(t):
-                    if _table_exists(t):
-                        cur.execute(f"SELECT COUNT(*) FROM {t}")
-                        return cur.fetchone()[0]
-                    return 0
+                def _count_and_delete(t):
+                    if not _table_exists(t):
+                        return 0
+                    cur.execute(f"SELECT COUNT(*) FROM {t}")
+                    n = cur.fetchone()[0]
+                    cur.execute(f"DELETE FROM {t}")
+                    return n
 
-                def _wipe(t):
-                    if _table_exists(t):
-                        n = _safe_count(t)
-                        cur.execute(f"DELETE FROM {t}")
-                        return n
-                    return 0
-
-                result["events_deleted"] = _wipe("events")
-                result["playables_deleted"] = _wipe("playables")
-                _wipe("event_images")
+                result["events_deleted"] = _count_and_delete("events")
+                result["playables_deleted"] = _count_and_delete("playables")
+                _count_and_delete("event_images")
 
                 for t in ("lanes", "lane_events", "adb_lanes"):
-                    result["lanes_deleted"] += _wipe(t)
+                    result["lanes_deleted"] += _count_and_delete(t)
 
                 for t in ("amazon_channels", "amazon_channel_history"):
-                    _wipe(t)
+                    _count_and_delete(t)
 
                 conn.commit()
-                conn.execute("VACUUM")
-                conn.close()
-
                 log(
                     f"Wipe complete: {result['events_deleted']} events, "
                     f"{result['playables_deleted']} playables, "
                     f"{result['lanes_deleted']} lane rows",
                     "INFO",
                 )
+            finally:
+                conn.close()
 
-            # Remove cache files
-            for cache in [
-                db_path.parent / "amazon_gti_cache.pkl",
-                Path("/app/data/apple_events.db"),
-                Path("/app/data/espn_graph.db"),
-            ]:
-                if cache.exists():
-                    cache.unlink()
-                    log(f"Deleted {cache}", "INFO")
+            # VACUUM in background so it doesn't stall the HTTP response
+            def _vacuum():
+                try:
+                    c = sqlite3.connect(str(db_path))
+                    c.execute("VACUUM")
+                    c.close()
+                except Exception:
+                    pass
+            threading.Thread(target=_vacuum, daemon=True).start()
 
-        except Exception as e:
-            log(f"Wipe error: {e}", "ERROR")
-            result["errors"].append(str(e))
-        finally:
-            refresh_status["running"] = False
-            refresh_status["current_step"] = None
+        # Remove cache files
+        for cache in [
+            db_path.parent / "amazon_gti_cache.pkl",
+            Path("/app/data/apple_events.db"),
+            Path("/app/data/espn_graph.db"),
+        ]:
+            if cache.exists():
+                cache.unlink()
+                log(f"Deleted {cache}", "INFO")
 
-    threading.Thread(target=_run_wipe, daemon=True).start()
-    return jsonify({"status": "started"})
+    except Exception as e:
+        log(f"Wipe error: {e}", "ERROR")
+        result["errors"].append(str(e))
+    finally:
+        refresh_status["running"] = False
+        refresh_status["current_step"] = None
+
+    return jsonify(result)
 
 
 @bp.route("/api/settings", methods=["GET", "POST"])

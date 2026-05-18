@@ -198,12 +198,25 @@ def run_apply_filters() -> None:
     refresh_status["current_step"] = "Applying filters..."
     log("Applying filter settings (regenerating exports)", "INFO")
 
+    # Read live DB settings so settings-page changes take effect without restart.
+    server_url = cfg.SERVER_URL
+    num_lanes = cfg.NUM_LANES
+    try:
+        from db.connection import get_conn, db_exists
+        from db.preferences import get_setting
+        if db_exists():
+            with get_conn() as _conn:
+                server_url = get_setting(_conn, "server_url") or server_url
+                num_lanes = get_setting(_conn, "num_lanes") or num_lanes
+    except Exception:
+        pass
+
     scripts = [
         (
             "fruit_build_lanes.py",
             ["python3", "-u", str(cfg.BIN_DIR / "fruit_build_lanes.py"),
              "--db", str(cfg.DB_PATH),
-             "--lanes", str(cfg.NUM_LANES)],
+             "--lanes", str(num_lanes)],
         ),
         (
             "fruit_export_hybrid.py",
@@ -211,15 +224,21 @@ def run_apply_filters() -> None:
              "--db", str(cfg.DB_PATH)],
         ),
         (
+            "fruit_export_lanes.py",
+            ["python3", "-u", str(cfg.BIN_DIR / "fruit_export_lanes.py"),
+             "--db", str(cfg.DB_PATH),
+             "--server-url", server_url],
+        ),
+        (
             "fruit_build_adb_lanes.py",
             ["python3", "-u", str(cfg.BIN_DIR / "fruit_build_adb_lanes.py"),
              "--db", str(cfg.DB_PATH)],
         ),
         (
-            "fruit_export_lanes.py",
-            ["python3", "-u", str(cfg.BIN_DIR / "fruit_export_lanes.py"),
+            "fruit_export_adb_lanes.py",
+            ["python3", "-u", str(cfg.BIN_DIR / "fruit_export_adb_lanes.py"),
              "--db", str(cfg.DB_PATH),
-             "--server-url", cfg.SERVER_URL],
+             "--server-url", server_url],
         ),
     ]
 
