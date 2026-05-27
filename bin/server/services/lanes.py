@@ -258,7 +258,82 @@ def get_provider_lane_stats(conn: sqlite3.Connection) -> list[dict]:
         if amazon:
             result["aiv"] = amazon
 
+    # Compute suggested_lanes (peak concurrency) for each aggregated provider.
+    # Use all logical services for the provider regardless of enabled_services —
+    # the hint answers "how many lanes would you need for this provider's content"
+    # and is most useful when configuring a provider you're about to enable.
+    try:
+        from adb_provider_mapper import get_logical_services_for_adb_provider
+        for adb_code, info in result.items():
+            ls = get_logical_services_for_adb_provider(adb_code)
+            info["suggested_lanes"] = _compute_suggested_lanes(conn, ls)
+    except Exception:
+        for info in result.values():
+            info.setdefault("suggested_lanes", 0)
+
     return sorted(result.values(), key=lambda x: (-x["event_count"], x["name"]))
+
+
+def _load_enabled_services(conn: sqlite3.Connection) -> list:
+    """Return the enabled_services list from user_preferences, or [] if unset."""
+    try:
+        import json as _json
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM user_preferences WHERE key='enabled_services' LIMIT 1")
+        row = cur.fetchone()
+        if row and row[0]:
+            val = _json.loads(row[0])
+            return val if isinstance(val, list) else []
+    except Exception:
+        pass
+    return []
+
+
+def _compute_suggested_lanes(conn: sqlite3.Connection, logical_services: list) -> int:
+    """Return the peak concurrent event count for a set of logical services.
+
+    Uses a sort+sweep algorithm: emit +1 at each event start and -1 at each
+    event end, sort chronologically (ends before starts at equal times so
+    back-to-back events don't inflate the count), then track the running max.
+    """
+    if not logical_services:
+        return 0
+    placeholders = ",".join("?" * len(logical_services))
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"""
+            SELECT e.start_utc, e.end_utc
+              FROM events e
+              JOIN playables p ON p.event_id = e.id
+             WHERE p.logical_service IN ({placeholders})
+               AND e.start_utc IS NOT NULL
+               AND e.end_utc   IS NOT NULL
+             GROUP BY e.id
+            """,
+            logical_services,
+        )
+    except Exception:
+        return 0
+
+    points = []
+    for start, end in cur.fetchall():
+        if start and end and end > start:
+            points.append((start, 1))   # event begins
+            points.append((end,  -1))   # event ends
+
+    if not points:
+        return 0
+
+    # Sort: at equal timestamps, process ends (-1) before starts (+1) so
+    # back-to-back events don't count as overlapping.
+    points.sort(key=lambda x: (x[0], x[1]))
+    peak = current = 0
+    for _, delta in points:
+        current += delta
+        if current > peak:
+            peak = current
+    return peak
 
 
 # ---- Lane query helpers (extracted from monolith) ----

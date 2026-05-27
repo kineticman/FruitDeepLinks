@@ -255,7 +255,10 @@ async function loadProviderLanes() {
         <td>${p.name||p.provider_code}</td>
         <td style="text-align:right">${eventHtml}</td>
         <td style="text-align:center"><input type="checkbox" data-provider="${p.provider_code}" class="adb-enabled-checkbox" ${p.adb_enabled?'checked':''}></td>
-        <td><input type="number" min="0" max="50" data-provider="${p.provider_code}" class="adb-lane-count-input" value="${p.adb_lane_count||0}" style="width:90px"></td>
+        <td>
+          <input type="number" min="0" max="500" data-provider="${p.provider_code}" class="adb-lane-count-input" value="${p.adb_lane_count||0}" style="width:90px">
+          ${p.suggested_lanes ? `<div style="font-size:11px;color:var(--text-muted);margin-top:3px">${p.suggested_lanes} needed for full coverage</div>` : ''}
+        </td>
         <td><input type="url" class="logo-url-input" data-provider="${p.provider_code}" placeholder="https://example.com/logo.png" value="${(p.logo_url||'').replace(/"/g,'&quot;')}"></td>
         <td style="text-align:center">${deleteBtn}</td>
       </tr>`;
