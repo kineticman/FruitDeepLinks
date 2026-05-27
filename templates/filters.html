@@ -164,9 +164,7 @@ async function loadFilters() {
     const data = await fetch('/api/filters').then(r => r.json());
     availableFilters = data.filters;
     currentPreferences = data.preferences;
-    if (!currentPreferences.enabled_services || !currentPreferences.enabled_services.length) {
-      currentPreferences.enabled_services = [...availableFilters.providers.map(p=>p.scheme), ...(availableFilters.amazon_services||[]).map(s=>s.scheme)];
-    }
+    if (!currentPreferences.enabled_services) currentPreferences.enabled_services = [];
     if (!currentPreferences.language_preference) currentPreferences.language_preference = 'en';
     if (currentPreferences.amazon_master_enabled === undefined) currentPreferences.amazon_master_enabled = true;
     await loadPriorities();
@@ -189,7 +187,7 @@ function renderProviders() {
   const loading = document.getElementById('providers-loading');
   if (!availableFilters.providers.length) { loading.textContent = 'No streaming services found. Run a refresh first.'; return; }
   grid.innerHTML = availableFilters.providers.map(p => {
-    const on = currentPreferences.enabled_services.includes(p.scheme);
+    const on = !currentPreferences.enabled_services.length || currentPreferences.enabled_services.includes(p.scheme);
     const badge = SCRAPER_CONTROLLED_SERVICES.has(p.scheme) ? ' <span title="Has dedicated scraper">🔄</span>' : '';
     return `<div class="filter-item ${on?'enabled':'disabled'}" onclick="toggleProvider('${p.scheme}')"><div class="checkbox"></div><div class="filter-info"><div class="filter-name">${p.name}${badge}</div><div class="filter-count">${p.count} events</div></div></div>`;
   }).join('');
@@ -209,7 +207,7 @@ function renderAmazonServices() {
   if (!svcs.length) { loading.textContent = 'No Amazon services found.'; countEl.textContent = '0 events'; return; }
   countEl.textContent = svcs.reduce((s,x)=>s+x.count,0) + ' total events';
   grid.innerHTML = svcs.map(s => {
-    const enabled = currentPreferences.enabled_services.includes(s.scheme);
+    const enabled = !currentPreferences.enabled_services.length || currentPreferences.enabled_services.includes(s.scheme);
     return `<div class="filter-item ${enabled?'enabled':'disabled'}" onclick="toggleAmazonService('${s.scheme}')"><div class="checkbox"></div><div class="filter-info"><div class="filter-name">${s.name}</div><div class="filter-count">${s.count} events</div></div></div>`;
   }).join('');
   loading.style.display = 'none'; grid.style.display = 'grid';
@@ -218,8 +216,16 @@ function renderAmazonServices() {
 function toggleAmazonMaster() { currentPreferences.amazon_master_enabled = !currentPreferences.amazon_master_enabled; renderAmazonServices(); loadSelectionExamples(); }
 function toggleAmazonService(scheme) {
   if (currentPreferences.amazon_master_enabled === false) return;
-  const i = currentPreferences.enabled_services.indexOf(scheme);
-  if (i > -1) currentPreferences.enabled_services.splice(i,1); else currentPreferences.enabled_services.push(scheme);
+  if (currentPreferences.enabled_services.length === 0) {
+    currentPreferences.enabled_services = [
+      ...availableFilters.providers.map(p => p.scheme),
+      ...(availableFilters.amazon_services || []).map(s => s.scheme)
+    ].filter(s => s !== scheme);
+  } else {
+    const i = currentPreferences.enabled_services.indexOf(scheme);
+    if (i > -1) currentPreferences.enabled_services.splice(i, 1);
+    else currentPreferences.enabled_services.push(scheme);
+  }
   renderAmazonServices(); renderPriorities(); loadSelectionExamples();
 }
 
@@ -246,7 +252,7 @@ function renderLeagues() {
 function renderPriorities() {
   const container = document.getElementById('priority-list'), loading = document.getElementById('priority-loading');
   const all = [...(availableFilters.providers||[]),...(availableFilters.amazon_services||[])];
-  const enabled = all.filter(p => currentPreferences.enabled_services.includes(p.scheme));
+  const enabled = currentPreferences.enabled_services.length === 0 ? all : all.filter(p => currentPreferences.enabled_services.includes(p.scheme));
   if (!enabled.length) { loading.textContent = 'No services enabled. Enable services above to set priorities.'; return; }
   enabled.sort((a,b) => (currentPreferences.service_priorities[b.scheme]||50) - (currentPreferences.service_priorities[a.scheme]||50));
   container.innerHTML = enabled.map(p => {
@@ -291,8 +297,16 @@ function setLanguage(lang) {
   ['en','es','both'].forEach(l => { const el=document.getElementById('lang-'+l); el.classList.toggle('enabled',l===lang); el.classList.toggle('disabled',l!==lang); });
 }
 function toggleProvider(scheme) {
-  const i = currentPreferences.enabled_services.indexOf(scheme);
-  if (i>-1) currentPreferences.enabled_services.splice(i,1); else currentPreferences.enabled_services.push(scheme);
+  if (currentPreferences.enabled_services.length === 0) {
+    currentPreferences.enabled_services = [
+      ...availableFilters.providers.map(p => p.scheme),
+      ...(availableFilters.amazon_services || []).map(s => s.scheme)
+    ].filter(s => s !== scheme);
+  } else {
+    const i = currentPreferences.enabled_services.indexOf(scheme);
+    if (i > -1) currentPreferences.enabled_services.splice(i, 1);
+    else currentPreferences.enabled_services.push(scheme);
+  }
   renderProviders(); renderPriorities(); loadSelectionExamples();
 }
 function toggleSport(name) { const i=currentPreferences.disabled_sports.indexOf(name); if(i>-1)currentPreferences.disabled_sports.splice(i,1);else currentPreferences.disabled_sports.push(name); renderSports(); }
