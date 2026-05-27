@@ -19,6 +19,7 @@ details.advanced-section summary::-webkit-details-marker { display: none; }
 details.advanced-section summary::before { content: '▶'; font-size: 10px; transition: transform 0.15s; }
 details.advanced-section[open] summary::before { transform: rotate(90deg); }
 details.advanced-section .setting-group { margin-top: 12px; margin-bottom: 0; }
+details.advanced-section .setting-group h3 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); opacity: 0.7; border-bottom: none; padding-bottom: 4px; margin-bottom: 8px; margin-left: 2px; }
 @media (max-width: 640px) {
   .setting-row { grid-template-columns: 1fr; gap: 6px; }
 }

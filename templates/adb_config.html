@@ -27,7 +27,7 @@ code { background:var(--bg-inset); padding:2px 6px; border-radius:4px; font-size
     <p style="margin-top:10px"><strong>How it works:</strong></p>
     <ul>
       <li>Enable providers you want to expose via ADB</li>
-      <li>Set how many lanes each provider should get (based on concurrent events)</li>
+      <li>Set the <strong>maximum</strong> lanes per provider — actual channel count equals peak concurrent events (up to this limit)</li>
       <li>Export generates M3U/XMLTV files for ADBTuner integration</li>
       <li>Changes here do NOT affect your normal Channels DVR view</li>
     </ul>
@@ -43,7 +43,7 @@ code { background:var(--bg-inset); padding:2px 6px; border-radius:4px; font-size
         <th style="min-width:200px">Provider Name</th>
         <th style="min-width:120px;text-align:right">Events Available</th>
         <th style="min-width:120px;text-align:center">ADB Enabled</th>
-        <th style="min-width:140px">Lane Count</th>
+        <th style="min-width:140px">Max Lanes</th>
         <th style="min-width:240px">Provider Logo URL</th>
         <th style="min-width:110px;text-align:center">Actions</th>
       </tr></thead>
