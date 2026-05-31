@@ -66,3 +66,6 @@ bin/*_backup.py
 bin/*_hybrid.py
 bin/mac testing/
 docs/Amazon_Exclusives_Technical_Summary.md
+
+# Claude context file
+CLAUDE.md

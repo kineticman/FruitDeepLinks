@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+
+{% block title %}Settings — FruitDeepLinks{% endblock %}
+{% block page_title %}Settings{% endblock %}
+{% block page_subtitle %}<p class="subtitle">Server configuration — changes take effect immediately and persist across restarts.</p>{% endblock %}
+
+{% block extra_style %}
+.setting-group { margin-bottom: 28px; }
+.setting-group h3 { font-size: 14px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.setting-row { display: grid; grid-template-columns: 1fr 2fr; gap: 16px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--border-dim); }
+.setting-row:last-child { border-bottom: none; }
+.setting-label { font-size: 13px; font-weight: 600; color: var(--text-dim); padding-top: 7px; }
+.setting-hint { font-size: 11px; color: var(--text-muted); margin-top: 3px; line-height: 1.4; }
+.setting-env  { font-size: 10px; color: #475569; font-family: var(--mono); margin-top: 2px; }
+.save-bar { position: sticky; bottom: 0; background: var(--bg-page); border-top: 1px solid var(--border); padding: 12px 0; display: flex; align-items: center; gap: 12px; }
+details.advanced-section { margin-top: 8px; }
+details.advanced-section summary { font-size: 14px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; padding-bottom: 6px; border-bottom: 1px solid var(--border); cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; user-select: none; }
+details.advanced-section summary::-webkit-details-marker { display: none; }
+details.advanced-section summary::before { content: '▶'; font-size: 10px; transition: transform 0.15s; }
+details.advanced-section[open] summary::before { transform: rotate(90deg); }
+details.advanced-section .setting-group { margin-top: 12px; margin-bottom: 0; }
+details.advanced-section .setting-group h3 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); opacity: 0.7; border-bottom: none; padding-bottom: 4px; margin-bottom: 8px; margin-left: 2px; }
+@media (max-width: 640px) {
+  .setting-row { grid-template-columns: 1fr; gap: 6px; }
+}
+{% endblock %}
+
+{% block content %}
+<form id="settings-form">
+<div class="card" id="settings-card">
+  <div id="settings-body"><span class="status-muted">Loading settings...</span></div>
+</div>
+</form>
+
+<div class="save-bar">
+  <button class="btn" onclick="saveSettings()" id="btn-save">Save Settings</button>
+  <button class="btn btn-secondary" onclick="loadSettings()">Discard Changes</button>
+  <span id="save-status" style="font-size:13px;color:var(--text-muted)"></span>
+</div>
+{% endblock %}
+
+{% block extra_script %}
+<script>
+const GROUPS = {
+  'Server': ['server_url', 'channels_dvr_ip', 'channels_source_name'],
+  'Lanes': ['num_lanes'],
+  'Pipeline': ['days_ahead', 'padding_minutes'],
+  'Auto Refresh': ['auto_refresh_enabled', 'auto_refresh_time'],
+  'Scrapers': ['kayo_enabled', 'fanatiz_enabled', 'bein_enabled', 'nesn_enabled', 'victory_enabled', 'gotham_enabled', 'espn_enabled'],
+};
+
+const ADVANCED = {
+  'Channel Numbers': ['lane_start_ch', 'direct_start_ch'],
+  'Debugging': ['headless', 'log_level'],
+};
+
+let _schema = {};
+let _current = {};
+
+async function loadSettings() {
+  try {
+    const data = await fetch('/api/settings').then(r => r.json());
+    if (data.status !== 'success') { showToast('Failed to load settings', 'error'); return; }
+    _current = data.settings || {};
+    const schemaList = data.schema || [];
+    schemaList.forEach(s => { _schema[s.key] = s; });
+    renderSettings();
+  } catch (err) {
+    showToast('Error loading settings: ' + err.message, 'error');
+  }
+}
+
+function renderGroup(groupName, keys) {
+  const rows = keys.filter(k => _schema[k]);
+  if (!rows.length) return '';
+  let html = `<div class="setting-group"><h3>${groupName}</h3>`;
+  for (const key of rows) {
+    const s = _schema[key];
+    const val = _current[key] ?? s.default;
+    html += `<div class="setting-row">
+      <div>
+        <div class="setting-label">${s.label}</div>
+        <div class="setting-hint">${s.description}</div>
+        <div class="setting-env">env: ${s.env_var}</div>
+      </div>
+      <div>${renderInput(key, s, val)}</div>
+    </div>`;
+  }
+  return html + '</div>';
+}
+
+function renderSettings() {
+  const body = document.getElementById('settings-body');
+  let html = '';
+
+  for (const [groupName, keys] of Object.entries(GROUPS)) {
+    html += renderGroup(groupName, keys);
+  }
+
+  // Advanced section — collapsible, closed by default
+  let advancedHtml = '';
+  for (const [groupName, keys] of Object.entries(ADVANCED)) {
+    advancedHtml += renderGroup(groupName, keys);
+  }
+  if (advancedHtml) {
+    html += `<details class="advanced-section"><summary>Advanced</summary>${advancedHtml}</details>`;
+  }
+
+  body.innerHTML = html || '<span style="color:var(--text-muted)">No settings available.</span>';
+}
+
+function renderInput(key, s, val) {
+  if (s.type === 'bool') {
+    return `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+      <input type="checkbox" name="${key}" id="s_${key}" ${val ? 'checked' : ''} style="width:16px;height:16px;accent-color:var(--accent)">
+      ${val ? 'Enabled' : 'Disabled'}
+    </label>`;
+  }
+  if (s.type === 'int') {
+    return `<input type="number" name="${key}" id="s_${key}" value="${val}" style="width:140px">`;
+  }
+  if (key === 'log_level') {
+    const levels = ['DEBUG','INFO','WARNING','ERROR'];
+    return `<select name="${key}" id="s_${key}" style="width:140px">${levels.map(l => `<option value="${l}"${l===val?' selected':''}>${l}</option>`).join('')}</select>`;
+  }
+  return `<input type="text" name="${key}" id="s_${key}" value="${escHtml(String(val||''))}">`;
+}
+
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function collectSettings() {
+  const updates = {};
+  for (const key of Object.keys(_schema)) {
+    const el = document.getElementById('s_' + key);
+    if (!el) continue;
+    const s = _schema[key];
+    if (s.type === 'bool') updates[key] = el.checked;
+    else if (s.type === 'int') updates[key] = parseInt(el.value, 10) || s.default;
+    else updates[key] = el.value.trim();
+  }
+  return updates;
+}
+
+async function saveSettings() {
+  const btn = document.getElementById('btn-save');
+  const status = document.getElementById('save-status');
+  btn.disabled = true;
+  status.textContent = 'Saving...';
+  try {
+    const updates = collectSettings();
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(updates),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      showToast('Settings saved', 'success');
+      status.textContent = 'Saved at ' + new Date().toLocaleTimeString();
+      _current = {..._current, ...updates};
+    } else {
+      showToast(data.message || 'Save failed', 'error');
+      status.textContent = 'Save failed';
+    }
+  } catch (err) {
+    showToast('Error: ' + err.message, 'error');
+    status.textContent = '';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Update checkbox label text on change
+document.addEventListener('change', e => {
+  if (e.target.type === 'checkbox' && e.target.closest('.setting-row')) {
+    const label = e.target.closest('label');
+    if (label) {
+      const span = label.childNodes[label.childNodes.length - 1];
+      if (span && span.nodeType === 3) span.textContent = ' ' + (e.target.checked ? 'Enabled' : 'Disabled');
+    }
+  }
+});
+
+loadSettings();
+</script>
+{% endblock %}

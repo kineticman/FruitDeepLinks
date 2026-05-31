@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-apple_scraper_db.py - Production Apple TV Sports scraper with HYBRID optimization
+apple_scraper_db.py - Apple TV Sports scraper with hybrid optimization
 
-HYBRID ARCHITECTURE (NEW):
-- Uses Selenium ONCE to capture tokens + establish browser session
+Architecture:
+- Uses Selenium once to capture tokens + establish browser session
 - Extracts cookies from browser session
-- Uses fast requests library for all API calls (10x faster!)
-- Falls back to Selenium if requests fails
+- Uses requests library for all API calls; falls back to Selenium if needed
 
-Performance: 1000 events in ~50 seconds (was ~500 seconds)
+Performance: ~50ms per request vs ~500ms pure Selenium
 
 Architecture:
 - Scrapes Apple TV Sports API into apple_events.db
@@ -500,18 +499,14 @@ def save_auth(utscf: str, utsk: str):
     except Exception as e:
         print(f"[Auth] save error: {e}")
 
-# ------------------------------ HYBRID API Fetching (NEW!) ------------------------------
+# ------------------------------ Hybrid API Fetching ------------------------------
 
 class HybridAPIClient:
     """
-    HYBRID optimization: Use fast requests library with browser session.
-    
-    Performance: 10x faster than pure Selenium (50ms vs 500ms per request)
-    
-    Architecture:
-    1. Selenium creates browser session ONCE (captures tokens + cookies)
-    2. Requests library uses tokens + cookies for all API calls
-    3. Falls back to Selenium if requests fails
+    Uses requests library with browser session tokens for API calls.
+
+    Selenium runs once to capture tokens + cookies; requests handles
+    all subsequent calls and falls back to Selenium on failure.
     """
     
     def __init__(self, driver, utscf: str, utsk: str, use_hybrid: bool = True):
@@ -675,7 +670,7 @@ class HybridAPIClient:
             print(f"  Requests failures: {self.requests_failures}")
             
             if requests_pct > 90:
-                print("  Performance: approximately 10x faster than pure Selenium")
+                print("  Performance: requests path active for >90% of calls")
 
 # ------------------------------ Scraping Helpers ------------------------------
 def auto_scroll(driver, seconds: float, steps: int):
@@ -825,7 +820,7 @@ def scrape_search_term(driver, conn: sqlite3.Connection, search_term: str,
 
 # ------------------------------ Main ------------------------------
 def main():
-    ap = argparse.ArgumentParser(description="Apple TV Sports scraper with HYBRID optimization")
+    ap = argparse.ArgumentParser(description="Apple TV Sports scraper")
     ap.add_argument("--db", default=str(get_db_path()), help="SQLite database path")
     ap.add_argument("--terms", default=default_terms(), help="Comma-separated search terms")
     ap.add_argument("--upgrade-shelf-limit", type=int, default=0, 
@@ -855,11 +850,9 @@ def main():
     
     start_time = datetime.now()
     print("\n" + "=" * 60)
-    print("Apple TV Sports Scraper (HYBRID Mode)")
+    print("Apple TV Sports Scraper")
     if args.no_hybrid:
-        print("  (Hybrid optimization DISABLED)")
-    else:
-        print("  (10x faster with requests library!)")
+        print("  (Hybrid optimization DISABLED — Selenium only)")
     print(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
     

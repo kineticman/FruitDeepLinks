@@ -1,890 +1,438 @@
-<!DOCTYPE html>
-<html>
-<head>
-<title>FruitDeepLinks Admin</title>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body {
-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-background: #0f172a;
-color: #e2e8f0;
-padding: 20px;
-}
-.container { max-width: 1400px; margin: 0 auto; }
-.title-row { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
-h1 { color: #60a5fa; margin-bottom: 10px; }
-.subtitle { color: #94a3b8; margin-bottom: 30px; }
-.topnav {
-display: flex;
-flex-wrap: wrap;
-gap: 10px;
-margin-bottom: 24px;
-}
-.topnav-link {
-display: inline-flex;
-align-items: center;
-justify-content: center;
-padding: 10px 16px;
-border-radius: 8px;
-border: 1px solid #334155;
-background: #1e293b;
-color: #cbd5e1;
-text-decoration: none;
-font-size: 14px;
-font-weight: 600;
-}
-.topnav-link:hover {
-background: #273449;
-color: #ffffff;
-}
-.topnav-link-active {
-background: #2563eb;
-border-color: #1d4ed8;
-color: #ffffff;
-}
-.version-link {
-color: #fbbf24;
-text-decoration: none;
-font-size: 14px;
-font-weight: 600;
-border: 1px solid #475569;
-border-radius: 999px;
-padding: 4px 10px;
-}
-.version-link:hover {
-color: #fde68a;
-border-color: #fbbf24;
-background: #1e293b;
-}
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 30px; }
-.card {
-background: #1e293b;
-border: 1px solid #334155;
-border-radius: 8px;
-padding: 20px;
-}
-.card-wide {
-grid-column: span 2;
-}
-.card h2 { color: #60a5fa; font-size: 18px; margin-bottom: 15px; }
-.stat { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #334155; }
-.stat:last-child { border-bottom: none; }
-.stat-label { color: #94a3b8; }
-.stat-value { color: #e2e8f0; font-weight: 600; }
-.btn {
-background: #3b82f6;
-color: white;
-border: none;
-padding: 10px 20px;
-border-radius: 6px;
-cursor: pointer;
-font-size: 14px;
-margin-right: 10px;
-}
-.btn:hover { background: #2563eb; }
-.btn:disabled { background: #475569; cursor: not-allowed; }
-.btn-secondary { background: #64748b; }
-.btn-secondary:hover { background: #475569; }
-.btn-danger { background: #dc2626; }
-.btn-danger:hover { background: #b91c1c; }
-.log-container {
-background: #0f172a;
-border: 1px solid #334155;
-border-radius: 8px;
-padding: 15px;
-height: 400px;
-overflow-y: auto;
-font-family: 'Courier New', monospace;
-font-size: 13px;
-}
-.log-line { padding: 2px 0; color: #cbd5e1; }
-.log-line:hover { background: #1e293b; }
-.status-running { color: #fbbf24; }
-.status-success { color: #34d399; }
-.status-failed { color: #f87171; }
-.status-muted { color: #94a3b8; }
-.progress-panel {
-background: #0f172a;
-border: 1px solid #334155;
-border-radius: 8px;
-padding: 12px;
-margin-bottom: 12px;
-}
-.progress-title {
-font-size: 16px;
-font-weight: 600;
-margin-bottom: 6px;
-}
-.progress-meta {
-color: #94a3b8;
-font-size: 13px;
-margin-bottom: 8px;
-line-height: 1.5;
-word-break: break-word;
-}
-.progress-detail {
-color: #cbd5e1;
-font-family: 'Courier New', monospace;
-font-size: 12px;
-line-height: 1.5;
-white-space: normal;
-overflow-wrap: anywhere;
-}
-.progress-list {
-margin-top: 10px;
-display: grid;
-gap: 6px;
-}
-.progress-item {
-display: flex;
-justify-content: space-between;
-align-items: flex-start;
-gap: 12px;
-font-size: 13px;
-border-top: 1px solid #1e293b;
-padding-top: 6px;
-}
-.progress-item:first-child {
-border-top: none;
-padding-top: 0;
-}
-.progress-item-label {
-color: #cbd5e1;
-flex: 1 1 auto;
-min-width: 0;
-}
-.progress-item-status {
-white-space: nowrap;
-font-weight: 600;
-flex: 0 0 auto;
-}
-.refresh-actions {
-display: flex;
-flex-wrap: wrap;
-gap: 10px;
-margin-top: 8px;
-}
-.refresh-actions .btn {
-margin-right: 0;
-}
+{% extends "base.html" %}
 
-@media (max-width: 980px) {
-.card-wide {
-grid-column: auto;
-}
-}
+{% block title %}FruitDeepLinks Admin{% endblock %}
 
-@media (max-width: 640px) {
-.topnav {
-margin-bottom: 20px;
-}
-.progress-item {
-flex-direction: column;
-gap: 4px;
-}
-.progress-item-status {
-white-space: normal;
-}
-}
+{% block page_title %}<span class="dashboard-title">FruitDeepLinks</span>{% endblock %}
+{% block title_extras %}
+  <a href="{{ project_url }}" class="version-link" target="_blank" rel="noopener noreferrer">v{{ project_version }}</a>
+{% endblock %}
 
-.provider-lanes-table {
-width: 100%;
-border-collapse: collapse;
-margin-top: 10px;
-font-size: 14px;
-}
-.provider-lanes-table th,
-.provider-lanes-table td {
-border-bottom: 1px solid #334155;
-padding: 8px 6px;
-text-align: left;
-}
-.provider-lanes-table th {
-font-weight: 600;
-color: #e2e8f0;
-background: #0f172a;
-}
-.provider-lanes-table tr:hover {
-background: #111827;
-}
-.provider-lanes-table input[type="number"] {
-width: 80px;
-padding: 4px 6px;
-border-radius: 4px;
-border: 1px solid #334155;
-background: #020617;
-color: #e2e8f0;
-}
-
-.file-list { list-style: none; }
-.file-item { padding: 8px 0; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; }
+{% block extra_style %}
+.title-logo { width: 56px; height: 56px; }
+.dashboard-title { background: linear-gradient(90deg, #60a5fa 0%, #a78bfa 50%, #34d399 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.progress-panel { background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 12px; }
+.progress-title { font-size: 15px; font-weight: 600; margin-bottom: 5px; }
+.progress-meta  { color: var(--text-muted); font-size: 12px; margin-bottom: 6px; line-height: 1.5; }
+.progress-detail { color: var(--text-dim); font-family: var(--mono); font-size: 11px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
+.progress-list  { margin-top: 8px; display: grid; gap: 5px; }
+.progress-item  { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; font-size: 12px; border-top: 1px solid var(--border-dim); padding-top: 5px; }
+.progress-item:first-child { border-top: none; padding-top: 0; }
+.progress-item-label  { color: var(--text-dim); flex: 1; min-width: 0; }
+.progress-item-status { white-space: nowrap; font-weight: 600; }
+.refresh-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.file-list  { list-style: none; }
+.file-item  { padding: 7px 0; border-bottom: 1px solid var(--border-dim); display: flex; justify-content: space-between; align-items: center; }
 .file-item:last-child { border-bottom: none; }
-.file-name { color: #60a5fa; }
-.file-size { color: #94a3b8; font-size: 12px; }
-.loading { color: #fbbf24; }
-</style>
-</head>
-<body>
-<div class="container">
-<div class="title-row">
-<h1>FruitDeepLinks Admin</h1>
-<a href="{{ project_url }}" class="version-link" target="_blank" rel="noopener noreferrer">v{{ project_version }}</a>
-</div>
-<p class="subtitle">Multi-source sports event aggregator</p>
+.file-size  { color: var(--text-muted); font-size: 11px; }
+/* Wipe confirmation modal */
+#wipe-modal .modal { border-color: #7f1d1d; }
+#wipe-modal input[type="text"] { margin-top: 8px; }
+{% endblock %}
 
-<div class="topnav">
-<a href="/" class="topnav-link topnav-link-active">Dashboard</a>
-<a href="/filters" class="topnav-link">Filters & Settings</a>
-<a href="/events" class="topnav-link">Event Inspector</a>
-<a href="/adb" class="topnav-link">ADB Configuration</a>
-<a href="/api" class="topnav-link">API Helper</a>
-</div>
-
+{% block content %}
 <div class="grid">
-<div class="card">
-<h2>Database Stats</h2>
-<div id="db-stats">Loading...</div>
+  <div class="card">
+    <h2>Database Stats</h2>
+    <div id="db-stats"><span class="status-muted">Loading...</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Output Files</h2>
+    <div id="file-list"><span class="status-muted">Loading...</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Configuration</h2>
+    <div id="env-vars"><span class="status-muted">Loading...</span></div>
+    <div style="margin-top:12px">
+      <a href="/settings" class="btn btn-secondary" style="font-size:12px">Edit Settings</a>
+    </div>
+  </div>
+
+  <div class="card card-wide">
+    <h2>Refresh Control</h2>
+    <div id="refresh-progress-panel" class="progress-panel"><span class="status-muted">Loading...</span></div>
+    <div id="refresh-status" style="margin-bottom:12px;font-size:13px;color:var(--text-muted)"></div>
+    <div class="refresh-actions">
+      <button class="btn" onclick="triggerRefresh(false)" id="btn-refresh">Full Refresh</button>
+      <button class="btn btn-secondary" onclick="triggerRefresh(true)" id="btn-refresh-skip">Skip Scrape</button>
+    </div>
+
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+      <h3 style="font-size:14px;margin-bottom:8px;">Database Management</h3>
+      <button class="btn btn-danger" onclick="openWipeModal()" id="btn-wipe-db">Wipe Event Data</button>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:6px;">Clears all events, playables, and lanes. Preserves filters and settings.</p>
+    </div>
+
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+      <h3 style="font-size:14px;margin-bottom:10px;">Auto Refresh</h3>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px">
+          Time:
+          <input type="time" id="auto-time" style="width:110px">
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+          <input type="checkbox" id="auto-enabled" style="width:16px;height:16px;accent-color:var(--accent)">
+          Enable daily auto refresh
+        </label>
+      </div>
+      <div id="auto-next-run" style="font-size:12px;color:var(--text-muted);margin-bottom:8px"></div>
+      <button class="btn btn-secondary" onclick="saveAutoRefresh()" id="btn-save-auto" style="font-size:12px">Save Auto Settings</button>
+    </div>
+  </div>
 </div>
 
 <div class="card">
-<h2>Output Files</h2>
-<div id="file-list">Loading...</div>
+  <h2>Live Logs <span id="log-status" style="font-size:12px;color:var(--text-muted);margin-left:8px"></span></h2>
+  <div class="log-container" id="log-container"></div>
 </div>
 
-<div class="card">
-<h2>Environment Variables</h2>
-<div id="env-vars">Loading...</div>
+<!-- Wipe event data confirmation modal -->
+<div id="wipe-modal" class="modal-backdrop" role="dialog" aria-modal="true">
+  <div class="modal" style="border-color:#7f1d1d">
+    <h3 style="color:var(--danger)">Wipe Event Data</h3>
+    <p>This will permanently delete all events, playables, and lanes. Filters and settings are preserved.</p>
+    <p style="margin-bottom:10px">Type <strong>DELETE</strong> to confirm:</p>
+    <input type="text" id="wipe-confirm-input" placeholder="Type DELETE" autocomplete="off">
+    <div class="modal-actions" style="margin-top:16px">
+      <button class="btn btn-secondary" onclick="closeWipeModal()">Cancel</button>
+      <button id="wipe-confirm-btn" class="btn btn-danger" onclick="executeWipe()" disabled>Wipe</button>
+    </div>
+  </div>
 </div>
+{% endblock %}
 
-<div class="card card-wide">
-<h2>Refresh Control</h2>
-<div id="refresh-progress-panel" class="progress-panel">Loading...</div>
-<div id="refresh-status" style="margin-bottom: 15px;">Loading...</div>
-<div class="refresh-actions">
-<button class="btn" onclick="triggerRefresh(false)" id="btn-refresh"> Full Refresh</button>
-<button class="btn btn-secondary" onclick="triggerRefresh(true)" id="btn-refresh-skip"> Skip Scrape</button>
-</div>
-
-<div style="margin-top:15px; padding-top:15px; border-top:1px solid #334155;">
-<h3 style="font-size:15px; margin-bottom:8px;">Database Management</h3>
-<button class="btn btn-danger" onclick="wipeEventData()" id="btn-wipe-db">🗑️ Wipe Event Data</button>
-<p style="font-size:12px; color:#94a3b8; margin-top:8px;">Clears all events, playables, and lanes. Preserves filters and settings.</p>
-</div>
-
-<div style="margin-top:15px; padding-top:15px; border-top:1px solid #334155;">
-<h3 style="font-size:15px; margin-bottom:8px;">Auto Refresh</h3>
-<div style="margin-bottom:8px;">
-<label class="stat-label">
-Time (local):
-<input type="time" id="auto-time" style="margin-left:8px; padding:4px; border-radius:4px; border:1px solid #334155; background:#0f172a; color:#e2e8f0;">
-</label>
-</div>
-<div style="margin-bottom:8px;">
-<label class="stat-label">
-<input type="checkbox" id="auto-enabled" style="margin-right:6px;">
-Enable daily auto refresh
-</label>
-</div>
-<div class="stat-label" id="auto-next-run"></div>
-<div style="margin-top:10px;">
-<button class="btn btn-secondary" onclick="saveAutoRefresh()" id="btn-save-auto"> Save Auto Settings</button>
-</div>
-</div>
-</div>
-</div>
-
-<div class="card">
-<h2>Live Logs <span class="loading" id="log-status"></span></h2>
-<div class="log-container" id="log-container"></div>
-</div>
-</div>
-
+{% block extra_script %}
 <script>
 let logEventSource;
 let _scrollListenerAttached = false;
-
-function renderRefreshProgress(refresh) {
-const panel = document.getElementById('refresh-progress-panel');
-if (!panel) return;
-
-const progress = refresh.progress || {};
-const completed = Array.isArray(progress.completed_steps) ? progress.completed_steps.slice().reverse() : [];
-const totalSteps = progress.total_steps || '?';
-const currentKey = progress.current_step_key || refresh.current_step || 'Pending';
-const currentLabel = progress.current_step_label || (refresh.running ? 'Refresh starting' : 'No refresh running');
-const completedCount = Array.isArray(progress.completed_steps) ? progress.completed_steps.length : 0;
-const startedAt = progress.started_at ? new Date(progress.started_at) : null;
-const finishedAt = progress.finished_at ? new Date(progress.finished_at) : null;
-
-const statusClass = refresh.running
-? 'status-running'
-: ((refresh.last_status || progress.phase) === 'success' ? 'status-success' : ((refresh.last_status || progress.phase) ? 'status-failed' : 'status-muted'));
-
-const statusText = refresh.running
-? 'Running'
-: ((refresh.last_status || progress.phase) === 'success' ? 'Last run succeeded' : ((refresh.last_status || progress.phase) ? `Last run: ${refresh.last_status || progress.phase}` : 'Idle'));
-
-const metaBits = [];
-if (progress.version) metaBits.push(`v${progress.version}`);
-if (progress.skip_scrape) metaBits.push('skip-scrape');
-if (startedAt) metaBits.push(`started ${startedAt.toLocaleString()}`);
-if (!refresh.running && finishedAt) metaBits.push(`finished ${finishedAt.toLocaleString()}`);
-
-let summaryBits = [];
-if (!refresh.running && startedAt && finishedAt) {
-const durationSeconds = Math.max(0, (finishedAt - startedAt) / 1000);
-const durationText = durationSeconds >= 60
-? `${Math.floor(durationSeconds / 60)}m ${(durationSeconds % 60).toFixed(1)}s`
-: `${durationSeconds.toFixed(1)} seconds`;
-summaryBits.push(`Duration: ${durationText}`);
-}
-if (!refresh.running && completedCount) {
-const totalStepCount = Number(totalSteps);
-if (Number.isFinite(totalStepCount) && totalStepCount > 0) {
-const skippedCount = Math.max(0, totalStepCount - completedCount);
-summaryBits.push(`Executed steps: ${completedCount}`);
-if (skippedCount > 0) summaryBits.push(`Skipped steps: ${skippedCount}`);
-} else {
-summaryBits.push(`Executed steps: ${completedCount}`);
-}
-}
-
-const detailText = (!refresh.running && summaryBits.length)
-? ''
-: (progress.current_detail || '');
-
-const rows = completed.length
-? completed.map((item) => {
-const itemStatus = item.status === 'ok'
-? '<span class="progress-item-status status-success">Done</span>'
-: item.status === 'failed_nonfatal'
-? '<span class="progress-item-status status-running">Non-fatal</span>'
-: '<span class="progress-item-status status-failed">Failed</span>';
-return `<div class="progress-item"><span class="progress-item-label">[${item.step}/${totalSteps}] ${item.label}</span>${itemStatus}</div>`;
-}).join('')
-: '<div class="status-muted">No completed steps yet.</div>';
-
-const titleLine = refresh.running
-? `[${currentKey}/${totalSteps}] ${currentLabel}`
-: ((refresh.last_status || progress.phase) === 'success'
-? 'Refresh completed successfully'
-: ((refresh.last_status || progress.phase)
-? `Refresh finished with status: ${refresh.last_status || progress.phase}`
-: 'No refresh running'));
-
-panel.innerHTML = `
-<div class="progress-title ${statusClass}">${statusText}</div>
-<div class="progress-meta">${titleLine}${metaBits.length ? ' • ' + metaBits.join(' • ') : ''}</div>
-${summaryBits.length ? `<div class="progress-detail">${_escapeHtml(summaryBits.join(' • '))}</div>` : ''}
-${detailText ? `<div class="progress-detail">${_escapeHtml(detailText)}</div>` : ''}
-<div class="progress-list">${rows}</div>
-`;
-}
-
-async function loadStatus() {
-try {
-const res = await fetch('/api/status');
-if (!res.ok) {
-throw new Error(`HTTP ${res.status}: ${res.statusText}`);
-}
-const data = await res.json();
-
-// Database stats
-const dbStats = document.getElementById('db-stats');
-if (data.database.error) {
-dbStats.innerHTML = `<div class="stat-value" style="color: #f87171;">Error: ${data.database.error}</div>`;
-} else {
-const db = data.database;
-const dbMod = db.db_modified ? new Date(db.db_modified).toLocaleString() : 'n/a';
-const dbSize = db.db_size ? (db.db_size / 1024 / 1024).toFixed(2) + ' MB' : 'n/a';
-dbStats.innerHTML = `
-<div class="stat"><span class="stat-label">Total Events</span><span class="stat-value">${db.total_events || 0}</span></div>
-<div class="stat"><span class="stat-label">Future Events</span><span class="stat-value">${db.future_events || 0}</span></div>
-<div class="stat"><span class="stat-label">Lanes</span><span class="stat-value">${db.lane_count || 0}</span></div>
-<div class="stat"><span class="stat-label">Scheduled</span><span class="stat-value">${db.scheduled_events || 0}</span></div>
-<div class="stat"><span class="stat-label">DB Last Updated</span><span class="stat-value">${dbMod}</span></div>
-<div class="stat"><span class="stat-label">DB Size</span><span class="stat-value">${dbSize}</span></div>
-`;
-}
-
-// Files
-const fileList = document.getElementById('file-list');
-const files = Object.entries(data.files || {});
-if (files.length === 0) {
-fileList.innerHTML = '<p class="stat-value">No files generated yet</p>';
-} else {
-fileList.innerHTML = '<ul class="file-list">' + files.map(([name, info]) => `
-<li class="file-item">
-<a href="/out/${name}" class="file-name">${name}</a>
-<span class="file-size">${(info.size > 0 ? Math.max(0.01, info.size / 1024 / 1024) : 0).toFixed(2)} MB</span>
-</li>
-`).join('') + '</ul>';
-}
-
-// Refresh status
-const refreshStatus = document.getElementById('refresh-status');
-const refresh = data.refresh;
-const btnRefresh = document.getElementById('btn-refresh');
-const btnRefreshSkip = document.getElementById('btn-refresh-skip');
-renderRefreshProgress(refresh);
-
-if (refresh.running) {
-refreshStatus.innerHTML = '';
-btnRefresh.disabled = true;
-btnRefreshSkip.disabled = true;
-} else {
-btnRefresh.disabled = false;
-btnRefreshSkip.disabled = false;
-
-const pieces = [];
-if (refresh.last_run_manual) {
-const manualStatus = refresh.last_status_manual || refresh.last_status;
-let manualBadge = '';
-if (manualStatus === 'success') {
-manualBadge = '<span class="status-success">Success</span>';
-} else if (manualStatus) {
-manualBadge = '<span class="status-failed"> ' + manualStatus + '</span>';
-}
-pieces.push('Last manual refresh: ' + new Date(refresh.last_run_manual).toLocaleString() + ' ' + manualBadge);
-}
-if (refresh.last_run_auto) {
-const autoStatus = refresh.last_status_auto;
-let autoBadge = '';
-if (autoStatus === 'success') {
-autoBadge = '<span class="status-success">Success</span>';
-} else if (autoStatus) {
-autoBadge = '<span class="status-failed"> ' + autoStatus + '</span>';
-}
-pieces.push('Last auto refresh: ' + new Date(refresh.last_run_auto).toLocaleString() + ' ' + autoBadge);
-}
-if (!pieces.length && refresh.last_run) {
-const status = refresh.last_status === 'success' 
-? '<span class="status-success">Success</span>'
-: refresh.last_status
-? '<span class="status-failed"> ' + refresh.last_status + '</span>'
-: '';
-pieces.push('Last refresh: ' + new Date(refresh.last_run).toLocaleString() + ' ' + status);
-}
-refreshStatus.innerHTML = pieces.length ? pieces.join('<br>') : 'No refresh run yet';
-}
-
-// Auto-refresh status block
-if (data.auto_refresh) {
-applyAutoSettingsToDom(data.auto_refresh);
-}
-
-// Environment variables
-const envVars = document.getElementById('env-vars');
-if (data.env_vars && Object.keys(data.env_vars).length > 0) {
-const envEntries = Object.entries(data.env_vars)
-.sort(([a], [b]) => a.localeCompare(b))
-.map(([key, val]) => {
-// Mask sensitive values
-let displayVal = val;
-if (key.toLowerCase().includes('key') || key.toLowerCase().includes('secret') || key.toLowerCase().includes('password')) {
-displayVal = '********';
-}
-// Truncate long values
-if (displayVal && displayVal.length > 60) {
-displayVal = displayVal.substring(0, 57) + '...';
-}
-return `<div class="stat"><span class="stat-label">${key}</span><span class="stat-value" style="font-size: 12px; font-family: monospace;">${displayVal || '(empty)'}</span></div>`;
-}).join('');
-envVars.innerHTML = envEntries;
-} else {
-envVars.innerHTML = '<div class="stat-value" style="color: #94a3b8;">No environment variables configured</div>';
-}
-
-} catch (err) {
-console.error('Failed to load status:', err);
-document.getElementById('db-stats').innerHTML = `<div style="color: #f87171;">API Error: ${err.message}</div>`;
-document.getElementById('file-list').innerHTML = `<div style="color: #f87171;">Failed to load files</div>`;
-document.getElementById('refresh-status').innerHTML = `<div style="color: #f87171;">Status unavailable</div>`;
-document.getElementById('refresh-progress-panel').innerHTML = `<div style="color: #f87171;">Refresh progress unavailable</div>`;
-}
-}
-
-async function triggerRefresh(skipScrape) {
-try {
-const res = await fetch('/api/refresh', {
-method: 'POST',
-headers: {'Content-Type': 'application/json'},
-body: JSON.stringify({skip_scrape: skipScrape})
-});
-
-if (res.ok) {
-document.getElementById('log-status').textContent = 'LIVE';
-loadStatus();
-} else {
-const data = await res.json();
-alert(data.error || 'Failed to start refresh');
-}
-} catch (err) {
-alert('Error: ' + err.message);
-}
-}
-
-async function saveAutoRefresh() {
-try {
-const enabled = document.getElementById('auto-enabled').checked;
-const time = document.getElementById('auto-time').value || '02:30';
-const res = await fetch('/api/auto-refresh', {
-method: 'POST',
-headers: {'Content-Type': 'application/json'},
-body: JSON.stringify({ enabled, time })
-});
-if (!res.ok) {
-const data = await res.json().catch(() => ({}));
-alert(data.error || 'Failed to save auto-refresh settings');
-return;
-}
-const dataJson = await res.json();
-applyAutoSettingsToDom(dataJson);
-} catch (err) {
-alert('Error saving auto refresh: ' + err.message);
-}
-}
-
-function applyAutoSettingsToDom(auto) {
-const timeInput = document.getElementById('auto-time');
-const enabledInput = document.getElementById('auto-enabled');
-const label = document.getElementById('auto-next-run');
-
-if (timeInput && document.activeElement !== timeInput) {
-timeInput.value = auto.time || '02:30';
-}
-if (enabledInput && document.activeElement !== enabledInput) {
-enabledInput.checked = !!auto.enabled;
-}
-
-if (auto.enabled) {
-if (auto.next_run) {
-label.textContent = 'Next auto run: ' + new Date(auto.next_run).toLocaleString();
-} else {
-label.textContent = 'Next auto run: scheduling...';
-}
-} else {
-label.textContent = 'Auto refresh is disabled';
-}
-}
-
-// ===================== Live Logs (sticky scroll + session restore) =====================
-const LOG_MAX_LINES = 5000;              // keep this many lines in the DOM (increased for daily_refresh)
-const LOG_TAIL_ON_CONNECT = 5000;       // server tail if we have no stored seq (increased from 500)
-const AUTO_SCROLL_THRESHOLD_PX = 40;     // within this many px of bottom counts as "at bottom"
-const LOG_STORE_KEY = "fdl_admin_live_logs_v1";      // sessionStorage cache of recent log lines
-const LOG_STORE_SEQ_KEY = "fdl_admin_live_logs_seq"; // last seen seq (for SSE resume)
-const LOG_STORE_SCROLL_KEY = "fdl_admin_live_logs_scroll"; // last scrollTop (when not at bottom)
-
+const LOG_MAX_LINES = 5000;
+const LOG_TAIL_ON_CONNECT = 5000;
+const AUTO_SCROLL_THRESHOLD_PX = 40;
+const LOG_STORE_KEY = "fdl_admin_live_logs_v1";
+const LOG_STORE_SEQ_KEY = "fdl_admin_live_logs_seq";
+const LOG_STORE_SCROLL_KEY = "fdl_admin_live_logs_scroll";
 let _logSaveTimer = null;
-let _logLines = [];   // [{seq:number|null, text:string}]
+let _logLines = [];
 let _lastSeq = 0;
 let _logReconnectTimer = null;
 
+// ---- Wipe modal ----
+function openWipeModal() {
+  document.getElementById('wipe-confirm-input').value = '';
+  document.getElementById('wipe-confirm-btn').disabled = true;
+  document.getElementById('wipe-modal').classList.add('open');
+  setTimeout(() => document.getElementById('wipe-confirm-input').focus(), 50);
+}
+function closeWipeModal() {
+  document.getElementById('wipe-modal').classList.remove('open');
+}
+document.getElementById('wipe-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeWipeModal();
+});
+document.getElementById('wipe-confirm-input').addEventListener('input', e => {
+  document.getElementById('wipe-confirm-btn').disabled = e.target.value.trim() !== 'DELETE';
+});
+document.getElementById('wipe-confirm-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.value.trim() === 'DELETE') executeWipe();
+});
+
+async function executeWipe() {
+  closeWipeModal();
+  const btn = document.getElementById('btn-wipe-db');
+  btn.disabled = true;
+  btn.textContent = 'Wiping...';
+  try {
+    const res = await fetch('/api/wipe-event-data', { method: 'POST', headers: {'Content-Type': 'application/json'} });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      showToast(`Wiped: ${data.events_deleted||0} events, ${data.playables_deleted||0} playables, ${data.lanes_deleted||0} lanes`, 'success', 5000);
+      loadStatus();
+    } else {
+      showToast(data.error || 'Wipe failed', 'error');
+    }
+  } catch (err) {
+    showToast('Error: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Wipe Event Data';
+  }
+}
+
+// ---- Status ----
+function _escapeHtml(s) {
+  return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
+}
+
+function renderRefreshProgress(refresh) {
+  const panel = document.getElementById('refresh-progress-panel');
+  if (!panel) return;
+  const progress = refresh.progress || {};
+  const completed = Array.isArray(progress.completed_steps) ? progress.completed_steps.slice().reverse() : [];
+  const totalSteps = progress.total_steps || '?';
+  const currentKey = progress.current_step_key || refresh.current_step || 'Pending';
+  const currentLabel = progress.current_step_label || (refresh.running ? 'Refresh starting' : 'No refresh running');
+  const completedCount = Array.isArray(progress.completed_steps) ? progress.completed_steps.length : 0;
+  const startedAt = progress.started_at ? new Date(progress.started_at) : null;
+  const finishedAt = progress.finished_at ? new Date(progress.finished_at) : null;
+
+  const statusClass = refresh.running ? 'status-running'
+    : ((refresh.last_status||progress.phase) === 'success' ? 'status-success'
+    : ((refresh.last_status||progress.phase) ? 'status-failed' : 'status-muted'));
+  const statusText = refresh.running ? 'Running'
+    : ((refresh.last_status||progress.phase) === 'success' ? 'Last run succeeded'
+    : ((refresh.last_status||progress.phase) ? `Last run: ${refresh.last_status||progress.phase}` : 'Idle'));
+
+  const metaBits = [];
+  if (progress.version) metaBits.push(`v${progress.version}`);
+  if (progress.skip_scrape) metaBits.push('skip-scrape');
+  if (startedAt) metaBits.push('started ' + startedAt.toLocaleString());
+  if (!refresh.running && finishedAt) metaBits.push('finished ' + finishedAt.toLocaleString());
+
+  const summaryBits = [];
+  if (!refresh.running && startedAt && finishedAt) {
+    const d = Math.max(0, (finishedAt - startedAt) / 1000);
+    summaryBits.push('Duration: ' + (d >= 60 ? `${Math.floor(d/60)}m ${(d%60).toFixed(1)}s` : `${d.toFixed(1)}s`));
+  }
+  if (!refresh.running && completedCount) {
+    const tot = Number(totalSteps);
+    if (Number.isFinite(tot) && tot > 0) {
+      summaryBits.push(`Steps: ${completedCount}/${tot}`);
+      if (tot - completedCount > 0) summaryBits.push(`Skipped: ${tot - completedCount}`);
+    } else {
+      summaryBits.push(`Steps: ${completedCount}`);
+    }
+  }
+
+  const rows = completed.length
+    ? completed.map(item => {
+        const sc = item.status === 'ok' ? 'status-success' : item.status === 'failed_nonfatal' ? 'status-running' : 'status-failed';
+        const sl = item.status === 'ok' ? 'Done' : item.status === 'failed_nonfatal' ? 'Non-fatal' : 'Failed';
+        return `<div class="progress-item"><span class="progress-item-label">[${item.step}/${totalSteps}] ${_escapeHtml(item.label)}</span><span class="progress-item-status ${sc}">${sl}</span></div>`;
+      }).join('')
+    : '<div class="status-muted">No completed steps yet.</div>';
+
+  const titleLine = refresh.running ? `[${currentKey}/${totalSteps}] ${_escapeHtml(currentLabel)}`
+    : ((refresh.last_status||progress.phase) === 'success' ? 'Refresh completed successfully'
+    : ((refresh.last_status||progress.phase) ? `Refresh finished: ${refresh.last_status||progress.phase}` : 'No refresh running'));
+
+  panel.innerHTML = `
+    <div class="progress-title ${statusClass}">${statusText}</div>
+    <div class="progress-meta">${titleLine}${metaBits.length ? ' &bull; ' + metaBits.map(_escapeHtml).join(' &bull; ') : ''}</div>
+    ${summaryBits.length ? `<div class="progress-detail">${_escapeHtml(summaryBits.join(' &bull; '))}</div>` : ''}
+    ${!refresh.running && (progress.current_detail||'') ? `<div class="progress-detail">${_escapeHtml(progress.current_detail)}</div>` : ''}
+    <div class="progress-list">${rows}</div>`;
+}
+
+async function loadStatus() {
+  try {
+    const data = await fetch('/api/status').then(r => r.json());
+
+    // DB stats
+    const dbEl = document.getElementById('db-stats');
+    if (data.database.error) {
+      dbEl.innerHTML = `<span style="color:var(--danger)">Error: ${_escapeHtml(data.database.error)}</span>`;
+    } else {
+      const db = data.database;
+      const mod = db.db_modified ? new Date(db.db_modified).toLocaleString() : 'n/a';
+      const sz = db.db_size ? (db.db_size/1024/1024).toFixed(2) + ' MB' : 'n/a';
+      dbEl.innerHTML = [
+        ['Total Events', db.total_events||0], ['Future Events', db.future_events||0],
+        ['Lanes', db.lane_count||0], ['Scheduled', db.scheduled_events||0],
+        ['DB Updated', mod], ['DB Size', sz],
+      ].map(([l,v]) => `<div class="stat"><span class="stat-label">${l}</span><span class="stat-value">${v}</span></div>`).join('');
+    }
+
+    // Files
+    const fileEl = document.getElementById('file-list');
+    const files = Object.entries(data.files || {});
+    fileEl.innerHTML = files.length
+      ? '<ul class="file-list">' + files.map(([n,i]) =>
+          `<li class="file-item"><a href="/out/${n}" class="file-name">${n}</a><span class="file-size">${Math.max(0.01,i.size/1024/1024).toFixed(2)} MB</span></li>`
+        ).join('') + '</ul>'
+      : '<span style="color:var(--text-muted)">No files generated yet</span>';
+
+    // Refresh
+    const refresh = data.refresh;
+    const btnRef = document.getElementById('btn-refresh');
+    const btnSkip = document.getElementById('btn-refresh-skip');
+    renderRefreshProgress(refresh);
+    if (refresh.running) {
+      btnRef.disabled = btnSkip.disabled = true;
+      document.getElementById('refresh-status').innerHTML = '';
+    } else {
+      btnRef.disabled = btnSkip.disabled = false;
+      const pieces = [];
+      if (refresh.last_run_manual) {
+        const st = refresh.last_status_manual || refresh.last_status;
+        pieces.push('Last manual: ' + new Date(refresh.last_run_manual).toLocaleString() +
+          (st === 'success' ? ' <span class="status-success">OK</span>' : st ? ` <span class="status-failed">${st}</span>` : ''));
+      }
+      if (refresh.last_run_auto) {
+        const st = refresh.last_status_auto;
+        pieces.push('Last auto: ' + new Date(refresh.last_run_auto).toLocaleString() +
+          (st === 'success' ? ' <span class="status-success">OK</span>' : st ? ` <span class="status-failed">${st}</span>` : ''));
+      }
+      document.getElementById('refresh-status').innerHTML = pieces.join('<br>') || '';
+    }
+
+    if (data.auto_refresh) applyAutoToDom(data.auto_refresh);
+
+    // Config (env vars)
+    const envEl = document.getElementById('env-vars');
+    const ev = data.env_vars || {};
+    const keys = Object.keys(ev).sort();
+    envEl.innerHTML = keys.length
+      ? keys.map(k => {
+          let v = ev[k];
+          if (k.toLowerCase().match(/key|secret|password/)) v = '••••••••';
+          if (v && v.length > 55) v = v.slice(0,52) + '…';
+          return `<div class="stat"><span class="stat-label" style="font-size:11px">${k}</span><span class="stat-value" style="font-size:11px;font-family:var(--mono)">${v||'(empty)'}</span></div>`;
+        }).join('')
+      : '<span style="color:var(--text-muted)">No env vars set</span>';
+
+  } catch (err) {
+    console.error('loadStatus:', err);
+  }
+}
+
+async function triggerRefresh(skipScrape) {
+  try {
+    const res = await fetch('/api/refresh', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({skip_scrape: skipScrape}) });
+    if (res.ok) {
+      showToast('Refresh started', 'success');
+      loadStatus();
+    } else {
+      const d = await res.json().catch(()=>({}));
+      showToast(d.error || 'Failed to start refresh', 'error');
+    }
+  } catch (err) {
+    showToast('Error: ' + err.message, 'error');
+  }
+}
+
+async function saveAutoRefresh() {
+  try {
+    const res = await fetch('/api/auto-refresh', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ enabled: document.getElementById('auto-enabled').checked, time: document.getElementById('auto-time').value || '02:30' }),
+    });
+    if (!res.ok) { const d = await res.json().catch(()=>({})); showToast(d.error||'Failed to save', 'error'); return; }
+    const d = await res.json();
+    applyAutoToDom(d);
+    showToast('Auto-refresh settings saved', 'success');
+  } catch (err) { showToast('Error: ' + err.message, 'error'); }
+}
+
+function applyAutoToDom(auto) {
+  const t = document.getElementById('auto-time');
+  const e = document.getElementById('auto-enabled');
+  const l = document.getElementById('auto-next-run');
+  if (t && document.activeElement !== t) t.value = auto.time || '02:30';
+  if (e && document.activeElement !== e) e.checked = !!auto.enabled;
+  l.textContent = auto.enabled
+    ? (auto.next_run ? 'Next auto run: ' + new Date(auto.next_run).toLocaleString() : 'Scheduling...')
+    : 'Auto refresh disabled';
+}
+
+// ---- Live logs ----
 function _loadLogsFromSession() {
   try {
     const raw = sessionStorage.getItem(LOG_STORE_KEY);
     const rawSeq = sessionStorage.getItem(LOG_STORE_SEQ_KEY);
     const rawScroll = sessionStorage.getItem(LOG_STORE_SCROLL_KEY);
-
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) _logLines = parsed.filter(x => x && typeof x.text === "string");
-    }
+    if (raw) { const p = JSON.parse(raw); if (Array.isArray(p)) _logLines = p.filter(x => x && typeof x.text === 'string'); }
     if (rawSeq) _lastSeq = parseInt(rawSeq, 10) || 0;
-
-    return {
-      hadLogs: _logLines.length > 0,
-      lastSeq: _lastSeq,
-      scrollTop: rawScroll ? (parseInt(rawScroll, 10) || 0) : 0,
-    };
-  } catch (e) {
-    _logLines = [];
-    _lastSeq = 0;
-    return { hadLogs: false, lastSeq: 0, scrollTop: 0 };
-  }
+    return { hadLogs: _logLines.length > 0, lastSeq: _lastSeq, scrollTop: rawScroll ? (parseInt(rawScroll,10)||0) : 0 };
+  } catch { _logLines = []; _lastSeq = 0; return {hadLogs:false,lastSeq:0,scrollTop:0}; }
 }
-
-function _scheduleSaveLogsToSession() {
-  // debounce writes to sessionStorage so we don't thrash it while logs spam
+function _scheduleSave() {
   if (_logSaveTimer) return;
   _logSaveTimer = setTimeout(() => {
     _logSaveTimer = null;
-    try {
-      // cap stored lines so sessionStorage stays sane
-      const tail = _logLines.slice(-LOG_MAX_LINES);
-      sessionStorage.setItem(LOG_STORE_KEY, JSON.stringify(tail));
-      sessionStorage.setItem(LOG_STORE_SEQ_KEY, String(_lastSeq || 0));
-    } catch (e) {
-      // ignore storage failures
-    }
+    try { sessionStorage.setItem(LOG_STORE_KEY, JSON.stringify(_logLines.slice(-LOG_MAX_LINES))); sessionStorage.setItem(LOG_STORE_SEQ_KEY, String(_lastSeq)); } catch {}
   }, 250);
 }
-
-function _escapeHtml(s) {
-  // avoid HTML injection in log rendering
-  return String(s)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+function _renderLogs({restoreScrollTop=null}={}) {
+  const c = document.getElementById('log-container'); if (!c) return;
+  c.innerHTML = _logLines.slice(-LOG_MAX_LINES).map(x=>`<div class="log-line">${_escapeHtml(x.text)}</div>`).join('');
+  c.scrollTop = (typeof restoreScrollTop === 'number' && restoreScrollTop > 0) ? Math.min(restoreScrollTop, c.scrollHeight) : c.scrollHeight;
 }
-
-function _renderLogsIntoDom({ restoreScrollTop = null } = {}) {
-  const container = document.getElementById("log-container");
-  if (!container) return;
-
-  const tail = _logLines.slice(-LOG_MAX_LINES);
-  container.innerHTML = tail
-    .map(x => `<div class="log-line" data-seq="${x.seq ?? ""}">${_escapeHtml(x.text)}</div>`)
-    .join("");
-
-  // If the user left while scrolled up, restore that scroll position.
-  // Otherwise, default to bottom.
-  if (typeof restoreScrollTop === "number" && restoreScrollTop > 0) {
-    container.scrollTop = Math.min(restoreScrollTop, container.scrollHeight);
-  } else {
-    container.scrollTop = container.scrollHeight;
-  }
+function _isAtBottom(c) { return c.scrollHeight - c.scrollTop - c.clientHeight <= AUTO_SCROLL_THRESHOLD_PX; }
+function _appendLine(text, seq) {
+  const c = document.getElementById('log-container'); if (!c) return;
+  const atBottom = _isAtBottom(c); const prev = c.scrollTop;
+  const el = document.createElement('div'); el.className = 'log-line'; el.textContent = text; c.appendChild(el);
+  while (c.children.length > LOG_MAX_LINES) c.removeChild(c.firstChild);
+  c.scrollTop = atBottom ? c.scrollHeight : prev;
+  if (!atBottom) try { sessionStorage.setItem(LOG_STORE_SCROLL_KEY, String(prev)); } catch {}
 }
-
-function _isAtBottom(container) {
-  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-  return distanceFromBottom <= AUTO_SCROLL_THRESHOLD_PX;
-}
-
-function _appendLogLineToDom(textLine, seqOrNull) {
-  const container = document.getElementById("log-container");
-  if (!container) return;
-
-  const wasAtBottom = _isAtBottom(container);
-  const prevScrollTop = container.scrollTop;
-
-  const line = document.createElement("div");
-  line.className = "log-line";
-  if (seqOrNull != null) line.dataset.seq = String(seqOrNull);
-  line.textContent = textLine; // safe, no HTML parsing
-  container.appendChild(line);
-
-  // Trim DOM lines (from the top)
-  while (container.children.length > LOG_MAX_LINES) {
-    container.removeChild(container.firstChild);
-  }
-
-  // Sticky scroll behavior:
-  // - If user is reading older lines (not at bottom), keep them where they are.
-  // - If they're at bottom, follow new lines.
-  if (wasAtBottom) {
-    container.scrollTop = container.scrollHeight;
-  } else {
-    container.scrollTop = prevScrollTop;
-    try {
-      sessionStorage.setItem(LOG_STORE_SCROLL_KEY, String(container.scrollTop));
-    } catch (e) {}
-  }
-}
-
-function _addLogLine(textLine, seqOrNull) {
-  if (!textLine) return;
-
-  const seq = (seqOrNull != null) ? (parseInt(seqOrNull, 10) || 0) : 0;
+function _addLine(text, seqRaw) {
+  if (!text) return;
+  const seq = seqRaw != null ? (parseInt(seqRaw,10)||0) : 0;
   if (seq > 0) _lastSeq = Math.max(_lastSeq, seq);
-
-  _logLines.push({ seq: seq > 0 ? seq : null, text: textLine });
+  _logLines.push({seq: seq||null, text});
   if (_logLines.length > LOG_MAX_LINES) _logLines = _logLines.slice(-LOG_MAX_LINES);
-
-  _appendLogLineToDom(textLine, seq > 0 ? seq : null);
-  _scheduleSaveLogsToSession();
+  _appendLine(text, seq||null);
+  _scheduleSave();
 }
-
-function setupLogStream(forceTail = false) {
+function setupLogStream(forceTail=false) {
   if (logEventSource) logEventSource.close();
-  if (_logReconnectTimer) {
-    clearTimeout(_logReconnectTimer);
-    _logReconnectTimer = null;
-  }
-
-  const statusEl = document.getElementById("log-status");
-  if (statusEl) statusEl.textContent = "CONNECTING…";
-
-  const hasSeq = !forceTail && (_lastSeq && _lastSeq > 0);
-  const qs = new URLSearchParams();
-  if (hasSeq) {
-    qs.set("since", String(_lastSeq));
-  } else {
-    // no seq known -> ask server to tail some lines so we immediately see history
-    qs.set("tail", String(LOG_TAIL_ON_CONNECT));
-  }
-
-  logEventSource = new EventSource(`/api/logs/stream?${qs.toString()}`);
-  const container = document.getElementById("log-container");
-  let sawMessage = false;
-
-  // Persist scroll position when user scrolls up (and restore it on return)
-  // Only attach listener once - setupLogStream may be called multiple times on reconnect
-  if (container && !_scrollListenerAttached) {
+  if (_logReconnectTimer) { clearTimeout(_logReconnectTimer); _logReconnectTimer = null; }
+  const statusEl = document.getElementById('log-status');
+  if (statusEl) statusEl.textContent = 'CONNECTING…';
+  const hasSeq = !forceTail && _lastSeq > 0;
+  const qs = new URLSearchParams(hasSeq ? {since: String(_lastSeq)} : {tail: String(LOG_TAIL_ON_CONNECT)});
+  logEventSource = new EventSource(`/api/logs/stream?${qs}`);
+  const c = document.getElementById('log-container');
+  let sawMsg = false;
+  if (c && !_scrollListenerAttached) {
     _scrollListenerAttached = true;
-    container.addEventListener("scroll", () => {
-      if (!_isAtBottom(container)) {
-        try { sessionStorage.setItem(LOG_STORE_SCROLL_KEY, String(container.scrollTop)); } catch (e) {}
-      } else {
-        try { sessionStorage.removeItem(LOG_STORE_SCROLL_KEY); } catch (e) {}
-      }
-    }, { passive: true });
+    c.addEventListener('scroll', () => {
+      try { _isAtBottom(c) ? sessionStorage.removeItem(LOG_STORE_SCROLL_KEY) : sessionStorage.setItem(LOG_STORE_SCROLL_KEY, String(c.scrollTop)); } catch {}
+    }, {passive:true});
   }
-
-  logEventSource.onmessage = (event) => {
-    sawMessage = true;
-    let lineText = "";
-    let seq = null;
-
-    try {
-      const obj = JSON.parse(event.data);
-      lineText = (obj && (obj.log ?? obj.line)) ? (obj.log ?? obj.line) : String(event.data || "");
-      if (obj && typeof obj.seq !== "undefined") seq = obj.seq;
-    } catch (e) {
-      // Backwards-compatible: server may stream plain-text lines
-      lineText = String(event.data || "");
-    }
-
-    if (!lineText) return;
-    _addLogLine(lineText, seq);
+  logEventSource.onmessage = e => {
+    sawMsg = true;
+    let text = '', seq = null;
+    try { const o = JSON.parse(e.data); text = o.log||o.line||String(e.data||''); if (o.seq != null) seq = o.seq; } catch { text = String(e.data||''); }
+    if (text) _addLine(text, seq);
   };
-
-  logEventSource.addEventListener("ping", () => {
-    // keep-alive heartbeat
-  });
-
-  if (hasSeq) {
-    _logReconnectTimer = setTimeout(() => {
-      if (!sawMessage) {
-        try { logEventSource.close(); } catch (e) {}
-        _lastSeq = 0;
-        try {
-          sessionStorage.removeItem(LOG_STORE_SEQ_KEY);
-          sessionStorage.removeItem(LOG_STORE_KEY);
-          sessionStorage.removeItem(LOG_STORE_SCROLL_KEY);
-        } catch (e) {}
-        _logLines = [];
-        _renderLogsIntoDom();
-        setupLogStream(true);
-      }
-    }, 2000);
-  }
-
-  logEventSource.onerror = () => {
-    if (_logReconnectTimer) {
-      clearTimeout(_logReconnectTimer);
-      _logReconnectTimer = null;
+  logEventSource.addEventListener('ping', ()=>{});
+  if (hasSeq) _logReconnectTimer = setTimeout(() => {
+    if (!sawMsg) {
+      try { logEventSource.close(); } catch {}
+      _lastSeq = 0; _logLines = [];
+      try { [LOG_STORE_SEQ_KEY,LOG_STORE_KEY,LOG_STORE_SCROLL_KEY].forEach(k=>sessionStorage.removeItem(k)); } catch {}
+      _renderLogs(); setupLogStream(true);
     }
-    if (statusEl) statusEl.textContent = "RECONNECTING…";
-    try { logEventSource.close(); } catch (e) {}
+  }, 2000);
+  logEventSource.onerror = () => {
+    if (_logReconnectTimer) { clearTimeout(_logReconnectTimer); _logReconnectTimer = null; }
+    if (statusEl) statusEl.textContent = 'RECONNECTING…';
+    try { logEventSource.close(); } catch {}
     setTimeout(setupLogStream, 2000);
   };
-
-  if (statusEl) statusEl.textContent = "LIVE";
+  if (statusEl) statusEl.textContent = 'LIVE';
 }
-
 async function loadInitialLogs() {
-  // Prefer restoring from sessionStorage so navigating away/back preserves what you were reading.
   const restored = _loadLogsFromSession();
-  _renderLogsIntoDom({ restoreScrollTop: restored.scrollTop });
-
-  // If nothing was restored, do a one-shot pull for quick history (plain lines),
-  // then SSE will take over and include seqs.
+  _renderLogs({restoreScrollTop: restored.scrollTop});
   if (!restored.hadLogs) {
     try {
-      const res = await fetch(`/api/logs?count=${LOG_TAIL_ON_CONNECT}`);
-      const data = await res.json();
-      if (Array.isArray(data.logs)) {
-        data.logs.forEach((t) => {
-          if (typeof t === "string" && t.trim()) _logLines.push({ seq: null, text: t });
-        });
+      const d = await fetch(`/api/logs?count=${LOG_TAIL_ON_CONNECT}`).then(r=>r.json());
+      if (Array.isArray(d.logs)) {
+        d.logs.forEach(t => { if (t && t.trim()) _logLines.push({seq:null,text:t}); });
         _logLines = _logLines.slice(-LOG_MAX_LINES);
-        _renderLogsIntoDom();
-        _scheduleSaveLogsToSession();
+        _renderLogs(); _scheduleSave();
       }
-    } catch (e) {
-      // ignore
-    }
+    } catch {}
   }
 }
 
-async function wipeEventData() {
-try {
-const confirmed = confirm(
-'⚠️ WARNING: This will DELETE all event data!\n\n' +
-'This will clear:\n' +
-'• All events and playables\n' +
-'• All lanes (Fruit Lanes, ADB Lanes)\n' +
-'• Apple & ESPN cached data\n' +
-'• Amazon scraped channels\n\n' +
-'This will PRESERVE:\n' +
-'✓ Filter settings\n' +
-'✓ User preferences\n' +
-'✓ ADB configuration\n' +
-'✓ Amazon service definitions\n\n' +
-'Are you sure you want to continue?'
-);
-
-if (!confirmed) return;
-
-const doubleCheck = confirm(
-'⚠️ FINAL CONFIRMATION\n\n' +
-'This action cannot be undone!\n\n' +
-'Type YES in the next prompt to proceed.'
-);
-
-if (!doubleCheck) return;
-
-const verification = prompt('Type YES (in capitals) to confirm:');
-if (verification !== 'YES') {
-alert('Wipe cancelled - verification failed');
-return;
-}
-
-document.getElementById('btn-wipe-db').disabled = true;
-document.getElementById('btn-wipe-db').textContent = '⏳ Wiping...';
-
-const res = await fetch('/api/wipe-event-data', {
-method: 'POST',
-headers: {'Content-Type': 'application/json'}
-});
-
-if (!res.ok) {
-const data = await res.json().catch(() => ({}));
-alert(data.error || 'Failed to wipe event data');
-document.getElementById('btn-wipe-db').disabled = false;
-document.getElementById('btn-wipe-db').textContent = '🗑️ Wipe Event Data';
-return;
-}
-
-const result = await res.json();
-alert('✅ Event data wiped successfully!\n\n' + 
-'Cleared:\n' + 
-`• ${result.events_deleted || 0} events\n` +
-`• ${result.playables_deleted || 0} playables\n` +
-`• ${result.lanes_deleted || 0} lanes\n\n` +
-'Settings and filters preserved.');
-
-loadStatus();
-document.getElementById('btn-wipe-db').disabled = false;
-document.getElementById('btn-wipe-db').textContent = '🗑️ Wipe Event Data';
-} catch (err) {
-alert('Error wiping event data: ' + err.message);
-document.getElementById('btn-wipe-db').disabled = false;
-document.getElementById('btn-wipe-db').textContent = '🗑️ Wipe Event Data';
-}
-}
-
-// Initialize
 loadStatus();
 loadInitialLogs();
 setupLogStream();
 setInterval(loadStatus, 5000);
 </script>
-</body>
-</html>
+{% endblock %}

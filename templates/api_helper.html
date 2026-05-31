@@ -1,249 +1,71 @@
-<!DOCTYPE html>
-<html>
-<head>
-<title>FruitDeepLinks API Reference</title>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-body {
-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-background: #020617;
-color: #e2e8f0;
-padding: 20px;
-line-height: 1.6;
-}
-a { color: #38bdf8; text-decoration: none; }
-a:hover { text-decoration: underline; }
-.container { max-width: 1100px; margin: 0 auto; }
-h1 { color: #60a5fa; margin-bottom: 4px; font-size: 28px; }
-.subtitle { color: #94a3b8; margin-bottom: 24px; font-size: 15px; }
-.topnav {
-display: flex;
-flex-wrap: wrap;
-gap: 10px;
-margin-bottom: 24px;
-}
-.topnav-link {
-display: inline-block;
-background: #1e293b;
-color: #cbd5e1;
-border: 1px solid #334155;
-padding: 10px 16px;
-border-radius: 8px;
-font-size: 14px;
-font-weight: 600;
-text-decoration: none;
-}
-.topnav-link:hover {
-background: #273449;
-color: #ffffff;
-text-decoration: none;
-}
-.topnav-link-active {
-background: #3b82f6;
-border-color: #1d4ed8;
-color: #ffffff;
-}
-.section-header {
-color: #fbbf24;
-font-size: 20px;
-margin: 32px 0 16px 0;
-padding-bottom: 8px;
-border-bottom: 2px solid #1f2937;
-}
-.card {
-background: #0f172a;
-border: 1px solid #1e293b;
-border-radius: 8px;
-padding: 18px 22px;
-margin-bottom: 16px;
-}
-.card h2 { 
-font-size: 17px; 
-margin-bottom: 10px; 
-color: #f97316;
-font-weight: 600;
-}
-.description {
-color: #cbd5e1;
-margin-bottom: 12px;
-font-size: 14px;
-line-height: 1.5;
-}
-code {
-font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
-font-size: 13px;
-background: #020617;
-padding: 2px 5px;
-border-radius: 4px;
-border: 1px solid #1e293b;
-}
-pre {
-background: #020617;
-padding: 12px 14px;
-border-radius: 6px;
-overflow-x: auto;
-font-size: 13px;
-border: 1px solid #1e293b;
-margin: 10px 0;
-}
-.tag {
-display: inline-block;
-font-size: 11px;
-padding: 3px 7px;
-border-radius: 4px;
-margin-right: 6px;
-margin-bottom: 6px;
-font-weight: 600;
-border: 1px solid;
-}
-.tag-get {
-background: #14532d;
-border-color: #22c55e;
-color: #86efac;
-}
-.tag-post {
-background: #1e3a8a;
-border-color: #3b82f6;
-color: #93c5fd;
-}
-.endpoint-line {
-margin: 6px 0;
-padding-left: 8px;
-}
-.params {
-background: #0a0e1a;
-padding: 10px 12px;
-border-radius: 6px;
-margin: 8px 0;
-font-size: 13px;
-border-left: 3px solid #334155;
-}
-.param-name {
-color: #fbbf24;
-font-weight: 600;
-}
-.note {
-background: #1e1b4b;
-border-left: 3px solid #6366f1;
-padding: 10px 14px;
-margin: 12px 0;
-border-radius: 4px;
-font-size: 13px;
-}
-.note-title {
-color: #a5b4fc;
-font-weight: 600;
-margin-bottom: 4px;
-}
-.toc {
-background: #0f172a;
-border: 1px solid #1e293b;
-border-radius: 8px;
-padding: 16px 20px;
-margin-bottom: 24px;
-}
-.toc h3 {
-color: #60a5fa;
-font-size: 16px;
-margin-bottom: 12px;
-}
-.toc a {
-display: block;
-padding: 4px 0;
-color: #94a3b8;
-}
-.toc a:hover {
-color: #38bdf8;
-}
-.tag-danger {
-background: #7f1d1d;
-border-color: #dc2626;
-color: #fca5a5;
-}
-.danger-card {
-border: 2px solid #7f1d1d;
-background: #0f0a0a;
-}
-.danger-card h2 {
-color: #ef4444;
-}
-</style>
-</head>
-<body>
-<div class="container">
-<h1>FruitDeepLinks API Reference</h1>
-<p class="subtitle">Complete HTTP API documentation for sports event aggregation and streaming.</p>
+{% extends "base.html" %}
+{% block title %}API Reference — FruitDeepLinks{% endblock %}
+{% block page_title %}API Reference{% endblock %}
+{% block page_subtitle %}<p class="subtitle">Complete HTTP API documentation for sports event aggregation and streaming.</p>{% endblock %}
 
-<div class="topnav">
-<a href="/" class="topnav-link">Dashboard</a>
-<a href="/filters" class="topnav-link">Filters & Settings</a>
-<a href="/events" class="topnav-link">Event Inspector</a>
-<a href="/adb" class="topnav-link">ADB Configuration</a>
-<a href="/api" class="topnav-link topnav-link-active">API Helper</a>
-</div>
+{% block extra_style %}
+.card h2 { color: #f97316; }
+.section-header { color:var(--warning); font-size:18px; margin:28px 0 14px; padding-bottom:8px; border-bottom:2px solid #1f2937; }
+.endpoint-line { margin:6px 0; padding-left:8px; }
+.description { color:var(--text-dim); font-size:13px; line-height:1.5; margin-bottom:10px; }
+code { font-family:var(--mono); font-size:12px; background:var(--bg-inset); padding:2px 5px; border-radius:4px; border:1px solid var(--border-dim); }
+.tag { display:inline-block; font-size:11px; padding:3px 7px; border-radius:4px; margin-right:6px; margin-bottom:4px; font-weight:600; border:1px solid; }
+.tag-get    { background:#14532d; border-color:#22c55e; color:#86efac; }
+.tag-post   { background:#1e3a8a; border-color:#3b82f6; color:#93c5fd; }
+.tag-danger { background:#7f1d1d; border-color:#dc2626; color:#fca5a5; }
+.params { background:#0a0e1a; padding:10px 12px; border-radius:6px; margin:8px 0; font-size:13px; border-left:3px solid var(--border); }
+.param-name { color:var(--warning); font-weight:600; }
+.note { background:#1e1b4b; border-left:3px solid #6366f1; padding:10px 14px; margin:12px 0; border-radius:4px; font-size:13px; }
+.note-title { color:#a5b4fc; font-weight:600; margin-bottom:4px; }
+.toc { background:var(--bg-inset); border:1px solid var(--border-dim); border-radius:var(--radius); padding:16px 20px; margin-bottom:20px; }
+.toc h3 { color:#60a5fa; font-size:15px; margin-bottom:10px; }
+.toc a { display:block; padding:3px 0; color:var(--text-muted); font-size:13px; }
+.toc a:hover { color:#38bdf8; }
+.danger-card { border:2px solid #7f1d1d !important; background:#0f0a0a; }
+.danger-card h2 { color:#ef4444; }
+.tip-box { margin-top:36px; padding:18px; background:var(--bg-inset); border-radius:var(--radius); border:1px solid var(--border-dim); font-size:13px; color:var(--text-muted); }
+{% endblock %}
 
+{% block content %}
 <div class="toc">
-<h3>Quick Navigation</h3>
-<a href="#core">Core Endpoints (Health, Status, Files)</a>
-<a href="#adb">ADB Lanes API (ADBTuner Integration)</a>
-<a href="#lanes">Virtual Lanes (Multi-Source Channels)</a>
-<a href="#chromecapture">Chrome Capture (Redirect Tuning)</a>
-<a href="#detector">CDVR Detector (Auto-Launch)</a>
-<a href="#filters">Content Filtering</a>
-<a href="#refresh">Refresh & Admin</a>
-<a href="#events">Event Inspector (Browse Events & Raw Data)</a>
+  <h3>Quick Navigation</h3>
+  <a href="#core">Core Endpoints (Health, Status, Files)</a>
+  <a href="#adb">ADB Lanes API (ADBTuner Integration)</a>
+  <a href="#lanes">Virtual Lanes (Multi-Source Channels)</a>
+  <a href="#chromecapture">Chrome Capture (Redirect Tuning)</a>
+  <a href="#detector">CDVR Detector (Auto-Launch)</a>
+  <a href="#filters">Content Filtering</a>
+  <a href="#refresh">Refresh & Admin</a>
+  <a href="#events">Event Inspector (Browse Events & Raw Data)</a>
 </div>
 
 <!-- CORE ENDPOINTS -->
 <h2 class="section-header" id="core">Core Endpoints</h2>
 
-<div class="card">
-<h2>Health Check</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/health</code>
-</div>
-<p class="description">Basic health probe. Returns <code>{"status": "healthy"}</code> if database exists.</p>
-<pre>curl "$BASE/health"</pre>
+<div class="card" style="margin-bottom:14px">
+  <h2>Health Check</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/health</code></div>
+  <p class="description">Basic health probe. Returns <code>{"status": "healthy"}</code> if database exists.</p>
+  <pre>curl "$BASE/health"</pre>
 </div>
 
-<div class="card">
-<h2>System Status</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/api/status</code>
-</div>
-<p class="description">Comprehensive system status including database stats, output files, refresh state, and auto-refresh schedule.</p>
-<pre>curl "$BASE/api/status" | jq</pre>
-<div class="params">
-<strong>Returns:</strong> Database stats (event counts, lane counts), file list with sizes/timestamps, refresh status, auto-refresh configuration.
-</div>
+<div class="card" style="margin-bottom:14px">
+  <h2>System Status</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/status</code></div>
+  <p class="description">Comprehensive system status including database stats, output files, refresh state, and auto-refresh schedule.</p>
+  <pre>curl "$BASE/api/status" | jq</pre>
+  <div class="params"><strong>Returns:</strong> Database stats (event counts, lane counts), file list with sizes/timestamps, refresh status, auto-refresh configuration.</div>
 </div>
 
-<div class="card">
-<h2>XMLTV & M3U Downloads</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/xmltv/direct</code> Direct channels XMLTV guide
-</div>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/m3u/direct</code> Direct channels M3U playlist
-</div>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/xmltv/lanes</code> Virtual lanes XMLTV guide
-</div>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/m3u/lanes</code> Virtual lanes M3U playlist
-</div>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/out/&lt;filename&gt;</code> Generic file download (any .xml, .m3u in /out)
-</div>
-<pre># Download direct channels
+<div class="card" style="margin-bottom:14px">
+  <h2>XMLTV & M3U Downloads</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/xmltv/direct</code> Direct channels XMLTV guide</div>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/m3u/direct</code> Direct channels M3U playlist</div>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/xmltv/lanes</code> Virtual lanes XMLTV guide</div>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/m3u/lanes</code> Virtual lanes M3U playlist</div>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/m3u/adb</code> ADB lanes M3U — <code>?profile=fire</code> (default) or <code>?profile=apple</code></div>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/out/&lt;filename&gt;</code> Generic file download (any .xml, .m3u in /out)</div>
+  <pre># Download direct channels
 curl -o direct.xml "$BASE/xmltv/direct"
 curl -o direct.m3u "$BASE/m3u/direct"
 
@@ -251,188 +73,154 @@ curl -o direct.m3u "$BASE/m3u/direct"
 curl -o lanes.xml "$BASE/xmltv/lanes"
 curl -o lanes.m3u "$BASE/m3u/lanes"
 
-# Download ADB lanes (global)
-curl -o adb_lanes.xml "$BASE/out/adb_lanes.xml"
-curl -o adb_lanes.m3u "$BASE/out/adb_lanes.m3u"
+# Download ADB lanes — Fire TV / Android (aiv:// scheme URLs, default)
+curl -o adb_lanes.m3u "$BASE/m3u/adb"
+curl -o adb_lanes.m3u "$BASE/m3u/adb?profile=fire"
 
-# Download provider-specific ADB lanes
-curl -o sportscenter.m3u "$BASE/out/adb_lanes_sportscenter.m3u"
-curl -o pplus.m3u "$BASE/out/adb_lanes_pplus.m3u"</pre>
+# Download ADB lanes — Apple TV (https:// URLs)
+curl -o adb_lanes_apple.m3u "$BASE/m3u/adb?profile=apple"
+
+# Download ADB XMLTV guide
+curl -o adb_lanes.xml "$BASE/out/adb_lanes.xml"
+
+# Download provider-specific ADB lanes (fire and apple variants)
+curl -o aiv.m3u       "$BASE/out/adb_lanes_aiv.m3u"
+curl -o aiv_apple.m3u "$BASE/out/adb_lanes_aiv_apple.m3u"</pre>
 </div>
 
 <!-- ADB LANES API -->
 <h2 class="section-header" id="adb">ADB Lanes API (ADBTuner Integration)</h2>
 
 <div class="note">
-<div class="note-title"> What are ADB Lanes?</div>
-Each provider (sportscenter, pplus, aiv, max, etc.) gets its own set of "ADB lanes" virtual channels that group events by streaming service. During refresh, the system generates one M3U per provider (<code>adb_lanes_sportscenter.m3u</code>, <code>adb_lanes_pplus.m3u</code>, etc.), and each lane becomes a channel with ID format <code>provider_code + lane_number</code> (e.g., <code>sportscenter01</code>, <code>pplus03</code>).
+  <div class="note-title">What are ADB Lanes?</div>
+  Each provider (sportscenter, pplus, aiv, max, etc.) gets its own set of "ADB lanes" virtual channels that group events by streaming service. During refresh, the system generates one M3U per provider (<code>adb_lanes_sportscenter.m3u</code>, <code>adb_lanes_pplus.m3u</code>, etc.), and each lane becomes a channel with ID format <code>provider_code + lane_number</code> (e.g., <code>sportscenter01</code>, <code>pplus03</code>).
 </div>
 
-<div class="card">
-<h2>Get Current Deeplink (Primary Tuning Endpoint)</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/api/adb/lanes/&lt;provider_code&gt;/&lt;lane_number&gt;/deeplink</code>
-</div>
-<p class="description">
-Returns the current deeplink for a specific provider lane. This is the primary endpoint for ADBTuner/Channels DVR to get the stream URL for "what's on now" on a given lane.
-</p>
-<div class="params">
-<div><span class="param-name">provider_code</span>: Provider scheme (sportscenter, pplus, aiv, peacock, max, etc.)</div>
-<div><span class="param-name">lane_number</span>: Lane number (1, 2, 3, ...)</div>
-<div><span class="param-name">format</span> (query): <code>json</code> (default) or <code>text</code></div>
-<div><span class="param-name">deeplink_format</span> (query): <code>scheme</code> (default, for Apple TV) or <code>http</code> (for Android/Fire TV)</div>
-</div>
-<div class="note">
-<div class="note-title">Provider-locked + filter-aware</div>
-<ul style="margin: 8px 0 0 20px; padding: 0;">
-<li><strong>Provider-locked:</strong> a <code>sportscenter</code> lane returns a <code>sportscenter://...</code> (or ESPN HTTP) deeplink, not a different provider’s deeplink for the same event.</li>
-<li><strong>Filter-aware:</strong> if <code>enabled_services</code> is set and does not include the provider, the endpoint returns <code>deeplink=null</code> (JSON) / empty (text) with a message like <code>"Provider sportscenter filtered out"</code>.</li>
-</ul>
-</div>
-<pre># Plain text deeplink (for ADBTuner on Apple TV)
-curl "$BASE/api/adb/lanes/sportscenter/1/deeplink?format=text"
-# Returns: sportscenter://x-callback-url/showWatchStream?playID=...
+<div class="card" style="margin-bottom:14px">
+  <h2>Get Current Deeplink (Primary Tuning Endpoint)</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/adb/lanes/&lt;provider_code&gt;/&lt;lane_number&gt;/deeplink</code></div>
+  <p class="description">Returns the current deeplink for a specific provider lane. This is the primary endpoint for ADBTuner/Channels DVR to get the stream URL for "what's on now" on a given lane.</p>
+  <div class="params">
+    <div><span class="param-name">provider_code</span>: Provider scheme (sportscenter, pplus, aiv, peacock, max, etc.)</div>
+    <div><span class="param-name">lane_number</span>: Lane number (1, 2, 3, …)</div>
+    <div><span class="param-name">format</span> (query): <code>json</code> (default) or <code>text</code></div>
+    <div><span class="param-name">deeplink_format</span> (query): <code>scheme</code> (default) — native app URI (e.g. <code>aiv://</code>, <code>sportscenter://</code>) for Fire TV / Android; <code>http</code> — HTTPS URL for Apple TV / web clients</div>
+  </div>
+  <div class="note">
+    <div class="note-title">Provider-locked + filter-aware</div>
+    <ul style="margin:8px 0 0 20px;padding:0">
+      <li><strong>Provider-locked:</strong> a <code>sportscenter</code> lane returns a <code>sportscenter://…</code> (or ESPN HTTP) deeplink, not a different provider's deeplink for the same event.</li>
+      <li><strong>Filter-aware:</strong> if <code>enabled_services</code> is set and does not include the provider, the endpoint returns <code>deeplink=null</code> (JSON) / empty (text) with a message like <code>"Provider sportscenter filtered out"</code>.</li>
+    </ul>
+  </div>
+  <pre># Fire TV / Android — scheme URL (default)
+curl "$BASE/api/adb/lanes/aiv/1/deeplink?format=text"
+# Returns: aiv://aiv/detail?gti=amzn1.dv.gti.XXX&amp;action=watch&amp;type=live&amp;...
 
-# HTTP format for Android/Fire TV
-curl "$BASE/api/adb/lanes/aiv/2/deeplink?format=text&amp;deeplink_format=http"
+# Apple TV / web — HTTPS URL
+curl "$BASE/api/adb/lanes/aiv/1/deeplink?format=text&amp;deeplink_format=http"
 # Returns: https://app.primevideo.com/detail?gti=amzn1.dv.gti.XXX
 
 # JSON format (for debugging)
 curl "$BASE/api/adb/lanes/sportscenter/1/deeplink?format=json&amp;deeplink_format=http"
 # Returns: {"status": "success", "deeplink": "https://...", "deeplink_format": "http", ...}</pre>
-<div class="note">
-<div class="note-title">🔥 Android/Fire TV Support</div>
-Use <code>deeplink_format=http</code> to get HTTP deeplinks instead of app schemes. This converts:
-<ul style="margin: 8px 0 0 20px; padding: 0;">
-<li><code>aiv://...</code> → <code>https://app.primevideo.com/...</code></li>
-<li><code>sportscenter://...</code> → <code>https://www.espn.com/watch/player/...</code></li>
-<li><code>peacock://...</code> → <code>https://www.peacocktv.com/watch/playback/...</code></li>
-<li><code>cbssportsapp://home/watch/LET-XXX</code> → <code>https://www.cbssports.com/watch/college-basketball/LET-XXX</code> (league-aware)</li>
-</ul>
-Scheme format (default) works for Apple TV. HTTP format required for Android/Fire TV devices.
-<br><br>
-<strong>CBS Sports League Support:</strong> CBS Sports HTTP deeplinks automatically include the correct league path segment (e.g., <code>college-basketball</code>, <code>serie-a</code>, <code>uefa-conference-league</code>) extracted from event metadata to ensure valid URLs.
-</div>
-<div class="note">
-<div class="note-title">📺 ADBTuner Integration</div>
-Configure each provider as a separate Custom Channels source in Channels DVR:
-<ul style="margin: 8px 0 0 20px; padding: 0;">
-<li>M3U URL: <code>http://SERVER:6655/out/adb_lanes_sportscenter.m3u</code></li>
-<li>Each channel in the M3U points to: <code>/api/adb/lanes/sportscenter/&lt;N&gt;/deeplink?format=text</code></li>
-<li>When you tune to a channel, Channels calls this endpoint and gets the current deeplink</li>
-<li>Repeat for each provider: pplus, aiv, peacock, max, etc.</li>
-</ul>
-</div>
+  <div class="note">
+    <div class="note-title">Scheme vs HTTP deeplinks</div>
+    <code>deeplink_format=scheme</code> (default) returns the native app URI scraped from Apple TV's API — works for Fire TV and Android devices where the streaming app handles the URI directly. <code>deeplink_format=http</code> converts to HTTPS — needed for Apple TV Universal Links and web-based clients (CC4C, PrismCast). See the <a href="/adb#device-profiles">Device Profiles</a> section for the full per-service conversion table.<br><br>
+    <strong>CBS Sports:</strong> HTTP deeplinks include the correct league path segment (e.g., <code>serie-a</code>, <code>college-basketball</code>) extracted from event metadata automatically.
+  </div>
+  <div class="note">
+    <div class="note-title">ADBTuner / Channels DVR Integration</div>
+    Use <code>/m3u/adb</code> instead of the raw <code>/out/</code> files — it serves the correct profile and returns a proper 404 if the export hasn't run yet:
+    <ul style="margin:8px 0 0 20px;padding:0">
+      <li>Fire TV / Android: <code>http://SERVER:6655/m3u/adb</code> or <code>?profile=fire</code></li>
+      <li>Apple TV / web: <code>http://SERVER:6655/m3u/adb?profile=apple</code></li>
+      <li>Per-provider: <code>/out/adb_lanes_aiv.m3u</code> (fire) / <code>/out/adb_lanes_aiv_apple.m3u</code> (apple)</li>
+    </ul>
+    Each M3U channel URL points back to <code>/api/adb/lanes/&lt;provider&gt;/&lt;N&gt;/deeplink</code> with the correct <code>deeplink_format</code> already embedded, so the right style is returned automatically at tune time.
+  </div>
 </div>
 
-<div class="card">
-<h2>Provider Lanes Configuration</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/api/provider_lanes</code>
-</div>
-<div class="endpoint-line">
-<span class="tag tag-post">POST</span>
-<code>/api/provider_lanes</code>
-</div>
-<div class="endpoint-line">
-<span class="tag tag-danger">DELETE</span>
-<code>/api/provider_lanes/&lt;provider_code&gt;</code>
-</div>
-<p class="description">
-<strong>Admin cleanup endpoint.</strong> Deletes a saved provider row from <code>provider_lanes</code> and (if present) any associated rows in <code>adb_lanes</code>.
-This is meant for removing stale/retired provider codes (e.g., legacy or experimental providers that are no longer generated).
-</p>
-<div class="params">
-<div><span class="param-name">provider_code</span>: Provider code to remove (example: <code>https</code>, <code>kayo</code>)</div>
-<div><strong>Returns:</strong> <code>{"status":"success","provider_code":"...","deleted":1}</code> or <code>{"status":"not_found",...}</code></div>
-</div>
-<pre># Delete a stale provider row
-curl -X DELETE "$BASE/api/provider_lanes/https" | jq
-
-# Example not found
-curl -X DELETE "$BASE/api/provider_lanes/does_not_exist" | jq</pre>
-<div class="note">
-<div class="note-title">Safety behavior</div>
-This endpoint only deletes the <em>saved config row</em>. If that provider ever appears again in future playables, it can reappear in the provider list the next time provider stats are rebuilt.
-</div>
-<div class="note">
-<div class="note-title">Provider code aliases (migration)</div>
-Some provider codes are considered legacy aliases and are automatically normalized/migrated to a canonical code. Example:
-<ul style="margin: 8px 0 0 20px; padding: 0;">
-  <li><code>kayo</code> → <code>kayo_web</code></li>
-</ul>
-If a legacy row exists in <code>provider_lanes</code>, the server will move its saved settings to the canonical provider code and remove the legacy row.
-</div>
-</div>
-<p class="description">
-View or update per-provider ADB lane configuration. Control which providers are enabled for ADB lanes and how many lanes each gets.
-</p>
-<div class="params">
-<strong>GET returns:</strong> Array of providers with <code>provider_code</code>, <code>adb_enabled</code> (0/1), <code>adb_lane_count</code><br>
-<strong>POST expects:</strong> JSON array or <code>{"providers": [...]}</code> with updated settings
-</div>
-<pre># View current configuration
+<div class="card" style="margin-bottom:14px">
+  <h2>Provider Lanes Configuration</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/provider_lanes</code></div>
+  <div class="endpoint-line"><span class="tag tag-post">POST</span><code>/api/provider_lanes</code></div>
+  <div class="endpoint-line"><span class="tag tag-danger">DELETE</span><code>/api/provider_lanes/&lt;provider_code&gt;</code></div>
+  <p class="description"><strong>Admin cleanup endpoint.</strong> Deletes a saved provider row from <code>provider_lanes</code> and (if present) any associated rows in <code>adb_lanes</code>. This is meant for removing stale/retired provider codes.</p>
+  <div class="params">
+    <div><span class="param-name">provider_code</span>: Provider code to remove (example: <code>https</code>, <code>kayo</code>)</div>
+    <div><strong>Returns:</strong> <code>{"status":"success","provider_code":"…","deleted":1}</code> or <code>{"status":"not_found",…}</code></div>
+  </div>
+  <pre># Delete a stale provider row
+curl -X DELETE "$BASE/api/provider_lanes/https" | jq</pre>
+  <div class="note">
+    <div class="note-title">Safety behavior</div>
+    This endpoint only deletes the <em>saved config row</em>. If that provider ever appears again in future playables, it can reappear in the provider list the next time provider stats are rebuilt.
+  </div>
+  <div class="note">
+    <div class="note-title">Provider code aliases (migration)</div>
+    Some provider codes are considered legacy aliases and are automatically normalized to a canonical code. Example:
+    <ul style="margin:8px 0 0 20px;padding:0">
+      <li><code>kayo</code> → <code>kayo_web</code></li>
+    </ul>
+    If a legacy row exists in <code>provider_lanes</code>, the server will move its saved settings to the canonical provider code and remove the legacy row.
+  </div>
+  <p class="description" style="margin-top:12px">View or update per-provider ADB lane configuration. Control which providers are enabled for ADB lanes and how many lanes each gets.</p>
+  <div class="params">
+    <strong>GET returns:</strong> Array of providers with <code>provider_code</code>, <code>adb_enabled</code> (0/1), <code>adb_lane_count</code><br>
+    <strong>POST expects:</strong> JSON array or <code>{"providers": […]}</code> with updated settings
+  </div>
+  <pre># View current configuration
 curl "$BASE/api/provider_lanes" | jq
 
 # Enable sportscenter with 5 lanes
 curl -X POST "$BASE/api/provider_lanes" \
--H "Content-Type: application/json" \
--d '{
-"providers": [
-{"provider_code": "sportscenter", "adb_enabled": 1, "adb_lane_count": 5},
-{"provider_code": "pplus", "adb_enabled": 1, "adb_lane_count": 3}
-]
+  -H "Content-Type: application/json" \
+  -d '{
+  "providers": [
+    {"provider_code": "sportscenter", "adb_enabled": 1, "adb_lane_count": 5},
+    {"provider_code": "pplus",        "adb_enabled": 1, "adb_lane_count": 3}
+  ]
 }'</pre>
-<div class="note">
-<div class="note-title"> Configuration Tip</div>
-Set <code>adb_lane_count</code> based on how many concurrent events you typically have per provider. More lanes = better handling of overlapping events, but more channels in your EPG.
-</div>
+  <div class="note">
+    <div class="note-title">Configuration Tip</div>
+    Set <code>adb_lane_count</code> based on how many concurrent events you typically have per provider. More lanes = better handling of overlapping events, but more channels in your EPG.
+  </div>
 </div>
 
 <!-- VIRTUAL LANES -->
 <h2 class="section-header" id="lanes">Virtual Lanes (Multi-Source Channels)</h2>
 
 <div class="note">
-<div class="note-title"> What are Virtual Lanes?</div>
-Virtual lanes are multi-source channels that automatically schedule events across fixed channels (like a TV network). Events are assigned to lanes to minimize conflicts, with placeholder blocks filling gaps. Unlike ADB lanes (grouped by provider), virtual lanes mix all providers.
+  <div class="note-title">What are Virtual Lanes?</div>
+  Virtual lanes are multi-source channels that automatically schedule events across fixed channels (like a TV network). Events are assigned to lanes to minimize conflicts, with placeholder blocks filling gaps. Unlike ADB lanes (grouped by provider), virtual lanes mix all providers.
 </div>
 
-<div class="card">
-<h2>List All Lanes</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/api/lanes</code>
-</div>
-<p class="description">List all virtual lanes with event counts and current programming.</p>
-<pre>curl "$BASE/api/lanes" | jq</pre>
+<div class="card" style="margin-bottom:14px">
+  <h2>List All Lanes</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/lanes</code></div>
+  <p class="description">List all virtual lanes with event counts and current programming.</p>
+  <pre>curl "$BASE/api/lanes" | jq</pre>
 </div>
 
-<div class="card">
-<h2>Lane Schedule</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/api/lanes/&lt;lane_id&gt;/schedule</code>
-</div>
-<p class="description">Get current and upcoming 10 events for a specific lane.</p>
-<pre>curl "$BASE/api/lanes/1/schedule" | jq</pre>
+<div class="card" style="margin-bottom:14px">
+  <h2>Lane Schedule</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/lanes/&lt;lane_id&gt;/schedule</code></div>
+  <p class="description">Get current and upcoming 10 events for a specific lane.</p>
+  <pre>curl "$BASE/api/lanes/1/schedule" | jq</pre>
 </div>
 
-<div class="card">
-<h2>What's On (Single Lane)</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/whatson/&lt;lane_id&gt;</code>
-</div>
-<p class="description">Get what's currently playing on a specific virtual lane.</p>
-<div class="params">
-<div><span class="param-name">include</span>: Add <code>?include=deeplink</code> to include deeplink fields</div>
-<div><span class="param-name">deeplink_format</span>: <code>scheme</code> (default, for Apple TV) or <code>http</code> (for Android/Fire TV)</div>
-<div><span class="param-name">format</span>: <code>json</code> (default) or <code>txt</code></div>
-<div><span class="param-name">param</span>: For txt format, choose <code>event_uid</code>, <code>deeplink_url</code>, or <code>deeplink_url_full</code></div>
-</div>
-<pre># JSON with deeplink (default scheme format)
+<div class="card" style="margin-bottom:14px">
+  <h2>What's On (Single Lane)</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/whatson/&lt;lane_id&gt;</code></div>
+  <p class="description">Get what's currently playing on a specific virtual lane.</p>
+  <div class="params">
+    <div><span class="param-name">include</span>: Add <code>?include=deeplink</code> to include deeplink fields</div>
+    <div><span class="param-name">deeplink_format</span>: <code>scheme</code> (default) or <code>http</code></div>
+    <div><span class="param-name">format</span>: <code>json</code> (default) or <code>txt</code></div>
+    <div><span class="param-name">param</span>: For txt format, choose <code>event_uid</code>, <code>deeplink_url</code>, or <code>deeplink_url_full</code></div>
+  </div>
+  <pre># JSON with deeplink (default scheme format)
 curl "$BASE/whatson/1?include=deeplink" | jq
 
 # JSON with HTTP deeplink (for Android/Fire TV)
@@ -445,46 +233,37 @@ curl "$BASE/whatson/1?format=txt&amp;param=deeplink_url"
 curl "$BASE/whatson/1?format=txt&amp;param=deeplink_url&amp;deeplink_format=http"</pre>
 </div>
 
-<div class="card">
-<h2>What's On (All Lanes)</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/whatson/all</code>
-</div>
-<p class="description">Get current status across all virtual lanes at once.</p>
-<pre># All lanes with deeplinks
+<div class="card" style="margin-bottom:14px">
+  <h2>What's On (All Lanes)</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/whatson/all</code></div>
+  <p class="description">Get current status across all virtual lanes at once.</p>
+  <pre># All lanes with deeplinks
 curl "$BASE/whatson/all?include=deeplink" | jq
 
 # Specific timestamp
 curl "$BASE/whatson/all?at=2025-12-09T20:00:00" | jq</pre>
 </div>
 
-
 <!-- CHROME CAPTURE -->
 <h2 class="section-header" id="chromecapture">Chrome Capture (Redirect Tuning)</h2>
 
 <div class="note">
-<div class="note-title">What is Chrome Capture?</div>
-Chrome Capture is an optional companion service (CC_SERVER/CC_PORT) that opens a URL in a controlled Chrome instance.
-FruitDeepLinks can generate a dedicated Chrome playlist (<code>multisource_lanes_chrome.m3u</code>) where each channel points to Chrome Capture,
-which then fetches a FruitDeepLinks endpoint that <strong>302-redirects</strong> to the final provider URL (ESPN/Prime Video/Paramount+, etc.).
+  <div class="note-title">What is Chrome Capture?</div>
+  Chrome Capture is an optional companion service (CC_SERVER/CC_PORT) that opens a URL in a controlled Chrome instance.
+  FruitDeepLinks can generate a dedicated Chrome playlist (<code>multisource_lanes_chrome.m3u</code>) where each channel points to Chrome Capture,
+  which then fetches a FruitDeepLinks endpoint that <strong>302-redirects</strong> to the final provider URL.
 </div>
 
-<div class="card">
-<h2>Lane Deeplink (Virtual Lanes)</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/api/lane/&lt;lane_number&gt;/deeplink</code>
-</div>
-<p class="description">
-Returns the current best deeplink for a virtual lane. Use this for debugging, UI links, or when you want the deeplink value directly.
-</p>
-<div class="params">
-<div><span class="param-name">lane_number</span>: Lane number (1, 2, 3, ...)</div>
-<div><span class="param-name">format</span> (query): <code>json</code>, <code>txt</code>, or <code>html</code> (default: <code>json</code>)</div>
-<div><span class="param-name">deeplink_format</span> (query): <code>http</code> or <code>scheme</code> (default: <code>http</code> for this endpoint)</div>
-</div>
-<pre># Plain text URL (HTTP format)
+<div class="card" style="margin-bottom:14px">
+  <h2>Lane Deeplink (Virtual Lanes)</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/lane/&lt;lane_number&gt;/deeplink</code></div>
+  <p class="description">Returns the current best deeplink for a virtual lane. Use this for debugging, UI links, or when you want the deeplink value directly.</p>
+  <div class="params">
+    <div><span class="param-name">lane_number</span>: Lane number (1, 2, 3, …)</div>
+    <div><span class="param-name">format</span> (query): <code>json</code>, <code>txt</code>, or <code>html</code> (default: <code>json</code>)</div>
+    <div><span class="param-name">deeplink_format</span> (query): <code>http</code> or <code>scheme</code> (default: <code>http</code> for this endpoint)</div>
+  </div>
+  <pre># Plain text URL (HTTP format)
 curl "$BASE/api/lane/2/deeplink?format=txt&amp;deeplink_format=http"
 
 # JSON
@@ -494,22 +273,16 @@ curl "$BASE/api/lane/2/deeplink?format=json&amp;deeplink_format=http" | jq
 curl "$BASE/api/lane/2/deeplink?format=html&amp;deeplink_format=http"</pre>
 </div>
 
-<div class="card">
-<h2>Lane Launch (HTTP Redirect)</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/api/lane/&lt;lane_number&gt;/launch</code>
-</div>
-<p class="description">
-Redirect tuning endpoint. Returns <strong>302 Found</strong> with a <code>Location:</code> header set to the resolved provider URL.
-This is the recommended endpoint for Chrome Capture because Chrome follows redirects automatically.
-</p>
-<div class="params">
-<div><span class="param-name">lane_number</span>: Lane number (1, 2, 3, ...)</div>
-<div><span class="param-name">deeplink_format</span> (query): <code>http</code> (recommended) or <code>scheme</code></div>
-<div><span class="param-name">allow_fallback</span> (query): <code>1</code> to allow redirecting even if the lane is in fallback content (default: strict)</div>
-</div>
-<pre># Returns 302 + Location: https://...
+<div class="card" style="margin-bottom:14px">
+  <h2>Lane Launch (HTTP Redirect)</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/lane/&lt;lane_number&gt;/launch</code></div>
+  <p class="description">Redirect tuning endpoint. Returns <strong>302 Found</strong> with a <code>Location:</code> header set to the resolved provider URL. This is the recommended endpoint for Chrome Capture because Chrome follows redirects automatically.</p>
+  <div class="params">
+    <div><span class="param-name">lane_number</span>: Lane number (1, 2, 3, …)</div>
+    <div><span class="param-name">deeplink_format</span> (query): <code>http</code> (recommended) or <code>scheme</code></div>
+    <div><span class="param-name">allow_fallback</span> (query): <code>1</code> to allow redirecting even if the lane is in fallback content (default: strict)</div>
+  </div>
+  <pre># Returns 302 + Location: https://...
 curl -i "$BASE/api/lane/2/launch?deeplink_format=http"
 
 # Strict mode (default): if lane has no real scheduled event, returns 404 with empty body
@@ -517,46 +290,37 @@ curl -i "$BASE/api/lane/999/launch?deeplink_format=http"
 
 # Allow fallback redirect (debug/testing)
 curl -i "$BASE/api/lane/4/launch?deeplink_format=http&amp;allow_fallback=1"</pre>
-<div class="note">
-<div class="note-title">Redirect notes</div>
-This endpoint only redirects to <code>http://</code> or <code>https://</code> URLs and sets <code>Cache-Control: no-store</code>
-to prevent stale redirects.
-</div>
+  <div class="note">
+    <div class="note-title">Redirect notes</div>
+    This endpoint only redirects to <code>http://</code> or <code>https://</code> URLs and sets <code>Cache-Control: no-store</code> to prevent stale redirects.
+  </div>
 </div>
 
-<div class="card">
-<h2>Chrome Capture Playlist Output</h2>
-<p class="description">
-When <code>CC_SERVER</code> and <code>CC_PORT</code> are configured, FruitDeepLinks writes a Chrome-friendly playlist:
-</p>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/out/multisource_lanes_chrome.m3u</code>
-</div>
-<div class="params">
-<div><span class="param-name">CC_SERVER</span>: Host/IP where Chrome Capture is running</div>
-<div><span class="param-name">CC_PORT</span>: Port where Chrome Capture listens (e.g. <code>5589</code>)</div>
-</div>
-<pre># Example chrome:// entry generated in the playlist:
+<div class="card" style="margin-bottom:14px">
+  <h2>Chrome Capture Playlist Output</h2>
+  <p class="description">When <code>CC_SERVER</code> and <code>CC_PORT</code> are configured, FruitDeepLinks writes a Chrome-friendly playlist:</p>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/out/multisource_lanes_chrome.m3u</code></div>
+  <div class="params">
+    <div><span class="param-name">CC_SERVER</span>: Host/IP where Chrome Capture is running</div>
+    <div><span class="param-name">CC_PORT</span>: Port where Chrome Capture listens (e.g. <code>5589</code>)</div>
+  </div>
+  <pre># Example chrome:// entry generated in the playlist:
 chrome://CC_SERVER:CC_PORT/stream?url=http%3A%2F%2FYOUR_FRUIT_SERVER%2Fapi%2Flane%2F1%2Flaunch%3Fdeeplink_format%3Dhttp</pre>
 </div>
 
 <!-- CDVR DETECTOR -->
 <h2 class="section-header" id="detector">CDVR Detector (Auto-Launch)</h2>
 
-<div class="card">
-<h2>Lane HLS Stream</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/lane/&lt;lane_number&gt;/stream.m3u8</code>
-</div>
-<p class="description">Serves HLS video stream for CDVR virtual lanes. Automatically triggers deeplink detection in background when a client tunes in.</p>
-<div class="params">
-<div><span class="param-name">Platform Detection</span>: Auto-detects tvOS/Fire TV/Android TV and uses appropriate deeplink format</div>
-<div><span class="param-name">Cooldown</span>: 5-minute cooldown per lane (configurable via LANE_COOLDOWN_MINUTES)</div>
-<div><span class="param-name">Requires</span>: CDVR_DVR_PATH environment variable must be set to enable detector</div>
-</div>
-<pre># M3U entry points to this endpoint
+<div class="card" style="margin-bottom:14px">
+  <h2>Lane HLS Stream</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/lane/&lt;lane_number&gt;/stream.m3u8</code></div>
+  <p class="description">Serves HLS video stream for CDVR virtual lanes. Automatically triggers deeplink detection in background when a client tunes in.</p>
+  <div class="params">
+    <div><span class="param-name">Platform Detection</span>: Auto-detects tvOS/Fire TV/Android TV and uses appropriate deeplink format</div>
+    <div><span class="param-name">Cooldown</span>: 5-minute cooldown per lane (configurable via LANE_COOLDOWN_MINUTES)</div>
+    <div><span class="param-name">Requires</span>: CDVR_DVR_PATH environment variable must be set to enable detector</div>
+  </div>
+  <pre># M3U entry points to this endpoint
 #EXTINF:-1 tvg-id="lane.1" channel-number="9000",Fruit Lane 1
 http://your-ip:6655/lane/1/stream.m3u8
 
@@ -564,10 +328,10 @@ http://your-ip:6655/lane/1/stream.m3u8
 curl "$BASE/lane/1/stream.m3u8"</pre>
 </div>
 
-<div class="card">
-<h2>Detector Status</h2>
-<p class="description">Check detector logs in real-time:</p>
-<pre># Watch detector activity
+<div class="card" style="margin-bottom:14px">
+  <h2>Detector Status</h2>
+  <p class="description">Check detector logs in real-time:</p>
+  <pre># Watch detector activity
 docker logs -f fruitdeeplinks | grep DETECTOR
 
 # Common log patterns:
@@ -580,255 +344,193 @@ docker logs -f fruitdeeplinks | grep DETECTOR
 <!-- FILTERS -->
 <h2 class="section-header" id="filters">Content Filtering</h2>
 
-<div class="card">
-<h2>Available Filters</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/api/filters</code>
-</div>
-<p class="description">Get all available streaming services, sports, and leagues with event counts, plus current user preferences.</p>
-<pre>curl "$BASE/api/filters" | jq</pre>
+<div class="card" style="margin-bottom:14px">
+  <h2>Available Filters</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/filters</code></div>
+  <p class="description">Get all available streaming services, sports, and leagues with event counts, plus current user preferences.</p>
+  <pre>curl "$BASE/api/filters" | jq</pre>
 </div>
 
-<div class="card">
-<h2>User Filter Preferences</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/api/filters/preferences</code>
-</div>
-<div class="endpoint-line">
-<span class="tag tag-post">POST</span>
-<code>/api/filters/preferences</code>
-</div>
-<p class="description">View or update content filtering preferences. Control which services, sports, and leagues appear in generated playlists.
-<br/><span class="muted">Tip: use exact names from <code>/api/filters</code> (apostrophes/spaces matter).</span></p>
-<div class="params">
-<div><span class="param-name">enabled_services</span>: Array of service codes to include (empty = all enabled)</div>
-<div><span class="param-name">disabled_sports</span>: Array of sports to exclude</div>
-<div><span class="param-name">disabled_leagues</span>: Array of leagues to exclude</div>
-</div>
-<pre># View current preferences
+<div class="card" style="margin-bottom:14px">
+  <h2>User Filter Preferences</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/filters/preferences</code></div>
+  <div class="endpoint-line"><span class="tag tag-post">POST</span><code>/api/filters/preferences</code></div>
+  <p class="description">View or update content filtering preferences. Control which services, sports, and leagues appear in generated playlists.<br>Tip: use exact names from <code>/api/filters</code> (apostrophes/spaces matter).</p>
+  <div class="params">
+    <div><span class="param-name">enabled_services</span>: Array of service codes to include (empty = all enabled)</div>
+    <div><span class="param-name">disabled_sports</span>: Array of sports to exclude</div>
+    <div><span class="param-name">disabled_leagues</span>: Array of leagues to exclude</div>
+  </div>
+  <pre># View current preferences
 curl "$BASE/api/filters/preferences" | jq
 
 # Update - enable only ESPN and Peacock (Web)
 curl -X POST "$BASE/api/filters/preferences" \
--H "Content-Type: application/json" \
--d '{
-"enabled_services": ["sportscenter", "peacock_web"],
-"disabled_sports": ["Cricket"],
-"disabled_leagues": ["WNBA"]
+  -H "Content-Type: application/json" \
+  -d '{
+  "enabled_services": ["sportscenter", "peacock_web"],
+  "disabled_sports":  ["Cricket"],
+  "disabled_leagues": ["WNBA"]
 }'</pre>
 </div>
 
-<div class="card">
-<h2>Apply Filters</h2>
-<div class="endpoint-line">
-<span class="tag tag-post">POST</span>
-<code>/api/apply-filters</code>
+<div class="card" style="margin-bottom:14px">
+  <h2>Apply Filters</h2>
+  <div class="endpoint-line"><span class="tag tag-post">POST</span><code>/api/apply-filters</code></div>
+  <p class="description">Regenerate exports with current filter settings (skips scraping; rebuilds multisource lanes and ADB provider lanes, then exports).</p>
+  <pre>curl -X POST "$BASE/api/apply-filters"</pre>
+  <div class="note">
+    <div class="note-title">What gets rebuilt?</div>
+    <ul style="margin:8px 0 0 20px;padding:0">
+      <li>Multisource virtual lanes (<code>/xmltv/lanes</code>, <code>/m3u/lanes</code>)</li>
+      <li>ADB provider lanes (<code>/out/adb_lanes_&lt;provider&gt;.m3u</code>) and the <code>adb_lanes</code> table</li>
+    </ul>
+    <div style="margin-top:8px">This endpoint returns <code>started</code> immediately. Watch logs for <code>Filters applied successfully!</code> to know it finished.</div>
+  </div>
+  <div class="note">
+    <div class="note-title">Quick Apply</div>
+    Use this after changing filter preferences to immediately regenerate playlists without waiting for a full refresh (~10 seconds vs. ~5 minutes).
+  </div>
 </div>
-<p class="description">Regenerate exports with current filter settings (skips scraping; rebuilds multisource lanes and ADB provider lanes, then exports).</p>
-<pre>curl -X POST "$BASE/api/apply-filters"</pre>
-<div class="note">
-<div class="note-title">What gets rebuilt?</div>
-<ul style="margin: 8px 0 0 20px; padding: 0;">
-<li>Multisource virtual lanes (<code>/xmltv/lanes</code>, <code>/m3u/lanes</code>)</li>
-<li>ADB provider lanes (<code>/out/adb_lanes_&lt;provider&gt;.m3u</code>) and the <code>adb_lanes</code> table</li>
-</ul>
-<div style="margin-top:8px;">This endpoint returns <code>started</code> immediately. Watch logs for <code>Filters applied successfully!</code> to know it finished.</div>
-</div>
-<div class="note">
-<div class="note-title"> Quick Apply</div>
-Use this after changing filter preferences to immediately regenerate playlists without waiting for a full refresh (~10 seconds vs. ~5 minutes).
-</div>
-</div>
-
 
 <!-- EVENT INSPECTOR -->
 <h2 class="section-header" id="events">Event Inspector (Events & Playables Debug)</h2>
 
 <div class="note">
-<div class="note-title">What is Event Inspector?</div>
-These endpoints power the <code>/events</code> admin page and provide read-only access to the raw event row plus all related playables.
-Use them to search the DB, inspect raw JSON columns, and debug service selection / deeplink fallbacks.
+  <div class="note-title">What is Event Inspector?</div>
+  These endpoints power the <code>/events</code> admin page and provide read-only access to the raw event row plus all related playables.
+  Use them to search the DB, inspect raw JSON columns, and debug service selection / deeplink fallbacks.
 </div>
 
-<div class="card">
-<h2>List Events (Search / Filters / Paging)</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/api/events</code>
-</div>
-<p class="description">
-Returns a paginated list of events with summary fields (title, times, providers, playables count).
-Supports search + common admin filters.
-</p>
-<div class="params">
-<div><span class="param-name">q</span> (query): Search text (matches id, pvid, slug, title, synopsis)</div>
-<div><span class="param-name">live</span> (query): <code>1</code> to restrict to events live right now</div>
-<div><span class="param-name">has_playables</span> (query): <code>1</code> to restrict to events with at least one playable</div>
-<div><span class="param-name">provider</span> (query): Restrict to events having at least one playable with this provider</div>
-<div><span class="param-name">days_back</span> / <span class="param-name">days_forward</span> (query): Time window filter around now (defaults are set in UI)</div>
-<div><span class="param-name">sort</span> (query): <code>start_desc</code> (default), <code>start_asc</code>, <code>seen_desc</code></div>
-<div><span class="param-name">page</span> / <span class="param-name">page_size</span> (query): Paging controls</div>
-</div>
-<pre># Search by title
+<div class="card" style="margin-bottom:14px">
+  <h2>List Events (Search / Filters / Paging)</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/events</code></div>
+  <p class="description">Returns a paginated list of events with summary fields (title, times, providers, playables count). Supports search + common admin filters.</p>
+  <div class="params">
+    <div><span class="param-name">q</span>: Search text (matches id, pvid, slug, title, synopsis)</div>
+    <div><span class="param-name">live</span>: <code>1</code> to restrict to events live right now</div>
+    <div><span class="param-name">has_playables</span>: <code>1</code> to restrict to events with at least one playable</div>
+    <div><span class="param-name">provider</span>: Restrict to events having at least one playable with this provider</div>
+    <div><span class="param-name">days_back</span> / <span class="param-name">days_forward</span>: Time window filter around now</div>
+    <div><span class="param-name">sort</span>: <code>start_desc</code> (default), <code>start_asc</code>, <code>seen_desc</code></div>
+    <div><span class="param-name">page</span> / <span class="param-name">page_size</span>: Paging controls</div>
+  </div>
+  <pre># Search by title
 curl "$BASE/api/events?q=Kings"
 
 # Live now with playables
 curl "$BASE/api/events?live=1&amp;has_playables=1"
 
-# Filter to provider (example: sportscenter)
+# Filter to provider
 curl "$BASE/api/events?provider=sportscenter&amp;days_forward=14" | jq</pre>
 </div>
 
-<div class="card">
-<h2>Event Detail (Raw Event + All Playables)</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/api/events/&lt;event_id&gt;</code>
-</div>
-<p class="description">
-Returns the full event row (all DB columns) plus an array of all playables for that event.
-This is the fastest way to inspect raw JSON fields like <code>raw_attributes_json</code> and see every playable/deeplink.
-</p>
-<pre># Dump one event
+<div class="card" style="margin-bottom:14px">
+  <h2>Event Detail (Raw Event + All Playables)</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/events/&lt;event_id&gt;</code></div>
+  <p class="description">Returns the full event row (all DB columns) plus an array of all playables for that event. This is the fastest way to inspect raw JSON columns and see every playable/deeplink.</p>
+  <pre># Dump one event
 curl "$BASE/api/events/appletv-umc.cse.12345" | jq
 
 # Quick look at just playables
 curl "$BASE/api/events/appletv-umc.cse.12345" | jq '.playables[] | {provider, service_name, priority, deeplink_play, http_deeplink_url}'</pre>
 </div>
 
-<div class="card">
-<h2>Event Inspector Stats (Badges / Counts)</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/api/events/stats</code>
-</div>
-<p class="description">
-Returns quick counts used by the Event Inspector UI (e.g., live now, in window, multi-service, missing HTTP fallback).
-</p>
-<pre>curl "$BASE/api/events/stats" | jq</pre>
+<div class="card" style="margin-bottom:14px">
+  <h2>Event Inspector Stats (Badges / Counts)</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/events/stats</code></div>
+  <p class="description">Returns quick counts used by the Event Inspector UI (e.g., live now, in window, multi-service, missing HTTP fallback).</p>
+  <pre>curl "$BASE/api/events/stats" | jq</pre>
 </div>
 
-<div class="card">
-<h2>Admin Pages (HTML)</h2>
-<p class="description">Human-friendly pages that use the endpoints above.</p>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/events</code> Search + browse events
-</div>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/events/&lt;event_id&gt;</code> Full drill-down detail page
-</div>
+<div class="card" style="margin-bottom:14px">
+  <h2>Admin Pages (HTML)</h2>
+  <p class="description">Human-friendly pages that use the endpoints above.</p>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/events</code> Search + browse events</div>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/events/&lt;event_id&gt;</code> Full drill-down detail page</div>
 </div>
 
 <!-- REFRESH & ADMIN -->
 <h2 class="section-header" id="refresh">Refresh & Admin</h2>
 
-<div class="card">
-<h2>Trigger Manual Refresh</h2>
-<div class="endpoint-line">
-<span class="tag tag-post">POST</span>
-<code>/api/refresh</code>
-</div>
-<p class="description">Start a manual refresh of the entire pipeline (scrape import build export).</p>
-<div class="params">
-<div><span class="param-name">skip_scrape</span>: Boolean, set to <code>true</code> to skip scraping and reuse existing data</div>
-</div>
-<pre># Full refresh
-curl -X POST "$BASE/api/refresh" \
--H "Content-Type: application/json"
+<div class="card" style="margin-bottom:14px">
+  <h2>Trigger Manual Refresh</h2>
+  <div class="endpoint-line"><span class="tag tag-post">POST</span><code>/api/refresh</code></div>
+  <p class="description">Start a manual refresh of the entire pipeline (scrape → import → build → export).</p>
+  <div class="params">
+    <div><span class="param-name">skip_scrape</span>: Boolean, set to <code>true</code> to skip scraping and reuse existing data</div>
+  </div>
+  <pre># Full refresh
+curl -X POST "$BASE/api/refresh" -H "Content-Type: application/json"
 
 # Skip scraping (faster, reuses data)
-curl -X POST "$BASE/api/refresh" \
--H "Content-Type: application/json" \
--d '{"skip_scrape": true}'</pre>
+curl -X POST "$BASE/api/refresh" -H "Content-Type: application/json" -d '{"skip_scrape": true}'</pre>
 </div>
 
-<div class="card">
-<h2>Auto-Refresh Settings</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/api/auto-refresh</code>
-</div>
-<div class="endpoint-line">
-<span class="tag tag-post">POST</span>
-<code>/api/auto-refresh</code>
-</div>
-<p class="description">View or update daily auto-refresh schedule.</p>
-<div class="params">
-<div><span class="param-name">enabled</span>: Boolean, enable/disable auto-refresh</div>
-<div><span class="param-name">time</span>: String in <code>HH:MM</code> format (24-hour, local time)</div>
-</div>
-<pre># View current schedule
+<div class="card" style="margin-bottom:14px">
+  <h2>Auto-Refresh Settings</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/auto-refresh</code></div>
+  <div class="endpoint-line"><span class="tag tag-post">POST</span><code>/api/auto-refresh</code></div>
+  <p class="description">View or update daily auto-refresh schedule.</p>
+  <div class="params">
+    <div><span class="param-name">enabled</span>: Boolean, enable/disable auto-refresh</div>
+    <div><span class="param-name">time</span>: String in <code>HH:MM</code> format (24-hour, local time)</div>
+  </div>
+  <pre># View current schedule
 curl "$BASE/api/auto-refresh" | jq
 
 # Enable daily refresh at 2:30 AM
 curl -X POST "$BASE/api/auto-refresh" \
--H "Content-Type: application/json" \
--d '{"enabled": true, "time": "02:30"}'</pre>
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "time": "02:30"}'</pre>
 </div>
 
-<div class="card">
-<h2>Logs</h2>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/api/logs</code>
-</div>
-<div class="endpoint-line">
-<span class="tag tag-get">GET</span>
-<code>/api/logs/stream</code>
-</div>
-<p class="description">View recent logs or stream real-time logs via Server-Sent Events.</p>
-<div class="params">
-<div><span class="param-name">count</span>: Number of recent log lines to return (default: 100, max: 1000)</div>
-</div>
-<pre># Get last 100 logs
+<div class="card" style="margin-bottom:14px">
+  <h2>Logs</h2>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/logs</code></div>
+  <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/logs/stream</code></div>
+  <p class="description">View recent logs or stream real-time logs via Server-Sent Events.</p>
+  <div class="params">
+    <div><span class="param-name">count</span>: Number of recent log lines to return (default: 100, max: 1000)</div>
+  </div>
+  <pre># Get last 100 logs
 curl "$BASE/api/logs?count=100"
 
 # Stream live logs (SSE)
 curl -N "$BASE/api/logs/stream"</pre>
 </div>
 
-<div class="card danger-card">
-<h2>⚠️ Wipe Event Data (ADVANCED - DESTRUCTIVE)</h2>
-<div class="endpoint-line">
-<span class="tag tag-danger">POST</span>
-<code>/api/wipe-event-data</code>
-</div>
-<p class="description">
-<strong style="color: #ef4444;">DANGER:</strong> Permanently deletes all event data while preserving settings and filters. 
-This operation cannot be undone. Use with extreme caution.
-</p>
-<div class="note" style="background: #450a0a; border-color: #dc2626;">
-<div class="note-title" style="color: #fca5a5;">⚠️ What Gets DELETED</div>
-<ul style="margin: 8px 0 0 20px; padding: 0; color: #fecaca;">
-<li>All events, playables, event_images (main event data)</li>
-<li>All lanes, lane_events, adb_lanes (virtual channel schedules)</li>
-<li>Amazon scraped channels and history</li>
-<li>Amazon GTI cache file (amazon_gti_cache.pkl)</li>
-<li>Apple TV events cache (apple_events.db)</li>
-<li>ESPN graph cache (espn_graph.db)</li>
-</ul>
-</div>
-<div class="note" style="background: #064e3b; border-color: #10b981;">
-<div class="note-title" style="color: #6ee7b7;">✅ What Gets PRESERVED</div>
-<ul style="margin: 8px 0 0 20px; padding: 0; color: #a7f3d0;">
-<li>User filter preferences (enabled_services, disabled_sports, disabled_leagues)</li>
-<li>ADB provider configuration (provider_lanes table)</li>
-<li>Amazon service definitions (amazon_services table)</li>
-<li>Manual playable overrides (amazon_playable_overrides table)</li>
-</ul>
-</div>
-<div class="params">
-<div><strong>Returns:</strong> Immediate response with statistics on deleted records</div>
-<div><strong>Execution:</strong> Runs in background thread, watch logs for progress</div>
-<div><strong>Protection:</strong> Returns 409 error if refresh is already running</div>
-</div>
-<pre># Wipe all event data (use with EXTREME caution)
-curl -X POST "$BASE/api/wipe-event-data" \
--H "Content-Type: application/json"
+<div class="card danger-card" style="margin-bottom:14px">
+  <h2>Wipe Event Data (DESTRUCTIVE)</h2>
+  <div class="endpoint-line"><span class="tag tag-danger">POST</span><code>/api/wipe-event-data</code></div>
+  <p class="description"><strong style="color:#ef4444">DANGER:</strong> Permanently deletes all event data while preserving settings and filters. This operation cannot be undone.</p>
+  <div class="note" style="background:#450a0a;border-color:#dc2626">
+    <div class="note-title" style="color:#fca5a5">What Gets DELETED</div>
+    <ul style="margin:8px 0 0 20px;padding:0;color:#fecaca">
+      <li>All events, playables, event_images (main event data)</li>
+      <li>All lanes, lane_events, adb_lanes (virtual channel schedules)</li>
+      <li>Amazon scraped channels and history</li>
+      <li>Amazon GTI cache file (amazon_gti_cache.pkl)</li>
+      <li>Apple TV events cache (apple_events.db)</li>
+      <li>ESPN graph cache (espn_graph.db)</li>
+    </ul>
+  </div>
+  <div class="note" style="background:#064e3b;border-color:#10b981">
+    <div class="note-title" style="color:#6ee7b7">What Gets PRESERVED</div>
+    <ul style="margin:8px 0 0 20px;padding:0;color:#a7f3d0">
+      <li>User filter preferences (enabled_services, disabled_sports, disabled_leagues)</li>
+      <li>ADB provider configuration (provider_lanes table)</li>
+      <li>Amazon service definitions (amazon_services table)</li>
+      <li>Manual playable overrides (amazon_playable_overrides table)</li>
+    </ul>
+  </div>
+  <div class="params">
+    <div><strong>Returns:</strong> Immediate response with statistics on deleted records</div>
+    <div><strong>Execution:</strong> Runs in background thread, watch logs for progress</div>
+    <div><strong>Protection:</strong> Returns 409 error if refresh is already running</div>
+  </div>
+  <pre># Wipe all event data (use with EXTREME caution)
+curl -X POST "$BASE/api/wipe-event-data" -H "Content-Type: application/json"
 
 # Example response:
 # {
@@ -838,36 +540,28 @@ curl -X POST "$BASE/api/wipe-event-data" \
 #   "lanes_deleted": 100,
 #   "errors": []
 # }</pre>
-<div class="note">
-<div class="note-title">🔄 Post-Wipe Workflow</div>
-After wiping, run a full refresh to repopulate data:
-<pre style="margin-top: 8px;"># Repopulate after wipe
-curl -X POST "$BASE/api/refresh" \
--H "Content-Type: application/json"</pre>
-Your filter settings will be automatically applied to the new data.
-</div>
-<div class="note" style="background: #422006; border-color: #f59e0b;">
-<div class="note-title" style="color: #fcd34d;">💡 When to Use This</div>
-<ul style="margin: 8px 0 0 20px; padding: 0; color: #fde68a;">
-<li>Database corruption or inconsistent state</li>
-<li>Testing scraper changes from a clean slate</li>
-<li>Major schema migrations requiring fresh data</li>
-<li>Debugging lane building logic issues</li>
-</ul>
-<div style="margin-top: 8px; color: #fed7aa;">
-<strong>DO NOT</strong> use this for routine maintenance. The daily refresh already handles stale data cleanup.
-</div>
-</div>
+  <div class="note">
+    <div class="note-title">Post-Wipe Workflow</div>
+    After wiping, run a full refresh to repopulate data:
+    <pre style="margin-top:8px">curl -X POST "$BASE/api/refresh" -H "Content-Type: application/json"</pre>
+    Your filter settings will be automatically applied to the new data.
+  </div>
+  <div class="note" style="background:#422006;border-color:#f59e0b">
+    <div class="note-title" style="color:#fcd34d">When to Use This</div>
+    <ul style="margin:8px 0 0 20px;padding:0;color:#fde68a">
+      <li>Database corruption or inconsistent state</li>
+      <li>Testing scraper changes from a clean slate</li>
+      <li>Major schema migrations requiring fresh data</li>
+      <li>Debugging lane building logic issues</li>
+    </ul>
+    <div style="margin-top:8px;color:#fed7aa"><strong>DO NOT</strong> use this for routine maintenance. The daily refresh already handles stale data cleanup.</div>
+  </div>
 </div>
 
-<div style="margin-top: 40px; padding: 20px; background: #0f172a; border-radius: 8px; border: 1px solid #1e293b;">
-<p style="color: #94a3b8; font-size: 13px; margin: 0;">
-<strong style="color: #60a5fa;"> Quick Start Tip:</strong> 
-Set <code>BASE=http://YOUR_SERVER:6655</code> as an environment variable to use these curl examples directly.
-For ADBTuner integration, use the per-provider M3U files (<code>/out/adb_lanes_&lt;provider&gt;.m3u</code>) 
-and the deeplink endpoint will handle "what's on now" automatically.
-</p>
+<div class="tip-box">
+  <strong style="color:#60a5fa">Quick Start Tip:</strong>
+  Set <code>BASE=http://YOUR_SERVER:6655</code> as an environment variable to use these curl examples directly.
+  For ADBTuner integration, use the per-provider M3U files (<code>/out/adb_lanes_&lt;provider&gt;.m3u</code>)
+  and the deeplink endpoint will handle "what's on now" automatically.
 </div>
-</div>
-</body>
-</html>
+{% endblock %}

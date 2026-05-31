@@ -370,17 +370,37 @@ def _get_enabled_services_from_db(db_path: Path) -> list:
         return []
 
 
+def _get_scraper_setting_from_db(env_var: str):
+    """Return the DB-stored bool for a scraper toggle, or None if not set."""
+    key = f"setting:{env_var.lower()}"
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=5)
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM user_preferences WHERE key = ?", (key,))
+        row = cur.fetchone()
+        conn.close()
+        if row and row[0] is not None:
+            return bool(json.loads(row[0]))
+    except Exception:
+        pass
+    return None
+
+
 def _scraper_enabled(env_var: str, logical_services: list, enabled_services: list) -> bool:
     """Decide whether a dedicated scraper should run.
 
     Priority order:
-    1. Env var set to false/0/no  → disabled (explicit override)
-    2. enabled_services is non-empty AND none of the scraper's logical service
+    1. Env var set to false/0/no  → disabled (explicit hard override)
+    2. DB/UI setting set to false → disabled (user toggled off in settings page)
+    3. enabled_services is non-empty AND none of the scraper's logical service
        codes appear in it  → disabled (user filtered them all out)
-    3. Otherwise → enabled
+    4. Otherwise → enabled
     """
     env_val = os.getenv(env_var, "true").lower()
     if env_val in ("0", "false", "no"):
+        return False
+    db_val = _get_scraper_setting_from_db(env_var)
+    if db_val is not None and not db_val:
         return False
     if enabled_services:  # non-empty means an explicit filter is active
         if not any(s in enabled_services for s in logical_services):
@@ -496,22 +516,15 @@ def main(argv=None):
             print(f"ERROR: --skip-scrape set but {apple_db} not found")
             return 1
     else:
-        # Step 1a: Scrape all search terms (HYBRID OPTIMIZED)
-        # Uses fast requests library after initial Selenium session
-        if not run_step(1, total_steps, "Scraping Apple TV Sports (all terms) - HYBRID MODE", [
+        if not run_step(1, total_steps, "Scraping Apple TV Sports (all terms)", [
             "python3", "apple_scraper_db.py",
             "--headless",
             "--db", str(DATA_DIR / "apple_events.db"),
         ]):
             return 1
         
-        # Step 1b: Upgrade all shelf events to full (10x SPEEDUP WITH HYBRID!)
-        # This step benefits most from hybrid optimization:
-        # - Before: ~500ms per event via Selenium execute_script()
-        # - After: ~50ms per event via fast requests library
-        # - Typical: 200-300 shelf events = 100s saved (2-3 minutes faster!)
         print("\n" + "=" * 60)
-        print(f"[1b/{total_steps}] Upgrading shelf events to full (HYBRID 10x BOOST)")
+        print(f"[1b/{total_steps}] Upgrading shelf events to full detail")
         print("=" * 60)
         if not run_step("1b", total_steps, "Upgrading all shelf events", [
             "python3", "apple_scraper_db.py",

@@ -1,1059 +1,371 @@
-<!DOCTYPE html>
-<html>
-<head>
-<title>Filters & Settings - FruitDeepLinks</title>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body {
-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-color: #e2e8f0;
-padding: 20px;
-min-height: 100vh;
-}
-.container { max-width: 1400px; margin: 0 auto; }
-h1 { font-size: 32px; margin-bottom: 10px; }
-.subtitle { color: #94a3b8; margin-bottom: 30px; }
-.topnav {
-display: flex;
-flex-wrap: wrap;
-gap: 10px;
-margin-bottom: 24px;
-}
-.topnav-link {
-display: inline-flex;
-align-items: center;
-justify-content: center;
-padding: 10px 16px;
-border-radius: 8px;
-border: 1px solid #334155;
-background: #1e293b;
-color: #cbd5e1;
-text-decoration: none;
-font-size: 14px;
-font-weight: 600;
-}
-.topnav-link:hover {
-background: #273449;
-color: #ffffff;
-}
-.topnav-link-active {
-background: #2563eb;
-border-color: #1d4ed8;
-color: #ffffff;
-}
-.card {
-background: #1e293b;
-border-radius: 12px;
-padding: 24px;
-margin-bottom: 20px;
-border: 1px solid #334155;
-}
-h2 {
-font-size: 20px;
-margin-bottom: 16px;
-display: flex;
-align-items: center;
-gap: 8px;
-}
-.section-description {
-color: #94a3b8;
-margin-bottom: 20px;
-font-size: 14px;
-}
-.filter-grid {
-display: grid;
-grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-gap: 12px;
-}
+{% extends "base.html" %}
+{% block title %}Filters — FruitDeepLinks{% endblock %}
+{% block head_extra %}<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>{% endblock %}
+{% block page_title %}Filters{% endblock %}
+{% block page_subtitle %}<p class="subtitle">Select which streaming services and content types appear in your generated channels.</p>{% endblock %}
+
+{% block extra_style %}
+.section-desc { color: var(--text-muted); margin-bottom: 16px; font-size: 13px; line-height: 1.5; }
+.filter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
 .filter-item {
-background: #0f172a;
-border: 2px solid #334155;
-border-radius: 8px;
-padding: 12px;
-cursor: pointer;
-transition: all 0.2s;
-display: flex;
-align-items: center;
-gap: 12px;
+  background: var(--bg-inset); border: 2px solid var(--border); border-radius: var(--radius);
+  padding: 10px 12px; cursor: pointer; transition: border-color 0.15s, background 0.15s;
+  display: flex; align-items: center; gap: 10px;
 }
-.filter-item:hover {
-border-color: #3b82f6;
-background: #1e293b;
-}
-.filter-item.enabled {
-border-color: #22c55e;
-background: #14532d;
-}
-.filter-item.disabled {
-border-color: #ef4444;
-background: #7f1d1d;
-}
+.filter-item:hover { border-color: var(--accent); background: var(--bg-card); }
+.filter-item.enabled  { border-color: #22c55e; background: #14532d; }
+.filter-item.disabled { border-color: #ef4444; background: #7f1d1d; }
 .checkbox {
-width: 20px;
-height: 20px;
-border: 2px solid #475569;
-border-radius: 4px;
-display: flex;
-align-items: center;
-justify-content: center;
-flex-shrink: 0;
+  width: 18px; height: 18px; border: 2px solid #475569; border-radius: 3px;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 11px; font-weight: 700;
 }
-.filter-item.enabled .checkbox {
-background: #22c55e;
-border-color: #22c55e;
-}
-.filter-item.disabled .checkbox {
-background: #ef4444;
-border-color: #ef4444;
-}
-.checkbox::after {
-content: '✓';
-color: white;
-font-weight: bold;
-display: none;
-}
-.filter-item.enabled .checkbox::after,
-.filter-item.disabled .checkbox::after {
-display: block;
-}
-.filter-item.disabled .checkbox::after {
-content: '✗';
-}
-.filter-info {
-flex: 1;
-}
-.filter-name {
-font-weight: 600;
-margin-bottom: 4px;
-}
-.filter-count {
-font-size: 12px;
-color: #94a3b8;
-}
-.btn {
-background: #3b82f6;
-color: white;
-border: none;
-padding: 12px 24px;
-border-radius: 6px;
-cursor: pointer;
-font-size: 16px;
-font-weight: 600;
-margin-right: 10px;
-}
-.btn:hover { background: #2563eb; }
-.btn:disabled { background: #475569; cursor: not-allowed; }
-.btn-secondary { background: #64748b; }
-.btn-secondary:hover { background: #475569; }
-.btn-success { background: #22c55e; }
-.btn-success:hover { background: #16a34a; }
-.actions {
-margin-top: 30px;
-padding-top: 20px;
-border-top: 1px solid #334155;
-display: flex;
-gap: 10px;
-align-items: center;
-}
-.status-message {
-margin-left: auto;
-padding: 8px 16px;
-border-radius: 6px;
-font-size: 14px;
-display: none;
-}
-.status-message.success {
-background: #14532d;
-color: #22c55e;
-border: 1px solid #22c55e;
-}
-.status-message.error {
-background: #7f1d1d;
-color: #ef4444;
-border: 1px solid #ef4444;
-}
-.loading {
-text-align: center;
-padding: 40px;
-color: #94a3b8;
-}
-.stats-summary {
-display: flex;
-gap: 20px;
-margin-bottom: 20px;
-flex-wrap: wrap;
-}
-.stat-box {
-background: #0f172a;
-padding: 12px 20px;
-border-radius: 8px;
-border: 1px solid #334155;
-}
-.stat-label {
-font-size: 12px;
-color: #94a3b8;
-margin-bottom: 4px;
-}
-.stat-value {
-font-size: 24px;
-font-weight: 600;
-color: #60a5fa;
-}
-.priority-list {
-display: flex;
-flex-direction: column;
-gap: 8px;
-max-width: 600px;
-}
+.filter-item.enabled  .checkbox { background: #22c55e; border-color: #22c55e; color: #fff; }
+.filter-item.disabled .checkbox { background: #ef4444; border-color: #ef4444; color: #fff; }
+.filter-item.enabled  .checkbox::after { content: '✓'; }
+.filter-item.disabled .checkbox::after { content: '✗'; }
+.filter-name  { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+.filter-count { font-size: 11px; color: var(--text-muted); }
+.stats-summary { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+.stat-box { background: var(--bg-inset); padding: 10px 16px; border-radius: var(--radius); border: 1px solid var(--border); }
+.stat-box .stat-label { font-size: 11px; color: var(--text-muted); margin-bottom: 2px; }
+.stat-box .stat-value { font-size: 22px; font-weight: 700; color: #60a5fa; }
+.priority-list { display: flex; flex-direction: column; gap: 6px; max-width: 580px; }
 .priority-item {
-background: #0f172a;
-border: 2px solid #334155;
-border-radius: 8px;
-padding: 12px 16px;
-display: flex;
-align-items: center;
-gap: 12px;
-cursor: grab;
-transition: all 0.2s;
+  background: var(--bg-inset); border: 2px solid var(--border); border-radius: var(--radius);
+  padding: 10px 14px; display: flex; align-items: center; gap: 10px;
+  cursor: grab; transition: border-color 0.15s;
 }
-.priority-item:active {
-cursor: grabbing;
-}
-.priority-item.sortable-ghost {
-opacity: 0.4;
-background: #1e293b;
-}
-.priority-item.sortable-drag {
-opacity: 0.8;
-box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-}
-.drag-handle {
-font-size: 20px;
-color: #64748b;
-cursor: grab;
-user-select: none;
-}
-.priority-number {
-min-width: 40px;
-text-align: center;
-font-weight: 600;
-color: #60a5fa;
-font-size: 18px;
-}
-.priority-service-info {
-flex: 1;
-}
-.priority-service-name {
-font-weight: 600;
-margin-bottom: 2px;
-}
-.priority-service-code {
-font-size: 12px;
-color: #94a3b8;
-}
-.amazon-penalty-option {
-margin-top: 20px;
-padding: 16px;
-background: #0f172a;
-border-radius: 8px;
-border: 1px solid #334155;
-}
-.amazon-penalty-option label {
-display: flex;
-align-items: center;
-gap: 12px;
-cursor: pointer;
-}
-.amazon-penalty-option input[type="checkbox"] {
-width: 20px;
-height: 20px;
-cursor: pointer;
-}
-.priority-help {
-color: #94a3b8;
-font-size: 14px;
-margin-bottom: 16px;
-padding: 12px;
-background: #0f172a;
-border-radius: 6px;
-border-left: 3px solid #60a5fa;
-}
-.examples-grid {
-display: grid;
-gap: 12px;
-}
-.example-card {
-background: #0f172a;
-border: 1px solid #334155;
-border-radius: 8px;
-padding: 16px;
-}
-.example-title {
-font-weight: 600;
-margin-bottom: 8px;
-color: #e2e8f0;
-}
-.example-services {
-display: flex;
-flex-wrap: wrap;
-gap: 6px;
-margin: 8px 0;
-}
-.example-service {
-padding: 4px 10px;
-border-radius: 4px;
-font-size: 12px;
-background: #1e293b;
-border: 1px solid #334155;
-}
-.example-service.winner {
-background: #14532d;
-border-color: #22c55e;
-color: #22c55e;
-font-weight: 600;
-}
-.example-reason {
-font-size: 13px;
-color: #94a3b8;
-margin-top: 8px;
-font-style: italic;
-}
-</style>
-</head>
-<body>
-<div class="container">
-<h1>Filters & Settings</h1>
-<p class="subtitle">Configure which services and content types to include in your channels</p>
+.priority-item:active { cursor: grabbing; }
+.priority-item.sortable-ghost { opacity: 0.35; background: var(--bg-card); }
+.priority-item.sortable-drag  { opacity: 0.8; box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+.drag-handle { font-size: 18px; color: #64748b; cursor: grab; user-select: none; }
+.priority-number { min-width: 36px; text-align: center; font-weight: 700; color: #60a5fa; font-size: 16px; }
+.priority-service-name { font-weight: 600; font-size: 13px; margin-bottom: 1px; }
+.priority-service-code { font-size: 11px; color: var(--text-muted); }
+.priority-help { color: var(--text-muted); font-size: 13px; margin-bottom: 14px; padding: 10px 12px; background: var(--bg-inset); border-radius: 6px; border-left: 3px solid #60a5fa; }
+.amazon-penalty-option { margin-top: 16px; padding: 14px; background: var(--bg-inset); border-radius: var(--radius); border: 1px solid var(--border); }
+.amazon-penalty-option label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; font-size: 13px; }
+.examples-grid { display: grid; gap: 10px; }
+.example-card { background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+.example-title { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+.example-services { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0; }
+.example-service { padding: 3px 8px; border-radius: 4px; font-size: 11px; background: var(--bg-card); border: 1px solid var(--border); }
+.example-service.winner { background: #14532d; border-color: #22c55e; color: #22c55e; font-weight: 700; }
+.example-reason { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+.actions { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+{% endblock %}
 
-<div class="topnav">
-<a href="/" class="topnav-link">Dashboard</a>
-<a href="/filters" class="topnav-link topnav-link-active">Filters & Settings</a>
-<a href="/events" class="topnav-link">Event Inspector</a>
-<a href="/adb" class="topnav-link">ADB Configuration</a>
-<a href="/api" class="topnav-link">API Helper</a>
+{% block content %}
+<div class="stats-summary">
+  <div class="stat-box"><div class="stat-label">Services</div><div class="stat-value" id="stat-providers">-</div></div>
+  <div class="stat-box"><div class="stat-label">Sports</div><div class="stat-value" id="stat-sports">-</div></div>
+  <div class="stat-box"><div class="stat-label">Leagues</div><div class="stat-value" id="stat-leagues">-</div></div>
 </div>
 
-<div class="stats-summary" id="stats-summary">
-<div class="stat-box">
-<div class="stat-label">Streaming Services</div>
-<div class="stat-value" id="stat-providers">-</div>
+<div class="card" style="margin-bottom:16px">
+  <h2>Streaming Services</h2>
+  <p class="section-desc">Select services you subscribe to. Green = included, Red = excluded. Services with <strong>🔄</strong> have dedicated scrapers — disabling them skips scraping on the next refresh.</p>
+  <div id="providers-loading" class="status-muted" style="padding:24px;text-align:center">Loading services...</div>
+  <div id="providers-grid" class="filter-grid" style="display:none"></div>
 </div>
-<div class="stat-box">
-<div class="stat-label">Sports Available</div>
-<div class="stat-value" id="stat-sports">-</div>
+
+<div class="card" style="margin-bottom:16px" id="amazon-section">
+  <h2>Amazon Services</h2>
+  <p class="section-desc">Amazon Prime Video hosts multiple sub-services. Enable the master toggle first, then select which sub-services to include.</p>
+  <div style="margin-bottom:14px">
+    <div class="filter-item" id="amazon-master-toggle" onclick="toggleAmazonMaster()" style="border-width:3px;border-color:var(--warning);max-width:480px">
+      <div class="checkbox"></div>
+      <div class="filter-info">
+        <div class="filter-name" style="font-size:15px">Amazon (Master Toggle)</div>
+        <div class="filter-count" id="amazon-total-count">Loading...</div>
+      </div>
+    </div>
+  </div>
+  <div id="amazon-services-wrapper" style="transition:opacity 0.2s">
+    <div id="amazon-services-loading" class="status-muted" style="padding:16px;text-align:center">Loading Amazon services...</div>
+    <div id="amazon-services-grid" class="filter-grid" style="display:none"></div>
+  </div>
 </div>
-<div class="stat-box">
-<div class="stat-label">Leagues Available</div>
-<div class="stat-value" id="stat-leagues">-</div>
+
+<div class="card" style="margin-bottom:16px">
+  <h2>Language Preference</h2>
+  <p class="section-desc">When events are available in multiple languages, choose which to prefer.</p>
+  <div class="filter-grid" style="max-width:700px">
+    <div class="filter-item enabled" onclick="setLanguage('en')" id="lang-en">
+      <div class="checkbox"></div>
+      <div class="filter-info"><div class="filter-name">English</div><div class="filter-count">Prefer English broadcasts</div></div>
+    </div>
+    <div class="filter-item disabled" onclick="setLanguage('es')" id="lang-es">
+      <div class="checkbox"></div>
+      <div class="filter-info"><div class="filter-name">Spanish (Español)</div><div class="filter-count">Prefer Spanish broadcasts</div></div>
+    </div>
+    <div class="filter-item disabled" onclick="setLanguage('both')" id="lang-both">
+      <div class="checkbox"></div>
+      <div class="filter-info"><div class="filter-name">Both / No Filter</div><div class="filter-count">Include all language variants</div></div>
+    </div>
+  </div>
 </div>
+
+<div class="card" style="margin-bottom:16px">
+  <h2>Service Priority Order</h2>
+  <p class="priority-help"><strong>When multiple services carry the same event, which wins?</strong><br>Drag to reorder — top = highest priority.</p>
+  <div id="priority-loading" class="status-muted" style="padding:16px">Loading priorities...</div>
+  <div id="priority-list" class="priority-list" style="display:none"></div>
+  <div class="amazon-penalty-option">
+    <label>
+      <input type="checkbox" id="amazon-penalty" checked style="width:18px;height:18px;accent-color:var(--accent);flex-shrink:0">
+      <div>
+        <strong>Prefer direct services over Amazon redirects</strong><br>
+        <span style="color:var(--text-muted)">Amazon often redirects to other services (TNT, HBO, etc.) — when enabled, we use the direct link when available.</span>
+      </div>
+    </label>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:16px">
+  <h2>Selection Examples</h2>
+  <p class="section-desc">Multi-service events showing which service will be selected under your current settings. Updates as you change priorities.</p>
+  <div id="examples-loading" class="status-muted" style="padding:16px;text-align:center">Loading examples...</div>
+  <div id="examples-grid" class="examples-grid" style="display:none"></div>
+</div>
+
+<div class="card" style="margin-bottom:16px">
+  <h2>Sports Filter</h2>
+  <p class="section-desc">Hide sports you're not interested in. Disabled sports are excluded from all channels.</p>
+  <div id="sports-loading" class="status-muted" style="padding:24px;text-align:center">Loading sports...</div>
+  <div id="sports-grid" class="filter-grid" style="display:none"></div>
 </div>
 
 <div class="card">
-<h2>📺 Streaming Services</h2>
-<p class="section-description">
-Select which streaming services you have subscriptions to. Only events available on your selected services will be included in generated playlists.
-<strong>Green = Enabled</strong> (will be included) | <strong>Red = Disabled</strong> (will be excluded)<br>
-Services marked <strong>🔄</strong> have dedicated scrapers — disabling them will also skip their scraper on the next refresh, saving time.
-</p>
-<div id="providers-loading" class="loading">Loading services...</div>
-<div id="providers-grid" class="filter-grid" style="display: none;"></div>
-</div>
-
-<div class="card" id="amazon-section">
-<h2>📦 Amazon Services</h2>
-<p class="section-description">
-Amazon Prime Video hosts multiple streaming services. Enable the master toggle to use Amazon, then select which sub-services you want.
-<strong>Note:</strong> "Amazon - Unknown" includes unscraped events and may contain false positives.
-</p>
-
-<!-- Master Toggle -->
-<div style="margin-bottom: 20px;">
-<div class="filter-item" id="amazon-master-toggle" onclick="toggleAmazonMaster()" 
-     style="background: #1e293b; border: 3px solid #fbbf24; cursor: pointer; padding: 16px;">
-<div class="checkbox"></div>
-<div class="filter-info">
-<div class="filter-name" style="font-size: 18px; font-weight: 700;">🔧 Amazon (Master Toggle)</div>
-<div class="filter-count" id="amazon-total-count">Loading...</div>
-</div>
-</div>
-</div>
-
-<!-- Sub-services -->
-<div id="amazon-services-wrapper" style="opacity: 1; transition: opacity 0.3s;">
-<div id="amazon-services-loading" class="loading">Loading Amazon services...</div>
-<div id="amazon-services-grid" class="filter-grid" style="display: none;"></div>
-</div>
-</div>
-
-<div class="card">
-<h2>🌐 Language Preference</h2>
-<p class="section-description">
-When events are available in multiple languages (e.g. ESPN and ESPN Deportes), choose your preferred language.
-</p>
-<div class="filter-grid">
-<div class="filter-item enabled" onclick="setLanguage('en')" id="lang-en">
-<div class="checkbox"></div>
-<div class="filter-info">
-<div class="filter-name">English</div>
-<div class="filter-count">Prefer English broadcasts when available</div>
-</div>
-</div>
-<div class="filter-item disabled" onclick="setLanguage('es')" id="lang-es">
-<div class="checkbox"></div>
-<div class="filter-info">
-<div class="filter-name">Spanish (Español)</div>
-<div class="filter-count">Prefer Spanish broadcasts when available</div>
-</div>
-</div>
-<div class="filter-item disabled" onclick="setLanguage('both')" id="lang-both">
-<div class="checkbox"></div>
-<div class="filter-info">
-<div class="filter-name">Both / No Filter</div>
-<div class="filter-count">Include all language variants</div>
-</div>
-</div>
-</div>
-</div>
-
-<div class="card">
-<h2>🎯 Service Priority Order</h2>
-<div class="priority-help">
-<strong>⚡ When multiple services have the same event, which should be used?</strong><br>
-Drag services to reorder them. Higher position = higher priority. Services at the top will be preferred over those below.
-</div>
-
-<div id="priority-loading" class="loading">Loading priorities...</div>
-<div id="priority-list" class="priority-list" style="display: none;"></div>
-
-<div class="amazon-penalty-option">
-<label>
-<input type="checkbox" id="amazon-penalty" checked>
-<div>
-<strong>Prefer direct streaming services over Amazon redirects</strong><br>
-<span style="font-size: 13px; color: #94a3b8;">
-Amazon Prime often redirects to other services (TNT, HBO Max, etc.). 
-When enabled, we'll use the direct service link when available.
-</span>
-</div>
-</label>
-</div>
-</div>
-
-<div class="card">
-<h2>🔍 Selection Examples</h2>
-<p class="section-description">
-See which services will be selected for events with multiple options. This updates as you change priorities.
-</p>
-<div id="examples-loading" class="loading">Loading examples...</div>
-<div id="examples-grid" class="examples-grid" style="display: none;"></div>
-</div>
-
-<div class="card">
-<h2>⚽ Sports Filter</h2>
-<p class="section-description">
-Hide sports you're not interested in. Disabled sports will be excluded from your channels.
-</p>
-<div id="sports-loading" class="loading">Loading sports...</div>
-<div id="sports-grid" class="filter-grid" style="display: none;"></div>
-</div>
-
-<div class="card">
-<h2>🏆 Leagues Filter</h2>
-<p class="section-description">
-Hide specific leagues or competitions. Disabled leagues will be excluded from your channels.
-</p>
-<div id="leagues-loading" class="loading">Loading leagues...</div>
-<div id="leagues-grid" class="filter-grid" style="display: none;"></div>
+  <h2>Leagues Filter</h2>
+  <p class="section-desc">Hide specific leagues or competitions.</p>
+  <div id="leagues-loading" class="status-muted" style="padding:24px;text-align:center">Loading leagues...</div>
+  <div id="leagues-grid" class="filter-grid" style="display:none"></div>
 </div>
 
 <div class="actions">
-<button class="btn btn-success" onclick="savePreferences()">Save Settings</button>
-<button class="btn" style="background: #f59e0b;" onclick="applyFilters()">⚡ Apply Filters Now</button>
-<button class="btn" style="background: #8b5cf6;" onclick="clearStaleServices()" title="Remove enabled services that have no current events in the database">🧹 Clear Stale Services</button>
-<button class="btn" style="background: #64748b;" onclick="resetToDefaults()">Reset to Defaults</button>
-<div class="status-message" id="status-message"></div>
+  <button class="btn btn-success" onclick="savePreferences()">Save Filters</button>
+  <button class="btn" style="background:#f59e0b" onclick="applyFilters()">Apply Filters Now</button>
+  <button class="btn" style="background:#8b5cf6" onclick="clearStaleServices()">Clear Stale Services</button>
+  <button class="btn btn-secondary" onclick="resetToDefaults()">Reset to Defaults</button>
 </div>
-</div>
+{% endblock %}
 
+{% block extra_script %}
 <script>
-let currentPreferences = {
-enabled_services: [],
-disabled_sports: [],
-disabled_leagues: [],
-service_priorities: {},
-amazon_penalty: true,
-amazon_master_enabled: true,
-language_preference: 'en'  // 'en', 'es', or 'both'
-};
-
-let availableFilters = {
-providers: [],
-amazon_services: [],
-sports: [],
-leagues: []
-};
-
+let currentPreferences = { enabled_services:[], disabled_sports:[], disabled_leagues:[], service_priorities:{}, amazon_penalty:true, amazon_master_enabled:true, language_preference:'en' };
+let availableFilters = { providers:[], amazon_services:[], sports:[], leagues:[] };
 let sortableInstance = null;
 
+const SCRAPER_CONTROLLED_SERVICES = new Set(['kayo_web','kayo','fanatiz_web','fanatiz','bein','nesn','victory','gotham','espn_plus','espn_linear']);
+
 async function loadFilters() {
-try {
-const res = await fetch('/api/filters');
-const data = await res.json();
-
-availableFilters = data.filters;
-currentPreferences = data.preferences;
-
-// If no enabled services, default to ALL enabled (including Amazon)
-if (!currentPreferences.enabled_services || currentPreferences.enabled_services.length === 0) {
-currentPreferences.enabled_services = [
-...availableFilters.providers.map(p => p.scheme),
-...(availableFilters.amazon_services || []).map(s => s.scheme)
-];
-}
-
-// Load priorities
-await loadPriorities();
-
-// Set default language preference if not present
-if (!currentPreferences.language_preference) {
-currentPreferences.language_preference = 'en';
-}
-
-// Set default amazon_master_enabled if not present
-if (currentPreferences.amazon_master_enabled === undefined) {
-currentPreferences.amazon_master_enabled = true;
-}
-
-renderProviders();
-renderAmazonServices();
-renderSports();
-renderLeagues();
-renderPriorities();
-updateStats();
-
-// Update language UI
-setLanguage(currentPreferences.language_preference);
-
-// Load selection examples
-loadSelectionExamples();
-
-} catch (err) {
-console.error('Failed to load filters:', err);
-showStatus('Failed to load filters', 'error');
-}
+  try {
+    const data = await fetch('/api/filters').then(r => r.json());
+    availableFilters = data.filters;
+    currentPreferences = data.preferences;
+    if (!currentPreferences.enabled_services) currentPreferences.enabled_services = [];
+    if (!currentPreferences.language_preference) currentPreferences.language_preference = 'en';
+    if (currentPreferences.amazon_master_enabled === undefined) currentPreferences.amazon_master_enabled = true;
+    await loadPriorities();
+    renderProviders(); renderAmazonServices(); renderSports(); renderLeagues(); renderPriorities();
+    updateStats(); setLanguage(currentPreferences.language_preference); loadSelectionExamples();
+  } catch (err) { showToast('Failed to load filters: ' + err.message, 'error'); }
 }
 
 async function loadPriorities() {
-try {
-const res = await fetch('/api/filters/priorities');
-const data = await res.json();
-
-currentPreferences.service_priorities = data.service_priorities || {};
-currentPreferences.amazon_penalty = data.amazon_penalty !== undefined ? data.amazon_penalty : true;
-
-document.getElementById('amazon-penalty').checked = currentPreferences.amazon_penalty;
-} catch (err) {
-console.error('Failed to load priorities:', err);
+  try {
+    const data = await fetch('/api/filters/priorities').then(r => r.json());
+    currentPreferences.service_priorities = data.service_priorities || {};
+    currentPreferences.amazon_penalty = data.amazon_penalty !== undefined ? data.amazon_penalty : true;
+    document.getElementById('amazon-penalty').checked = currentPreferences.amazon_penalty;
+  } catch {}
 }
-}
-
-function renderPriorities() {
-const container = document.getElementById('priority-list');
-const loading = document.getElementById('priority-loading');
-
-// Get only enabled services (include Amazon sub-services too)
-const allPriorityServices = [
-  ...(availableFilters.providers || []),
-  ...(availableFilters.amazon_services || []),
-];
-const enabledServices = allPriorityServices.filter(p =>
-  currentPreferences.enabled_services.includes(p.scheme)
-);
-
-if (enabledServices.length === 0) {
-loading.textContent = 'No services enabled. Enable services above to set priorities.';
-return;
-}
-
-// Sort by priority (highest first)
-enabledServices.sort((a, b) => {
-const priorityA = currentPreferences.service_priorities[a.scheme] || 50;
-const priorityB = currentPreferences.service_priorities[b.scheme] || 50;
-return priorityB - priorityA;
-});
-
-container.innerHTML = enabledServices.map((provider, index) => {
-const priority = currentPreferences.service_priorities[provider.scheme] || 50;
-return `
-<div class="priority-item" data-service="${provider.scheme}" data-priority="${priority}">
-<div class="drag-handle">⋮⋮</div>
-<div class="priority-number">${priority}</div>
-<div class="priority-service-info">
-<div class="priority-service-name">${provider.name}</div>
-<div class="priority-service-code">${provider.scheme} • ${provider.count} events</div>
-</div>
-</div>
-`;
-}).join('');
-
-loading.style.display = 'none';
-container.style.display = 'flex';
-
-// Initialize Sortable.js
-if (sortableInstance) {
-sortableInstance.destroy();
-}
-
-sortableInstance = new Sortable(container, {
-animation: 150,
-handle: '.drag-handle',
-ghostClass: 'sortable-ghost',
-dragClass: 'sortable-drag',
-onEnd: function(evt) {
-updatePrioritiesFromOrder();
-loadSelectionExamples(); // Refresh examples after reorder
-}
-});
-}
-
-function updatePrioritiesFromOrder() {
-const items = document.querySelectorAll('.priority-item');
-const totalItems = items.length;
-
-// Recalculate priorities based on position
-// Top item gets highest priority, bottom gets lowest
-items.forEach((item, index) => {
-const service = item.dataset.service;
-// Distribute priorities evenly from 100 (top) to 10 (bottom)
-const newPriority = Math.round(100 - (index / Math.max(1, totalItems - 1)) * 90);
-currentPreferences.service_priorities[service] = newPriority;
-
-// Update display
-const priorityEl = item.querySelector('.priority-number');
-if (priorityEl) {
-priorityEl.textContent = newPriority;
-}
-item.dataset.priority = newPriority;
-});
-}
-
-async function loadSelectionExamples() {
-const examplesGrid = document.getElementById('examples-grid');
-const loading = document.getElementById('examples-loading');
-
-try {
-const res = await fetch('/api/filters/selection-examples');
-const data = await res.json();
-
-if (!data.examples || data.examples.length === 0) {
-loading.textContent = 'No multi-service events found to show examples.';
-return;
-}
-
-examplesGrid.innerHTML = data.examples.map(example => {
-const availableHtml = example.available_services.map(svc => {
-const isWinner = example.selected_service && svc.code === example.selected_service.code;
-return `<span class="example-service ${isWinner ? 'winner' : ''}">${svc.name}</span>`;
-}).join('');
-
-const winnerText = example.selected_service 
-? `✅ Selected: <strong>${example.selected_service.name}</strong>`
-: '❌ No service selected';
-
-return `
-<div class="example-card">
-<div class="example-title">${example.title}</div>
-<div style="font-size: 12px; color: #64748b; margin-bottom: 8px;">
-${example.channel} • ${new Date(example.start_utc).toLocaleString()}
-</div>
-<div class="example-services">${availableHtml}</div>
-<div class="example-reason">
-${winnerText}<br>
-<span style="color: #64748b;">${example.reason}</span>
-</div>
-</div>
-`;
-}).join('');
-
-loading.style.display = 'none';
-examplesGrid.style.display = 'grid';
-
-} catch (err) {
-console.error('Failed to load examples:', err);
-loading.textContent = 'Failed to load selection examples.';
-}
-}
-
-// Update Amazon penalty when checkbox changes
-document.addEventListener('DOMContentLoaded', function() {
-const checkbox = document.getElementById('amazon-penalty');
-if (checkbox) {
-checkbox.addEventListener('change', function() {
-currentPreferences.amazon_penalty = this.checked;
-loadSelectionExamples(); // Refresh examples
-});
-}
-});
-
-// Services that have dedicated scrapers — disabling them skips scraping on next refresh
-// Keep in sync with _scraper_enabled() calls in daily_refresh.py
-const SCRAPER_CONTROLLED_SERVICES = new Set([
-'kayo_web', 'kayo',
-'fanatiz_web', 'fanatiz',
-'bein',
-'nesn',
-'victory',
-'gotham',
-'espn_plus', 'espn_linear',
-]);
 
 function renderProviders() {
-const grid = document.getElementById('providers-grid');
-const loading = document.getElementById('providers-loading');
-
-if (availableFilters.providers.length === 0) {
-loading.textContent = 'No streaming services found. Run a refresh first.';
-return;
-}
-
-grid.innerHTML = availableFilters.providers.map(provider => {
-const isEnabled = currentPreferences.enabled_services.includes(provider.scheme);
-const scraperBadge = SCRAPER_CONTROLLED_SERVICES.has(provider.scheme)
-  ? ' <span title="Has dedicated scraper — disabling skips scraping on next refresh" style="font-size:11px; opacity:0.8;">🔄</span>'
-  : '';
-return `
-<div class="filter-item ${isEnabled ? 'enabled' : 'disabled'}"
-onclick="toggleProvider('${provider.scheme}')">
-<div class="checkbox"></div>
-<div class="filter-info">
-<div class="filter-name">${provider.name}${scraperBadge}</div>
-<div class="filter-count">${provider.count} events</div>
-</div>
-</div>
-`;
-}).join('');
-
-loading.style.display = 'none';
-grid.style.display = 'grid';
+  const grid = document.getElementById('providers-grid');
+  const loading = document.getElementById('providers-loading');
+  if (!availableFilters.providers.length) { loading.textContent = 'No streaming services found. Run a refresh first.'; return; }
+  grid.innerHTML = availableFilters.providers.map(p => {
+    const on = !currentPreferences.enabled_services.length || currentPreferences.enabled_services.includes(p.scheme);
+    const badge = SCRAPER_CONTROLLED_SERVICES.has(p.scheme) ? ' <span title="Has dedicated scraper">🔄</span>' : '';
+    return `<div class="filter-item ${on?'enabled':'disabled'}" onclick="toggleProvider('${p.scheme}')"><div class="checkbox"></div><div class="filter-info"><div class="filter-name">${p.name}${badge}</div><div class="filter-count">${p.count} events</div></div></div>`;
+  }).join('');
+  loading.style.display = 'none'; grid.style.display = 'grid';
 }
 
 function renderAmazonServices() {
-const grid = document.getElementById('amazon-services-grid');
-const loading = document.getElementById('amazon-services-loading');
-const masterToggle = document.getElementById('amazon-master-toggle');
-const wrapper = document.getElementById('amazon-services-wrapper');
-const totalCount = document.getElementById('amazon-total-count');
-
-const amazonMasterEnabled = currentPreferences.amazon_master_enabled !== false;
-
-// Update master toggle appearance
-if (amazonMasterEnabled) {
-masterToggle.classList.remove('disabled');
-masterToggle.classList.add('enabled');
-wrapper.style.opacity = '1';
-wrapper.style.pointerEvents = 'auto';
-} else {
-masterToggle.classList.remove('enabled');
-masterToggle.classList.add('disabled');
-wrapper.style.opacity = '0.4';
-wrapper.style.pointerEvents = 'none';
+  const grid = document.getElementById('amazon-services-grid');
+  const loading = document.getElementById('amazon-services-loading');
+  const toggle = document.getElementById('amazon-master-toggle');
+  const wrapper = document.getElementById('amazon-services-wrapper');
+  const countEl = document.getElementById('amazon-total-count');
+  const on = currentPreferences.amazon_master_enabled !== false;
+  toggle.classList.toggle('enabled', on); toggle.classList.toggle('disabled', !on);
+  wrapper.style.opacity = on ? '1' : '0.4'; wrapper.style.pointerEvents = on ? 'auto' : 'none';
+  const svcs = availableFilters.amazon_services || [];
+  if (!svcs.length) { loading.textContent = 'No Amazon services found.'; countEl.textContent = '0 events'; return; }
+  countEl.textContent = svcs.reduce((s,x)=>s+x.count,0) + ' total events';
+  grid.innerHTML = svcs.map(s => {
+    const enabled = !currentPreferences.enabled_services.length || currentPreferences.enabled_services.includes(s.scheme);
+    return `<div class="filter-item ${enabled?'enabled':'disabled'}" onclick="toggleAmazonService('${s.scheme}')"><div class="checkbox"></div><div class="filter-info"><div class="filter-name">${s.name}</div><div class="filter-count">${s.count} events</div></div></div>`;
+  }).join('');
+  loading.style.display = 'none'; grid.style.display = 'grid';
 }
 
-if (!availableFilters.amazon_services || availableFilters.amazon_services.length === 0) {
-loading.textContent = 'No Amazon services found.';
-totalCount.textContent = '0 events';
-return;
-}
-
-// Calculate total events
-const total = availableFilters.amazon_services.reduce((sum, s) => sum + s.count, 0);
-totalCount.textContent = `${total} total events`;
-
-grid.innerHTML = availableFilters.amazon_services.map(service => {
-const isEnabled = currentPreferences.enabled_services.includes(service.scheme);
-return `
-<div class="filter-item ${isEnabled ? 'enabled' : 'disabled'}" 
-onclick="toggleAmazonService('${service.scheme}')">
-<div class="checkbox"></div>
-<div class="filter-info">
-<div class="filter-name">${service.name}</div>
-<div class="filter-count">${service.count} events</div>
-</div>
-</div>
-`;
-}).join('');
-
-loading.style.display = 'none';
-grid.style.display = 'grid';
-}
-
-function toggleAmazonMaster() {
-currentPreferences.amazon_master_enabled = !currentPreferences.amazon_master_enabled;
-renderAmazonServices();
-loadSelectionExamples();
-}
-
+function toggleAmazonMaster() { currentPreferences.amazon_master_enabled = !currentPreferences.amazon_master_enabled; renderAmazonServices(); loadSelectionExamples(); }
 function toggleAmazonService(scheme) {
-// Only allow toggling if master is enabled
-if (currentPreferences.amazon_master_enabled === false) {
-return;
-}
-
-const index = currentPreferences.enabled_services.indexOf(scheme);
-if (index > -1) {
-currentPreferences.enabled_services.splice(index, 1);
-} else {
-currentPreferences.enabled_services.push(scheme);
-}
-renderAmazonServices();
-renderPriorities();
-loadSelectionExamples();
+  if (currentPreferences.amazon_master_enabled === false) return;
+  if (currentPreferences.enabled_services.length === 0) {
+    currentPreferences.enabled_services = [
+      ...availableFilters.providers.map(p => p.scheme),
+      ...(availableFilters.amazon_services || []).map(s => s.scheme)
+    ].filter(s => s !== scheme);
+  } else {
+    const i = currentPreferences.enabled_services.indexOf(scheme);
+    if (i > -1) currentPreferences.enabled_services.splice(i, 1);
+    else currentPreferences.enabled_services.push(scheme);
+  }
+  renderAmazonServices(); renderPriorities(); loadSelectionExamples();
 }
 
 function renderSports() {
-const grid = document.getElementById('sports-grid');
-const loading = document.getElementById('sports-loading');
-
-if (availableFilters.sports.length === 0) {
-loading.textContent = 'No sports data found.';
-return;
-}
-
-grid.innerHTML = availableFilters.sports.map(sport => {
-const isDisabled = currentPreferences.disabled_sports.includes(sport.name);
-return `
-<div class="filter-item ${isDisabled ? 'disabled' : 'enabled'}" 
-onclick="toggleSport(\`${sport.name}\`)">
-<div class="checkbox"></div>
-<div class="filter-info">
-<div class="filter-name">${sport.name}</div>
-<div class="filter-count">${sport.count} events</div>
-</div>
-</div>
-`;
-}).join('');
-
-loading.style.display = 'none';
-grid.style.display = 'grid';
+  const grid = document.getElementById('sports-grid'), loading = document.getElementById('sports-loading');
+  if (!availableFilters.sports.length) { loading.textContent = 'No sports data found.'; return; }
+  grid.innerHTML = availableFilters.sports.map(s => {
+    const dis = currentPreferences.disabled_sports.includes(s.name);
+    return `<div class="filter-item ${dis?'disabled':'enabled'}" onclick="toggleSport(\`${s.name}\`)"><div class="checkbox"></div><div class="filter-info"><div class="filter-name">${s.name}</div><div class="filter-count">${s.count} events</div></div></div>`;
+  }).join('');
+  loading.style.display='none'; grid.style.display='grid';
 }
 
 function renderLeagues() {
-const grid = document.getElementById('leagues-grid');
-const loading = document.getElementById('leagues-loading');
-
-if (availableFilters.leagues.length === 0) {
-loading.textContent = 'No leagues data found.';
-return;
+  const grid = document.getElementById('leagues-grid'), loading = document.getElementById('leagues-loading');
+  if (!availableFilters.leagues.length) { loading.textContent = 'No leagues data found.'; return; }
+  grid.innerHTML = availableFilters.leagues.map(l => {
+    const dis = currentPreferences.disabled_leagues.includes(l.name);
+    return `<div class="filter-item ${dis?'disabled':'enabled'}" onclick="toggleLeague(\`${l.name}\`)"><div class="checkbox"></div><div class="filter-info"><div class="filter-name">${l.name}</div><div class="filter-count">${l.count} events</div></div></div>`;
+  }).join('');
+  loading.style.display='none'; grid.style.display='grid';
 }
 
-grid.innerHTML = availableFilters.leagues.map(league => {
-const isDisabled = currentPreferences.disabled_leagues.includes(league.name);
-return `
-<div class="filter-item ${isDisabled ? 'disabled' : 'enabled'}" 
-onclick="toggleLeague(\`${league.name}\`)">
-<div class="checkbox"></div>
-<div class="filter-info">
-<div class="filter-name">${league.name}</div>
-<div class="filter-count">${league.count} events</div>
-</div>
-</div>
-`;
-}).join('');
-
-loading.style.display = 'none';
-grid.style.display = 'grid';
+function renderPriorities() {
+  const container = document.getElementById('priority-list'), loading = document.getElementById('priority-loading');
+  const all = [...(availableFilters.providers||[]),...(availableFilters.amazon_services||[])];
+  const enabled = currentPreferences.enabled_services.length === 0 ? all : all.filter(p => currentPreferences.enabled_services.includes(p.scheme));
+  if (!enabled.length) { loading.textContent = 'No services enabled. Enable services above to set priorities.'; return; }
+  enabled.sort((a,b) => (currentPreferences.service_priorities[b.scheme]||50) - (currentPreferences.service_priorities[a.scheme]||50));
+  container.innerHTML = enabled.map(p => {
+    const pri = currentPreferences.service_priorities[p.scheme]||50;
+    return `<div class="priority-item" data-service="${p.scheme}" data-priority="${pri}"><div class="drag-handle">⋮⋮</div><div class="priority-number">${pri}</div><div class="priority-service-info"><div class="priority-service-name">${p.name}</div><div class="priority-service-code">${p.scheme} • ${p.count} events</div></div></div>`;
+  }).join('');
+  loading.style.display='none'; container.style.display='flex';
+  if (sortableInstance) sortableInstance.destroy();
+  sortableInstance = new Sortable(container, { animation:150, handle:'.drag-handle', ghostClass:'sortable-ghost', dragClass:'sortable-drag', onEnd:() => { updatePrioritiesFromOrder(); loadSelectionExamples(); } });
 }
+
+function updatePrioritiesFromOrder() {
+  const items = document.querySelectorAll('.priority-item'); const n = items.length;
+  items.forEach((item,i) => {
+    const pri = Math.round(100 - (i/Math.max(1,n-1))*90);
+    currentPreferences.service_priorities[item.dataset.service] = pri;
+    const el = item.querySelector('.priority-number'); if (el) el.textContent = pri;
+    item.dataset.priority = pri;
+  });
+}
+
+async function loadSelectionExamples() {
+  const grid = document.getElementById('examples-grid'), loading = document.getElementById('examples-loading');
+  try {
+    const data = await fetch('/api/filters/selection-examples').then(r=>r.json());
+    if (!data.examples || !data.examples.length) { loading.textContent = 'No multi-service events found.'; return; }
+    grid.innerHTML = data.examples.map(ex => {
+      const svcsHtml = ex.available_services.map(s => `<span class="example-service ${ex.selected_service && s.code===ex.selected_service.code?'winner':''}">${s.name}</span>`).join('');
+      const winner = ex.selected_service ? `Selected: <strong>${ex.selected_name||ex.selected_service}</strong>` : 'No service selected';
+      return `<div class="example-card"><div class="example-title">${ex.title}</div><div style="font-size:11px;color:#64748b;margin-bottom:6px">${ex.channel||''} • ${ex.start?new Date(ex.start).toLocaleString():''}</div><div class="example-services">${svcsHtml}</div><div class="example-reason">${winner}</div></div>`;
+    }).join('');
+    loading.style.display='none'; grid.style.display='grid';
+  } catch { loading.textContent = 'Failed to load examples.'; }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('amazon-penalty').addEventListener('change', function() { currentPreferences.amazon_penalty = this.checked; loadSelectionExamples(); });
+});
 
 function setLanguage(lang) {
-currentPreferences.language_preference = lang;
-// Update UI
-['lang-en', 'lang-es', 'lang-both'].forEach(id => {
-const el = document.getElementById(id);
-el.classList.remove('enabled');
-el.classList.add('disabled');
-});
-document.getElementById(`lang-${lang}`).classList.remove('disabled');
-document.getElementById(`lang-${lang}`).classList.add('enabled');
+  currentPreferences.language_preference = lang;
+  ['en','es','both'].forEach(l => { const el=document.getElementById('lang-'+l); el.classList.toggle('enabled',l===lang); el.classList.toggle('disabled',l!==lang); });
 }
-
 function toggleProvider(scheme) {
-const index = currentPreferences.enabled_services.indexOf(scheme);
-if (index > -1) {
-currentPreferences.enabled_services.splice(index, 1);
-} else {
-currentPreferences.enabled_services.push(scheme);
+  if (currentPreferences.enabled_services.length === 0) {
+    currentPreferences.enabled_services = [
+      ...availableFilters.providers.map(p => p.scheme),
+      ...(availableFilters.amazon_services || []).map(s => s.scheme)
+    ].filter(s => s !== scheme);
+  } else {
+    const i = currentPreferences.enabled_services.indexOf(scheme);
+    if (i > -1) currentPreferences.enabled_services.splice(i, 1);
+    else currentPreferences.enabled_services.push(scheme);
+  }
+  renderProviders(); renderPriorities(); loadSelectionExamples();
 }
-renderProviders();
-renderPriorities(); // Update priority list when services change
-loadSelectionExamples(); // Refresh examples
-}
-
-function toggleSport(name) {
-const index = currentPreferences.disabled_sports.indexOf(name);
-if (index > -1) {
-currentPreferences.disabled_sports.splice(index, 1);
-} else {
-currentPreferences.disabled_sports.push(name);
-}
-renderSports();
-}
-
-function toggleLeague(name) {
-const index = currentPreferences.disabled_leagues.indexOf(name);
-if (index > -1) {
-currentPreferences.disabled_leagues.splice(index, 1);
-} else {
-currentPreferences.disabled_leagues.push(name);
-}
-renderLeagues();
-}
+function toggleSport(name) { const i=currentPreferences.disabled_sports.indexOf(name); if(i>-1)currentPreferences.disabled_sports.splice(i,1);else currentPreferences.disabled_sports.push(name); renderSports(); }
+function toggleLeague(name) { const i=currentPreferences.disabled_leagues.indexOf(name); if(i>-1)currentPreferences.disabled_leagues.splice(i,1);else currentPreferences.disabled_leagues.push(name); renderLeagues(); }
 
 async function savePreferences() {
-try {
-// Save filter preferences (services, sports, leagues)
-const filtersRes = await fetch('/api/filters/preferences', {
-method: 'POST',
-headers: {'Content-Type': 'application/json'},
-body: JSON.stringify({
-enabled_services: currentPreferences.enabled_services,
-disabled_sports: currentPreferences.disabled_sports,
-disabled_leagues: currentPreferences.disabled_leagues,
-language_preference: currentPreferences.language_preference,
-amazon_master_enabled: currentPreferences.amazon_master_enabled
-})
-});
-
-// Save priorities and Amazon penalty
-const prioritiesRes = await fetch('/api/filters/priorities', {
-method: 'POST',
-headers: {'Content-Type': 'application/json'},
-body: JSON.stringify({
-service_priorities: currentPreferences.service_priorities,
-amazon_penalty: currentPreferences.amazon_penalty
-})
-});
-
-if (filtersRes.ok && prioritiesRes.ok) {
-showStatus('Settings saved! Click Apply Filters Now to regenerate channels.', 'success');
-} else {
-showStatus('Failed to save settings', 'error');
-}
-} catch (err) {
-console.error('Error saving settings', err);
-showStatus('Error saving settings', 'error');
-}
+  try {
+    const [r1,r2] = await Promise.all([
+      fetch('/api/filters/preferences',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled_services:currentPreferences.enabled_services,disabled_sports:currentPreferences.disabled_sports,disabled_leagues:currentPreferences.disabled_leagues,language_preference:currentPreferences.language_preference,amazon_master_enabled:currentPreferences.amazon_master_enabled})}),
+      fetch('/api/filters/priorities',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service_priorities:currentPreferences.service_priorities,amazon_penalty:currentPreferences.amazon_penalty})}),
+    ]);
+    if (r1.ok && r2.ok) showToast('Filters saved — click Apply Filters Now to regenerate channels.', 'success');
+    else showToast('Failed to save filters', 'error');
+  } catch (err) { showToast('Error: ' + err.message, 'error'); }
 }
 
 async function applyFilters() {
-// Save first, then apply
-try {
-// Save filters
-const saveFiltersRes = await fetch('/api/filters/preferences', {
-method: 'POST',
-headers: {'Content-Type': 'application/json'},
-body: JSON.stringify({
-enabled_services: currentPreferences.enabled_services,
-disabled_sports: currentPreferences.disabled_sports,
-disabled_leagues: currentPreferences.disabled_leagues,
-language_preference: currentPreferences.language_preference,
-amazon_master_enabled: currentPreferences.amazon_master_enabled
-})
-});
-
-// Save priorities
-const savePrioritiesRes = await fetch('/api/filters/priorities', {
-method: 'POST',
-headers: {'Content-Type': 'application/json'},
-body: JSON.stringify({
-service_priorities: currentPreferences.service_priorities,
-amazon_penalty: currentPreferences.amazon_penalty
-})
-});
-
-if (!saveFiltersRes.ok || !savePrioritiesRes.ok) {
-showStatus('Failed to save settings', 'error');
-return;
+  try {
+    await savePreferences();
+    const res = await fetch('/api/apply-filters',{method:'POST',headers:{'Content-Type':'application/json'}});
+    if (res.ok) {
+      showToast('Applying filters... redirecting to dashboard in 2s', 'success', 4000);
+      setTimeout(() => window.location.href='/', 2000);
+    } else {
+      const d = await res.json().catch(()=>({}));
+      showToast(d.error||'Failed to apply filters', 'error');
+    }
+  } catch (err) { showToast('Error: ' + err.message, 'error'); }
 }
 
-// Now apply filters
-const applyRes = await fetch('/api/apply-filters', {
-method: 'POST',
-headers: {'Content-Type': 'application/json'}
-});
-
-if (applyRes.ok) {
-showStatus('Applying filters... This takes ~10 seconds. Check dashboard for progress.', 'success');
-
-// Redirect to dashboard after 2 seconds
-setTimeout(() => {
-window.location.href = '/';
-}, 2000);
-} else {
-const data = await applyRes.json();
-showStatus((data.error || 'Failed to apply filters'), 'error');
-}
-} catch (err) {
-showStatus('Error applying filters', 'error');
-}
-}
-
-function resetToDefaults() {
-if (confirm('Reset ALL filters to defaults? This will allow all services and sports through (nothing blocked).')) {
-const res = fetch('/api/filters/reset', { method: 'POST' });
-res.then(r => r.json()).then(data => {
-if (data.status === 'ok') {
-// Reload everything fresh from server
-loadFilters();
-showStatus('Reset to defaults — all services now allowed. Click Apply Filters Now to regenerate.', 'success');
-} else {
-showStatus('Failed to reset: ' + (data.message || 'unknown error'), 'error');
-}
-}).catch(() => showStatus('Error resetting filters', 'error'));
-}
+async function resetToDefaults() {
+  const ok = await showConfirm('Reset Filters', 'Reset all filters to defaults? All services and sports will be allowed through. Your settings (priority order, etc.) will also reset.');
+  if (!ok) return;
+  try {
+    const res = await fetch('/api/filters/reset',{method:'POST'});
+    const d = await res.json().catch(()=>({}));
+    if (d.status === 'ok') { loadFilters(); showToast('Filters reset — all services now allowed.', 'success'); }
+    else showToast('Reset failed: ' + (d.message||'unknown'), 'error');
+  } catch (err) { showToast('Error: ' + err.message, 'error'); }
 }
 
 async function clearStaleServices() {
-if (!confirm('Remove any enabled services that have no current events in the database? Your other settings will be preserved.')) return;
-try {
-const res = await fetch('/api/filters/clear-stale', { method: 'POST' });
-const data = await res.json();
-if (data.status === 'ok') {
-if (data.removed && data.removed.length > 0) {
-showStatus(`Removed ${data.removed.length} stale service(s): ${data.removed.join(', ')}. Reloading...`, 'success');
-setTimeout(() => loadFilters(), 1500);
-} else {
-showStatus('No stale services found — everything looks current!', 'success');
-}
-} else {
-showStatus('Failed: ' + (data.message || 'unknown error'), 'error');
-}
-} catch (err) {
-showStatus('Error clearing stale services', 'error');
-}
-}
-
-function showStatus(message, type) {
-const statusEl = document.getElementById('status-message');
-statusEl.textContent = message;
-statusEl.className = `status-message ${type}`;
-statusEl.style.display = 'block';
-setTimeout(() => {
-statusEl.style.display = 'none';
-}, 5000);
+  const ok = await showConfirm('Clear Stale Services', 'Remove enabled services that have no current events in the database? Other settings will be preserved.');
+  if (!ok) return;
+  try {
+    const data = await fetch('/api/filters/clear-stale',{method:'POST'}).then(r=>r.json());
+    if (data.status === 'ok') {
+      if (data.removed && data.removed.length) { showToast(`Removed ${data.removed.length} stale service(s).`, 'success'); setTimeout(loadFilters, 1200); }
+      else showToast('No stale services found.', 'info');
+    } else showToast(data.message||'Failed', 'error');
+  } catch (err) { showToast('Error: ' + err.message, 'error'); }
 }
 
 function updateStats() {
-document.getElementById('stat-providers').textContent = availableFilters.providers.length;
-document.getElementById('stat-sports').textContent = availableFilters.sports.length;
-document.getElementById('stat-leagues').textContent = availableFilters.leagues.length;
+  document.getElementById('stat-providers').textContent = availableFilters.providers.length;
+  document.getElementById('stat-sports').textContent = availableFilters.sports.length;
+  document.getElementById('stat-leagues').textContent = availableFilters.leagues.length;
 }
 
-// Initialize
 loadFilters();
 </script>
-</body>
-</html>
+{% endblock %}

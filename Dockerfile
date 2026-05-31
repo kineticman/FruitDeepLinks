@@ -62,7 +62,7 @@ RUN printf '%s\n' \
   '' \
   '# Start FruitDeepLinks web server' \
   'cd /app' \
-  'exec python3 -u /app/bin/fruitdeeplinks_server.py' \
+  'exec python3 -u /app/bin/fruitdeeplinks_v2.py' \
   > /app/start.sh \
   && chmod +x /app/start.sh
 
