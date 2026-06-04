@@ -94,6 +94,7 @@ DISPLAY_NAMES: dict[str, str] = {
     "victory": "Victory+",
     "gotham": "Gotham Sports",
     "marquee": "Marquee Sports Network",
+    "tubi": "Tubi",
 
     # Generic web
     "https": "Web - Other",
@@ -163,6 +164,7 @@ INTERNAL_PRIORITY: dict[str, int] = {
     "fanatiz_web": 20,
     "gotham": 20,
     "marquee": 20,
+    "tubi": 20,
     "vixapp": 21,
     "aiv_vix_premium": 21,
     "aiv_vix": 21,
@@ -239,6 +241,7 @@ DEFAULT_USER_PRIORITY: dict[str, int] = {
     "fanatiz_web": 62,
     "victory": 62,
     "gotham": 62,
+    "tubi": 62,
     "nesn": 61,
     "nesn_web": 61,
     "ncaa_march_madness": 60,

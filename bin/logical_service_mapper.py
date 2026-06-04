@@ -51,6 +51,8 @@ LOGICAL_SERVICE_MAP = {
     'www.beinsports.com': 'bein',
     'watch.nesn.com': 'nesn_web',
     'www.watch.nesn.com': 'nesn_web',
+    'tubitv.com': 'tubi',
+    'www.tubitv.com': 'tubi',
 }
 
 # Display names for logical services.

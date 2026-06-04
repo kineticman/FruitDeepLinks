@@ -242,7 +242,20 @@ def export_adb_lanes(db_path: Path, out_dir: Path, server_url: str) -> Path:
         else:
             log.info("adb_lanes has %d row(s).", total_rows)
 
-        # Build channels: distinct provider_code, lane_number, channel_id
+        # Load configured lane counts from provider_lanes so we always emit all
+        # N channels per provider, even if some lanes have no events yet.
+        cur.execute(
+            """
+            SELECT provider_code, COALESCE(adb_lane_count, 0) AS lane_count
+              FROM provider_lanes
+             WHERE COALESCE(adb_enabled, 0) = 1
+               AND COALESCE(adb_lane_count, 0) > 0
+            """
+        )
+        configured_lanes: Dict[str, int] = {row["provider_code"]: row["lane_count"] for row in cur.fetchall()}
+
+        # Build channels: start from lanes that have events, then fill in any
+        # configured lanes that are empty so the guide always shows the full set.
         cur.execute(
             """
             SELECT provider_code, lane_number, channel_id
@@ -251,8 +264,35 @@ def export_adb_lanes(db_path: Path, out_dir: Path, server_url: str) -> Path:
              ORDER BY provider_code, lane_number;
             """
         )
-        channels = cur.fetchall()
-        log.info("Found %d distinct ADB channels.", len(channels))
+        event_channels_raw = cur.fetchall()
+
+        # Track which (provider, lane) combos already have events
+        event_lane_set: set[tuple[str, int]] = set()
+        channels_list: list[tuple[str, int, str]] = []
+        for row in event_channels_raw:
+            event_lane_set.add((row["provider_code"], row["lane_number"]))
+            channels_list.append((row["provider_code"], row["lane_number"], row["channel_id"]))
+
+        # Add configured-but-empty lanes so the user sees all N channels
+        for provider_code, lane_count in sorted(configured_lanes.items()):
+            for lane_num in range(1, lane_count + 1):
+                if (provider_code, lane_num) not in event_lane_set:
+                    channel_id = f"{provider_code}{lane_num:02d}"
+                    channels_list.append((provider_code, lane_num, channel_id))
+
+        # Sort by provider then lane number for stable output
+        channels_list.sort(key=lambda t: (t[0], t[1]))
+
+        # Wrap as simple objects for downstream code that uses row["field"] access
+        channels = [{"provider_code": pc, "lane_number": ln, "channel_id": cid}
+                    for pc, ln, cid in channels_list]
+
+        log.info(
+            "ADB channels: %d with events + %d empty = %d total",
+            len(event_lane_set),
+            len(channels_list) - len(event_lane_set),
+            len(channels_list),
+        )
 
         # Ensure logo_url column exists (added in 0.3.x; idempotent)
         cur.execute("PRAGMA table_info(provider_lanes)")
@@ -427,6 +467,18 @@ def export_adb_lanes(db_path: Path, out_dir: Path, server_url: str) -> Path:
                 if gap_end > gap_start:
                     _add_placeholder_blocks(tv, channel_id, provider_label, gap_start, gap_end)
 
+        # Fill placeholder blocks for configured lanes that have zero events.
+        # Without this, channels with no events are silently omitted from the
+        # guide even though the user configured N lanes expecting N channels.
+        empty_window = timedelta(days=8)
+        for ch in channels:
+            ch_id = ch["channel_id"]
+            if ch_id in by_channel:
+                continue
+            provider_code = ch["provider_code"]
+            provider_label = get_provider_display_name(provider_code) or (provider_code or "").upper()
+            _add_placeholder_blocks(tv, ch_id, provider_label, pre_start, pre_start + empty_window)
+
         tree = ET.ElementTree(tv)
         tree.write(out_path, encoding="utf-8", xml_declaration=True)
         log.info("Wrote XMLTV file: %s", out_path)
@@ -455,10 +507,16 @@ def build_adb_m3u(
       ``adb_lanes_<provider_code>.m3u`` in the same directory (or
       ``adb_lanes_<provider_code>_apple.m3u`` for the http profile).
 
+    Emits ALL configured lanes (from provider_lanes.adb_lane_count), not just
+    those with events in adb_lanes, so the user always sees N channels in the
+    guide regardless of how many lanes have events assigned right now.
+
     deeplink_format: 'scheme' (default, Fire TV / Android — aiv:// style)
                      'http' (Apple TV — https://app.primevideo.com/ style)
     """
     cur = conn.cursor()
+
+    # Build the full lane list: lanes that have events + configured-but-empty lanes.
     cur.execute(
         """
         SELECT provider_code,
@@ -466,18 +524,41 @@ def build_adb_m3u(
                channel_id
           FROM adb_lanes
          GROUP BY provider_code, lane_number, channel_id
-         ORDER BY provider_code, lane_number;
         """
     )
-    rows = cur.fetchall()
-    if not rows:
-        log.warning("No rows in adb_lanes; skipping M3U export.")
+    event_rows = cur.fetchall()
+    event_set: set[tuple[str, int]] = {(r["provider_code"], r["lane_number"]) for r in event_rows}
+
+    # All configured providers and their lane counts
+    cur.execute(
+        """
+        SELECT provider_code, COALESCE(adb_lane_count, 0) AS lane_count
+          FROM provider_lanes
+         WHERE COALESCE(adb_enabled, 0) = 1
+           AND COALESCE(adb_lane_count, 0) > 0
+        """
+    )
+    configured: dict[str, int] = {r["provider_code"]: r["lane_count"] for r in cur.fetchall()}
+
+    # Merge: start from event rows, add empty lanes to reach the configured count
+    all_lanes: list[tuple[str, int, str]] = [
+        (r["provider_code"], r["lane_number"], r["channel_id"]) for r in event_rows
+    ]
+    for provider_code, lane_count in sorted(configured.items()):
+        for lane_num in range(1, lane_count + 1):
+            if (provider_code, lane_num) not in event_set:
+                all_lanes.append((provider_code, lane_num, f"{provider_code}{lane_num:02d}"))
+
+    all_lanes.sort(key=lambda t: (t[0], t[1]))
+
+    if not all_lanes:
+        log.warning("No ADB lanes configured; skipping M3U export.")
         return
 
-    # Group rows by provider_code so we can write per-provider M3Us.
-    by_provider: dict[str, list[sqlite3.Row]] = {}
-    for row in rows:
-        by_provider.setdefault(row["provider_code"], []).append(row)
+    # Group by provider_code so we can write per-provider M3Us.
+    by_provider: dict[str, list[tuple[str, int, str]]] = {}
+    for pc, ln, cid in all_lanes:
+        by_provider.setdefault(pc, []).append((pc, ln, cid))
 
     profile_suffix = "_apple" if deeplink_format == "http" else ""
 
@@ -488,15 +569,11 @@ def build_adb_m3u(
         return server_url.rstrip("/") + base
 
     # 1) Global M3U with ALL providers.
-    log.info("ADB M3U (global, %s): %d virtual channels", deeplink_format, len(rows))
+    log.info("ADB M3U (global, %s): %d virtual channels", deeplink_format, len(all_lanes))
     m3u_path.parent.mkdir(parents=True, exist_ok=True)
     with m3u_path.open("w", encoding="utf-8") as f:
         f.write("#EXTM3U\n\n")
-        for row in rows:
-            provider_code = row["provider_code"]
-            lane_number = int(row["lane_number"])
-            channel_id = row["channel_id"] or f"{provider_code}{lane_number:02d}"
-
+        for provider_code, lane_number, channel_id in all_lanes:
             provider_display = get_provider_display_name(provider_code) or provider_code
 
             name = f"{provider_display} {lane_number:02d}"
@@ -514,20 +591,18 @@ def build_adb_m3u(
 
     # 2) Per-provider M3Us: adb_lanes_<provider_code>[_apple].m3u
     base_dir = m3u_path.parent
-    for provider_code, provider_rows in sorted(by_provider.items()):
+    for provider_code, provider_lanes in sorted(by_provider.items()):
         provider_file = base_dir / f"adb_lanes_{provider_code}{profile_suffix}.m3u"
         log.info(
             "ADB M3U (%s, %s): %d virtual channels",
             provider_code,
             deeplink_format,
-            len(provider_rows),
+            len(provider_lanes),
         )
         with provider_file.open("w", encoding="utf-8") as f:
             f.write("#EXTM3U\n\n")
-            for row in provider_rows:
-                lane_number = int(row["lane_number"])
-                channel_id = row["channel_id"] or f"{provider_code}{lane_number:02d}"
-
+            for _pc, lane_number, channel_id in provider_lanes:
+                lane_number = int(lane_number)
                 provider_display = get_provider_display_name(provider_code) or provider_code
 
                 name = f"{provider_display} {lane_number:02d}"
