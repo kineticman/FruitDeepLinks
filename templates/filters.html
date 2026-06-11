@@ -312,20 +312,28 @@ function toggleProvider(scheme) {
 function toggleSport(name) { const i=currentPreferences.disabled_sports.indexOf(name); if(i>-1)currentPreferences.disabled_sports.splice(i,1);else currentPreferences.disabled_sports.push(name); renderSports(); }
 function toggleLeague(name) { const i=currentPreferences.disabled_leagues.indexOf(name); if(i>-1)currentPreferences.disabled_leagues.splice(i,1);else currentPreferences.disabled_leagues.push(name); renderLeagues(); }
 
-async function savePreferences() {
+async function savePreferences(opts) {
+  const silent = opts && opts.silent;
   try {
     const [r1,r2] = await Promise.all([
       fetch('/api/filters/preferences',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled_services:currentPreferences.enabled_services,disabled_sports:currentPreferences.disabled_sports,disabled_leagues:currentPreferences.disabled_leagues,language_preference:currentPreferences.language_preference,amazon_master_enabled:currentPreferences.amazon_master_enabled})}),
       fetch('/api/filters/priorities',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service_priorities:currentPreferences.service_priorities,amazon_penalty:currentPreferences.amazon_penalty})}),
     ]);
-    if (r1.ok && r2.ok) showToast('Filters saved — click Apply Filters Now to regenerate channels.', 'success');
-    else showToast('Failed to save filters', 'error');
-  } catch (err) { showToast('Error: ' + err.message, 'error'); }
+    if (r1.ok && r2.ok) {
+      if (!silent) showToast('Filters saved — click Apply Filters Now to regenerate channels.', 'success');
+      return true;
+    }
+    showToast('Failed to save filters', 'error');
+    return false;
+  } catch (err) { showToast('Error: ' + err.message, 'error'); return false; }
 }
 
 async function applyFilters() {
   try {
-    await savePreferences();
+    // Don't apply/redirect if the save failed — otherwise we'd regenerate
+    // channels from stale prefs and bounce the user to the dashboard as if
+    // it worked.
+    if (!await savePreferences({silent:true})) return;
     const res = await fetch('/api/apply-filters',{method:'POST',headers:{'Content-Type':'application/json'}});
     if (res.ok) {
       showToast('Applying filters... redirecting to dashboard in 2s', 'success', 4000);

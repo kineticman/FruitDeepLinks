@@ -50,12 +50,20 @@ def api_filter_priorities():
         })
 
     data = request.json or {}
-    prefs = get_preferences()
+    # Persist ONLY the keys this endpoint owns. Doing a full
+    # get_preferences()/save_preferences() round-trip here races with the
+    # parallel POST to /api/filters/preferences (the Filters page fires both
+    # at once): this handler would read the pre-save enabled_services /
+    # disabled_sports / disabled_leagues and write them back, silently
+    # reverting the user's just-saved filter selections.
+    updates = {}
     if "service_priorities" in data:
-        prefs["service_priorities"] = data["service_priorities"]
+        updates["service_priorities"] = data["service_priorities"]
     if "amazon_penalty" in data:
-        prefs["amazon_penalty"] = bool(data["amazon_penalty"])
-    if save_preferences(prefs):
+        updates["amazon_penalty"] = bool(data["amazon_penalty"])
+    if not updates:
+        return jsonify({"status": "success"})
+    if save_preferences(updates):
         log("Service priorities updated", "INFO")
         return jsonify({"status": "success"})
     return jsonify({"status": "error", "message": "Failed to save priorities"}), 500
