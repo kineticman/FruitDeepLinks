@@ -207,7 +207,7 @@ SETTINGS_DEFS: Dict[str, tuple] = {
         "How many virtual channels (lanes) to generate.",
     ),
     "expand_all_playables": (
-        "EXPAND_ALL_PLAYABLES", "bool", False,
+        "EXPAND_ALL_PLAYABLES", "bool", True,
         "Show Every Source as a Separate Channel",
         "Instead of auto-picking one \"best\" feed per event, list every enabled service's "
         "version of the same game as its own channel (Direct export + per-provider ADB lanes) "
