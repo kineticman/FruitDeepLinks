@@ -77,6 +77,7 @@ def load_user_preferences(conn: sqlite3.Connection) -> Dict[str, Any]:
       - enabled_services: JSON list of logical service codes
       - disabled_sports: JSON list
       - disabled_leagues: JSON list
+      - team_rules: JSON list of sport/league team selection rules
       - service_priorities: JSON object mapping service code -> int priority
       - amazon_penalty: JSON bool
       - amazon_master_enabled: JSON bool
@@ -88,6 +89,7 @@ def load_user_preferences(conn: sqlite3.Connection) -> Dict[str, Any]:
         "enabled_services": [],
         "disabled_sports": [],
         "disabled_leagues": [],
+        "team_rules": [],
         "service_priorities": get_default_service_priorities(),
         "amazon_penalty": True,
         "amazon_master_enabled": True,
@@ -114,7 +116,7 @@ def load_user_preferences(conn: sqlite3.Connection) -> Dict[str, Any]:
         result: Dict[str, Any] = dict(defaults)
 
         # Lists
-        for k in ("enabled_services", "disabled_sports", "disabled_leagues"):
+        for k in ("enabled_services", "disabled_sports", "disabled_leagues", "team_rules"):
             v = raw.get(k, None)
             if v is None:
                 continue
@@ -177,6 +179,112 @@ def load_user_preferences(conn: sqlite3.Connection) -> Dict[str, Any]:
         print(f"Warning: Could not load user preferences: {e}")
         return defaults
 
+def _norm_filter_value(value: Any) -> str:
+    return str(value or "").strip().casefold()
+
+
+def _event_team_context(event: Dict[str, Any]) -> tuple[List[Dict[str, Any]], str, str]:
+    """Return structured competitors plus the event's sport and league.
+
+    Apple competitors are intentionally read from raw_attributes_json instead
+    of titles.  Full names such as "Chicago Bulls" are safe identities while
+    nickname matching ("Bulls") would collide with college teams.
+    """
+    raw = event.get("raw_attributes_json") or "{}"
+    try:
+        attrs = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        attrs = {}
+    if not isinstance(attrs, dict):
+        attrs = {}
+
+    competitors = attrs.get("competitors") or []
+    if not isinstance(competitors, list):
+        competitors = []
+    competitors = [item for item in competitors if isinstance(item, dict)]
+
+    sport = attrs.get("sport_name") or ""
+    league = attrs.get("league_name") or ""
+
+    if not sport:
+        try:
+            genres = json.loads(event.get("genres_json") or "[]")
+            sport = next((item for item in genres if isinstance(item, str) and item), "")
+        except Exception:
+            pass
+    if not league:
+        try:
+            classifications = json.loads(event.get("classification_json") or "[]")
+            league = next(
+                (item.get("value") for item in classifications
+                 if isinstance(item, dict) and item.get("type") == "league" and item.get("value")),
+                "",
+            )
+        except Exception:
+            pass
+
+    return competitors, str(sport or ""), str(league or "")
+
+
+def _is_team_competitor(competitor: Dict[str, Any]) -> bool:
+    return _norm_filter_value(competitor.get("type")) in ("", "team")
+
+
+def _competitor_matches_selection(
+    competitor: Dict[str, Any], selected_team: Dict[str, Any]
+) -> bool:
+    selected_id = _norm_filter_value(selected_team.get("team_id") or selected_team.get("id"))
+    competitor_id = _norm_filter_value(competitor.get("id"))
+    if selected_id and competitor_id:
+        return selected_id == competitor_id
+    return bool(
+        _norm_filter_value(selected_team.get("name"))
+        and _norm_filter_value(selected_team.get("name"))
+        == _norm_filter_value(competitor.get("name"))
+    )
+
+
+def event_passes_team_rules(event: Dict[str, Any], team_rules: List[Any]) -> bool:
+    """Apply the rule scoped to this event's sport and league.
+
+    ``include`` keeps matchups containing any selected team. ``exclude``
+    removes matchups containing any selected team. Events without structured
+    team competitors follow include_unassigned, which defaults to True.
+    """
+    if not team_rules:
+        return True
+
+    competitors, sport, league = _event_team_context(event)
+    event_sport = _norm_filter_value(sport)
+    event_league = _norm_filter_value(league)
+
+    for rule in team_rules:
+        if not isinstance(rule, dict):
+            continue
+        if _norm_filter_value(rule.get("sport")) != event_sport:
+            continue
+        if _norm_filter_value(rule.get("league")) != event_league:
+            continue
+        mode = _norm_filter_value(rule.get("mode"))
+        if mode not in ("include", "exclude"):
+            continue
+
+        team_competitors = [item for item in competitors if _is_team_competitor(item)]
+        if not team_competitors:
+            return bool(rule.get("include_unassigned", True))
+
+        selected_teams = rule.get("teams") or []
+        selected_teams = [item for item in selected_teams if isinstance(item, dict)]
+        has_selected_team = any(
+            _competitor_matches_selection(competitor, selected)
+            for competitor in team_competitors
+            for selected in selected_teams
+        )
+        return has_selected_team if mode == "include" else not has_selected_team
+
+    return True
+
+
 def should_include_event(event: Dict[str, Any], preferences: Dict[str, Any]) -> bool:
     """
     Check if event should be included based on user preferences
@@ -190,6 +298,7 @@ def should_include_event(event: Dict[str, Any], preferences: Dict[str, Any]) -> 
     """
     disabled_sports = preferences.get("disabled_sports", [])
     disabled_leagues = preferences.get("disabled_leagues", [])
+    team_rules = preferences.get("team_rules", [])
 
     # Check genres (sports)
     if disabled_sports:
@@ -213,6 +322,9 @@ def should_include_event(event: Dict[str, Any], preferences: Dict[str, Any]) -> 
                         return False
         except Exception:
             pass
+
+    if not event_passes_team_rules(event, team_rules):
+        return False
 
     return True
 
@@ -837,4 +949,3 @@ if __name__ == "__main__":
     }
 
     print(f"Should include women's basketball: {should_include_event(event2, prefs)}")
-

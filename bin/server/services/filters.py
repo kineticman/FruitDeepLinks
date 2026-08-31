@@ -90,7 +90,10 @@ def get_available_filters() -> Dict[str, Any]:
     Filters UI. Providers, Amazon services, and ESPN services are split so the
     UI can show each group separately.
     """
-    empty = {"providers": [], "amazon_services": [], "espn_services": [], "sports": [], "leagues": []}
+    empty = {
+        "providers": [], "amazon_services": [], "espn_services": [],
+        "sports": [], "leagues": [], "teams": [],
+    }
     if not db_exists():
         return empty
 
@@ -172,7 +175,7 @@ def _build_filters(conn: sqlite3.Connection) -> Dict[str, Any]:
             """
             SELECT genres_json, COUNT(*) AS event_count
             FROM events
-            WHERE end_utc > datetime('now')
+            WHERE datetime(end_utc) > datetime('now')
               AND genres_json IS NOT NULL AND genres_json != '[]'
             GROUP BY genres_json
             """
@@ -191,36 +194,9 @@ def _build_filters(conn: sqlite3.Connection) -> Dict[str, Any]:
 
     sports_list = [{"name": k, "count": v} for k, v in sorted(sports.items(), key=lambda x: -x[1])]
 
-    # Leagues from classification_json
-    leagues: Dict[str, int] = {}
-    try:
-        cur.execute(
-            """
-            SELECT classification_json, COUNT(*) AS event_count
-            FROM events
-            WHERE end_utc > datetime('now')
-              AND classification_json IS NOT NULL AND classification_json != '[]'
-            GROUP BY classification_json
-            """
-        )
-        for row in cur.fetchall():
-            cj = row[0] if not isinstance(row, sqlite3.Row) else row["classification_json"]
-            ec = row[1] if not isinstance(row, sqlite3.Row) else row["event_count"]
-            try:
-                for item in json.loads(cj):
-                    if isinstance(item, dict) and item.get("type") == "league":
-                        name = item.get("value")
-                        if name:
-                            leagues[name] = leagues.get(name, 0) + ec
-            except Exception:
-                pass
-    except Exception:
-        pass
+    leagues_list = _build_active_leagues(conn)
 
-    leagues_list = [
-        {"name": k, "count": v}
-        for k, v in sorted(leagues.items(), key=lambda x: -x[1])[:50]
-    ]
+    teams_list = _build_active_teams(conn)
 
     return {
         "providers": providers,
@@ -228,7 +204,146 @@ def _build_filters(conn: sqlite3.Connection) -> Dict[str, Any]:
         "espn_services": espn_services,
         "sports": sports_list,
         "leagues": leagues_list,
+        "teams": teams_list,
     }
+
+
+def _build_active_leagues(conn: sqlite3.Connection) -> List[dict]:
+    """Return active leagues with the sports represented by their events."""
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT classification_json, genres_json, COUNT(*) AS event_count
+            FROM events
+            WHERE datetime(end_utc) > datetime('now')
+              AND classification_json IS NOT NULL
+              AND classification_json != '[]'
+            GROUP BY classification_json, genres_json
+            """
+        )
+    except Exception:
+        return []
+
+    leagues: Dict[str, dict] = {}
+    for row in cur.fetchall():
+        classification_json = row[0] if not isinstance(row, sqlite3.Row) else row["classification_json"]
+        genres_json = row[1] if not isinstance(row, sqlite3.Row) else row["genres_json"]
+        event_count = row[2] if not isinstance(row, sqlite3.Row) else row["event_count"]
+        try:
+            classifications = json.loads(classification_json)
+            genres = json.loads(genres_json or "[]")
+        except Exception:
+            continue
+
+        sports = {
+            genre for genre in genres
+            if isinstance(genre, str) and genre
+        } if isinstance(genres, list) else set()
+        for item in classifications if isinstance(classifications, list) else []:
+            if not isinstance(item, dict) or item.get("type") != "league":
+                continue
+            name = item.get("value")
+            if not name:
+                continue
+            entry = leagues.setdefault(name, {"name": name, "count": 0, "sports": set()})
+            entry["count"] += event_count
+            entry["sports"].update(sports)
+
+    return [
+        {"name": entry["name"], "count": entry["count"], "sports": sorted(entry["sports"])}
+        for entry in sorted(leagues.values(), key=lambda item: (-item["count"], item["name"].casefold()))
+    ]
+
+
+def _build_active_teams(conn: sqlite3.Connection) -> List[dict]:
+    """Extract exact team identities from structured data on active events.
+
+    This deliberately does not infer teams from titles or nicknames.  A title
+    search for "Bulls" would mix Chicago, Buffalo, and South Florida, while
+    Apple's competitor objects provide full names and stable IDs.
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute("PRAGMA table_info(events)")
+        columns = {row[1] for row in cur.fetchall()}
+        if "raw_attributes_json" not in columns:
+            return []
+        cur.execute(
+            """
+            SELECT id, raw_attributes_json, genres_json, classification_json
+            FROM events
+            WHERE datetime(end_utc) > datetime('now')
+              AND raw_attributes_json IS NOT NULL
+              AND raw_attributes_json != ''
+            """
+        )
+    except Exception:
+        return []
+
+    teams: Dict[str, dict] = {}
+    for row in cur.fetchall():
+        raw_json = row[1] if not isinstance(row, sqlite3.Row) else row["raw_attributes_json"]
+        genres_json = row[2] if not isinstance(row, sqlite3.Row) else row["genres_json"]
+        class_json = row[3] if not isinstance(row, sqlite3.Row) else row["classification_json"]
+        try:
+            attrs = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+        except Exception:
+            continue
+        if not isinstance(attrs, dict):
+            continue
+
+        sport = attrs.get("sport_name") or ""
+        league = attrs.get("league_name") or ""
+        if not sport:
+            try:
+                genres = json.loads(genres_json or "[]")
+                sport = next((value for value in genres if isinstance(value, str) and value), "")
+            except Exception:
+                pass
+        if not league:
+            try:
+                classifications = json.loads(class_json or "[]")
+                league = next(
+                    (item.get("value") for item in classifications
+                     if isinstance(item, dict) and item.get("type") == "league" and item.get("value")),
+                    "",
+                )
+            except Exception:
+                pass
+        if not sport or not league:
+            continue
+
+        competitors = attrs.get("competitors") or []
+        if not isinstance(competitors, list):
+            continue
+        seen_for_event = set()
+        for competitor in competitors:
+            if not isinstance(competitor, dict):
+                continue
+            if str(competitor.get("type") or "Team").casefold() != "team":
+                continue
+            name = str(competitor.get("name") or "").strip()
+            team_id = str(competitor.get("id") or "").strip()
+            if not name:
+                continue
+            identity = team_id or f"{sport.casefold()}|{league.casefold()}|{name.casefold()}"
+            if identity in seen_for_event:
+                continue
+            seen_for_event.add(identity)
+            entry = teams.setdefault(identity, {
+                "team_id": team_id,
+                "name": name,
+                "sport": str(sport),
+                "league": str(league),
+                "count": 0,
+            })
+            entry["count"] += 1
+
+    return sorted(
+        teams.values(),
+        key=lambda item: (item["sport"].casefold(), item["league"].casefold(), item["name"].casefold()),
+    )
 
 
 def expand_amazon(enabled_services: List[str]) -> List[str]:

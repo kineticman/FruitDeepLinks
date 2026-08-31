@@ -211,6 +211,7 @@ def api_filters_reset():
         prefs["enabled_services"] = []
         prefs["disabled_sports"] = []
         prefs["disabled_leagues"] = []
+        prefs["team_rules"] = []
         prefs["amazon_master_enabled"] = True
         if save_preferences(prefs):
             log("Filter preferences reset to defaults", "INFO")

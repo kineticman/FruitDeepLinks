@@ -107,12 +107,14 @@ def load_future_events(conn: sqlite3.Connection, days_ahead: int) -> List[Event]
     prefs = {}
     disabled_sports = []
     disabled_leagues = []
+    team_rules = []
 
     if FILTERING_AVAILABLE:
         try:
             prefs = load_user_preferences(conn)
             disabled_sports = prefs.get("disabled_sports", [])
             disabled_leagues = prefs.get("disabled_leagues", [])
+            team_rules = prefs.get("team_rules", [])
         except Exception:
             pass
 
@@ -143,10 +145,11 @@ def load_future_events(conn: sqlite3.Connection, days_ahead: int) -> List[Event]
             continue
 
         # Apply sports/league filtering if available
-        if FILTERING_AVAILABLE and (disabled_sports or disabled_leagues):
+        if FILTERING_AVAILABLE and (disabled_sports or disabled_leagues or team_rules):
             event_dict = {
                 "genres_json": genres_json,
-                "classification_json": classification_json
+                "classification_json": classification_json,
+                "raw_attributes_json": raw_json,
             }
             if not should_include_event(event_dict, prefs):
                 filtered_count += 1

@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Filters — FruitDeepLinks{% endblock %}
+{% block title %}Filters 2.0 — FruitDeepLinks{% endblock %}
 {% block head_extra %}<script src="/static/vendor/sortable.min.js"></script>{% endblock %}
-{% block page_title %}Filters{% endblock %}
-{% block page_subtitle %}<p class="subtitle">Select which streaming services and content types appear in your generated channels.</p>{% endblock %}
+{% block page_title %}Filters 2.0{% endblock %}
+{% block page_subtitle %}<p class="subtitle">Choose services, sports, leagues, and individual teams for your generated channels.</p>{% endblock %}
 
 {% block extra_style %}
 .section-desc { color: var(--text-muted); margin-bottom: 16px; font-size: 13px; line-height: 1.5; }
@@ -57,6 +57,31 @@
 .example-service { padding: 3px 8px; border-radius: 4px; font-size: 11px; background: var(--bg-card); border: 1px solid var(--border); }
 .example-service.winner { background: #14532d; border-color: #22c55e; color: #22c55e; font-weight: 700; }
 .example-reason { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+.team-controls { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) minmax(220px, 1.4fr); gap: 10px; margin-bottom: 14px; }
+.team-control label { display: block; color: var(--text-muted); font-size: 11px; font-weight: 700; margin-bottom: 5px; text-transform: uppercase; letter-spacing: .04em; }
+.team-control select, .team-control input {
+  width: 100%; min-height: 40px; color: var(--text); background: var(--bg-inset);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px;
+}
+.team-control select:focus, .team-control input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.team-mode-grid { display: grid; grid-template-columns: repeat(3, minmax(150px, 1fr)); gap: 10px; margin: 4px 0 14px; }
+.team-mode {
+  text-align: left; color: var(--text); background: var(--bg-inset); border: 2px solid var(--border);
+  border-radius: var(--radius); padding: 10px 12px; cursor: pointer;
+}
+.team-mode:hover { border-color: var(--accent); }
+.team-mode.active { border-color: var(--accent); background: var(--bg-card); box-shadow: inset 0 0 0 1px var(--accent); }
+.team-mode strong { display: block; margin-bottom: 3px; }
+.team-mode span { color: var(--text-muted); font-size: 11px; }
+.team-rule-options { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; padding: 10px 12px; background: var(--bg-inset); border-radius: var(--radius); }
+.excluded-team-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.excluded-team-chip {
+  border: 1px solid #ef4444; background: #7f1d1d; color: #fecaca; border-radius: 999px;
+  padding: 6px 10px; font-size: 12px; cursor: pointer;
+}
+.excluded-team-chip:hover { background: #991b1b; }
+.team-empty { padding: 22px; text-align: center; color: var(--text-muted); background: var(--bg-inset); border: 1px dashed var(--border); border-radius: var(--radius); }
+@media (max-width: 760px) { .team-controls, .team-mode-grid { grid-template-columns: 1fr; } }
 body { padding-bottom: 88px; }
 .actions-bar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
@@ -71,6 +96,7 @@ body { padding-bottom: 88px; }
   <div class="stat-box"><div class="stat-label">Services</div><div class="stat-value" id="stat-providers">-</div></div>
   <div class="stat-box"><div class="stat-label">Sports</div><div class="stat-value" id="stat-sports">-</div></div>
   <div class="stat-box"><div class="stat-label">Leagues</div><div class="stat-value" id="stat-leagues">-</div></div>
+  <div class="stat-box"><div class="stat-label">Active Teams</div><div class="stat-value" id="stat-teams">-</div></div>
 </div>
 
 <div class="card" style="margin-bottom:16px">
@@ -156,11 +182,56 @@ body { padding-bottom: 88px; }
   <div id="sports-grid" class="filter-grid" style="display:none"></div>
 </div>
 
-<div class="card">
+<div class="card" style="margin-bottom:16px">
   <h2>Leagues Filter</h2>
-  <p class="section-desc">Hide specific leagues or competitions.</p>
+  <p class="section-desc">Hide specific leagues or competitions. Only leagues belonging to enabled sports are shown.</p>
   <div id="leagues-loading" class="status-muted" style="padding:24px;text-align:center">Loading leagues...</div>
   <div id="leagues-grid" class="filter-grid" style="display:none"></div>
+</div>
+
+<div class="card">
+  <h2>Team Selection</h2>
+  <p class="section-desc">Choose an enabled sport and league, then show every team, only selected teams, or exclude selected teams. Rules affect only that league.</p>
+  <div class="team-controls">
+    <div class="team-control">
+      <label for="team-sport-select">Sport</label>
+      <select id="team-sport-select" onchange="selectTeamSport(this.value)"><option value="">Choose a sport…</option></select>
+    </div>
+    <div class="team-control">
+      <label for="team-league-select">League</label>
+      <select id="team-league-select" onchange="selectTeamLeague(this.value)" disabled><option value="">Choose a league…</option></select>
+    </div>
+    <div class="team-control">
+      <label for="team-search">Search selected league</label>
+      <input id="team-search" type="search" placeholder="Search teams…" oninput="setTeamSearch(this.value)" disabled>
+    </div>
+  </div>
+  <div id="team-mode-panel" style="display:none">
+    <div class="team-mode-grid">
+      <button type="button" class="team-mode" id="team-mode-all" onclick="setTeamMode('all')"><strong>Show all teams</strong><span>No team-level filtering for this league</span></button>
+      <button type="button" class="team-mode" id="team-mode-include" onclick="setTeamMode('include')"><strong>Only selected teams</strong><span>Keep games containing any selected team</span></button>
+      <button type="button" class="team-mode" id="team-mode-exclude" onclick="setTeamMode('exclude')"><strong>Exclude selected teams</strong><span>Hide games containing any selected team</span></button>
+    </div>
+    <div class="team-rule-options" id="team-rule-options" style="display:none">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+        <input type="checkbox" id="team-include-unassigned" checked onchange="setIncludeUnassigned(this.checked)" style="width:17px;height:17px;accent-color:var(--accent)">
+        Keep general programs with no identified teams
+      </label>
+      <span id="team-rule-status" class="filter-count"></span>
+    </div>
+  </div>
+  <div id="teams-grid" class="filter-grid"></div>
+  <div id="teams-empty" class="team-empty">Choose a sport and league to browse active teams.</div>
+  <div id="team-rules-section" style="display:none;margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+    <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
+      <div>
+        <strong>Saved team rules</strong>
+        <div class="filter-count">Rules remain saved while a sport or league is disabled and become active again when it is re-enabled. Click a rule to remove it.</div>
+      </div>
+      <button type="button" class="btn btn-secondary" onclick="clearTeamRules()">Clear team rules</button>
+    </div>
+    <div id="team-rules-list" class="excluded-team-list"></div>
+  </div>
 </div>
 
 <div class="actions-bar">
@@ -175,9 +246,12 @@ body { padding-bottom: 88px; }
 
 {% block extra_script %}
 <script>
-let currentPreferences = { enabled_services:[], disabled_sports:[], disabled_leagues:[], service_priorities:{}, amazon_penalty:true, amazon_master_enabled:true, language_preference:'en' };
-let availableFilters = { providers:[], amazon_services:[], espn_services:[], sports:[], leagues:[] };
+let currentPreferences = { enabled_services:[], disabled_sports:[], disabled_leagues:[], team_rules:[], service_priorities:{}, amazon_penalty:true, amazon_master_enabled:true, language_preference:'en' };
+let availableFilters = { providers:[], amazon_services:[], espn_services:[], sports:[], leagues:[], teams:[] };
 let sortableInstance = null;
+let selectedTeamSport = '';
+let selectedTeamLeague = '';
+let teamSearch = '';
 
 const SCRAPER_CONTROLLED_SERVICES = new Set(['kayo_web','kayo','fanatiz_web','fanatiz','bein','nesn','victory','gotham','espn_plus','espn_linear','espn_unlimited','espn_mlb_network','espn_mlb_tv']);
 
@@ -187,10 +261,13 @@ async function loadFilters() {
     availableFilters = data.filters;
     currentPreferences = data.preferences;
     if (!currentPreferences.enabled_services) currentPreferences.enabled_services = [];
+    if (!currentPreferences.disabled_sports) currentPreferences.disabled_sports = [];
+    if (!currentPreferences.disabled_leagues) currentPreferences.disabled_leagues = [];
+    if (!currentPreferences.team_rules) currentPreferences.team_rules = [];
     if (!currentPreferences.language_preference) currentPreferences.language_preference = 'en';
     if (currentPreferences.amazon_master_enabled === undefined) currentPreferences.amazon_master_enabled = true;
     await loadPriorities();
-    renderProviders(); renderAmazonServices(); renderEspnServices(); renderSports(); renderLeagues(); renderPriorities();
+    renderProviders(); renderAmazonServices(); renderEspnServices(); renderSports(); renderLeagues(); renderTeamExplorer(); renderPriorities();
     updateStats(); setLanguage(currentPreferences.language_preference); loadSelectionExamples();
   } catch (err) { showToast('Failed to load filters: ' + err.message, 'error'); }
 }
@@ -297,11 +374,229 @@ function renderSports() {
 function renderLeagues() {
   const grid = document.getElementById('leagues-grid'), loading = document.getElementById('leagues-loading');
   if (!availableFilters.leagues.length) { loading.textContent = 'No leagues data found.'; return; }
-  grid.innerHTML = availableFilters.leagues.map(l => {
+  const disabledSports = new Set(currentPreferences.disabled_sports || []);
+  const visibleLeagues = availableFilters.leagues.filter(league =>
+    !(league.sports || []).length || league.sports.some(sport => !disabledSports.has(sport))
+  );
+  if (!visibleLeagues.length) {
+    grid.innerHTML = ''; grid.style.display = 'none';
+    loading.textContent = 'No leagues found for the enabled sports.'; loading.style.display = 'block';
+    return;
+  }
+  grid.innerHTML = visibleLeagues.map(l => {
     const dis = currentPreferences.disabled_leagues.includes(l.name);
     return `<div class="filter-item ${dis?'disabled':'enabled'}" onclick="toggleLeague(\`${l.name}\`)"><div class="checkbox"></div><div class="filter-info"><div class="filter-name">${l.name}</div><div class="filter-count">${l.count} events</div></div></div>`;
   }).join('');
   loading.style.display='none'; grid.style.display='grid';
+}
+
+function teamKey(team) {
+  if (team.team_id) return `id:${team.team_id}`;
+  return `name:${team.name||''}`.toLocaleLowerCase();
+}
+
+function currentTeamRule() {
+  return (currentPreferences.team_rules || []).find(rule =>
+    rule.sport === selectedTeamSport && rule.league === selectedTeamLeague
+  ) || null;
+}
+
+function teamIsSelected(team) {
+  const rule = currentTeamRule();
+  return !!rule && (rule.teams || []).some(item => teamKey(item) === teamKey(team));
+}
+
+function fillSelect(select, values, placeholder, selected) {
+  select.replaceChildren();
+  const first = document.createElement('option');
+  first.value = ''; first.textContent = placeholder; select.appendChild(first);
+  values.forEach(value => {
+    const option = document.createElement('option');
+    option.value = value; option.textContent = value; option.selected = value === selected;
+    select.appendChild(option);
+  });
+}
+
+function enabledTeamSports() {
+  const disabled = new Set(currentPreferences.disabled_sports || []);
+  return [...new Set((availableFilters.teams || [])
+    .filter(team => team.sport && !disabled.has(team.sport))
+    .map(team => team.sport))]
+    .sort((a,b) => a.localeCompare(b));
+}
+
+function enabledTeamLeagues(sport) {
+  const disabled = new Set(currentPreferences.disabled_leagues || []);
+  return [...new Set((availableFilters.teams || [])
+    .filter(team => team.sport === sport && team.league && !disabled.has(team.league))
+    .map(team => team.league))]
+    .sort((a,b) => a.localeCompare(b));
+}
+
+function renderTeamExplorer() {
+  const sports = enabledTeamSports();
+  if (selectedTeamSport && !sports.includes(selectedTeamSport)) selectedTeamSport = '';
+  const select = document.getElementById('team-sport-select');
+  fillSelect(select, sports, sports.length ? 'Choose a sport…' : 'No enabled sports with active teams', selectedTeamSport);
+  select.disabled = !sports.length;
+  renderTeamLeagues();
+  renderTeamRulesSummary();
+}
+
+function renderTeamLeagues() {
+  const select = document.getElementById('team-league-select');
+  const leagues = enabledTeamLeagues(selectedTeamSport);
+  if (selectedTeamLeague && !leagues.includes(selectedTeamLeague)) selectedTeamLeague = '';
+  const placeholder = selectedTeamSport && !leagues.length ? 'No enabled leagues with active teams' : 'Choose a league…';
+  fillSelect(select, leagues, placeholder, selectedTeamLeague);
+  select.disabled = !selectedTeamSport || !leagues.length;
+  const search = document.getElementById('team-search');
+  search.disabled = !selectedTeamLeague;
+  if (!selectedTeamLeague) { teamSearch = ''; search.value = ''; }
+  renderTeamMode();
+  renderTeams();
+}
+
+function selectTeamSport(sport) {
+  selectedTeamSport = sport;
+  selectedTeamLeague = '';
+  teamSearch = '';
+  document.getElementById('team-search').value = '';
+  renderTeamLeagues();
+}
+
+function selectTeamLeague(league) {
+  selectedTeamLeague = league;
+  teamSearch = '';
+  document.getElementById('team-search').value = '';
+  document.getElementById('team-search').disabled = !league;
+  renderTeamMode();
+  renderTeams();
+}
+
+function setTeamSearch(value) {
+  teamSearch = (value || '').trim().toLocaleLowerCase();
+  renderTeams();
+}
+
+function setTeamMode(mode) {
+  if (!selectedTeamSport || !selectedTeamLeague) return;
+  const rules = currentPreferences.team_rules;
+  const index = rules.findIndex(rule => rule.sport === selectedTeamSport && rule.league === selectedTeamLeague);
+  if (mode === 'all') {
+    if (index > -1) rules.splice(index, 1);
+  } else if (index > -1) {
+    rules[index].mode = mode;
+  } else {
+    rules.push({sport:selectedTeamSport, league:selectedTeamLeague, mode, teams:[], include_unassigned:true});
+  }
+  renderTeamMode(); renderTeams(); renderTeamRulesSummary();
+}
+
+function setIncludeUnassigned(checked) {
+  const rule = currentTeamRule();
+  if (!rule) return;
+  rule.include_unassigned = !!checked;
+  renderTeamMode(); renderTeamRulesSummary();
+}
+
+function renderTeamMode() {
+  const panel = document.getElementById('team-mode-panel');
+  panel.style.display = selectedTeamLeague ? 'block' : 'none';
+  if (!selectedTeamLeague) return;
+  const rule = currentTeamRule();
+  const mode = rule ? rule.mode : 'all';
+  ['all','include','exclude'].forEach(value => {
+    document.getElementById(`team-mode-${value}`).classList.toggle('active', mode === value);
+  });
+  const options = document.getElementById('team-rule-options');
+  options.style.display = rule ? 'flex' : 'none';
+  if (rule) {
+    document.getElementById('team-include-unassigned').checked = rule.include_unassigned !== false;
+    const selected = (rule.teams || []).length;
+    const label = rule.mode === 'include' ? 'included' : 'excluded';
+    document.getElementById('team-rule-status').textContent = `${selected} ${selected === 1 ? 'team' : 'teams'} ${label}`;
+  }
+}
+
+function renderTeams() {
+  const grid = document.getElementById('teams-grid');
+  const empty = document.getElementById('teams-empty');
+  grid.replaceChildren();
+  if (!selectedTeamSport || !selectedTeamLeague) {
+    grid.style.display = 'none'; empty.style.display = 'block';
+    empty.textContent = enabledTeamSports().length
+      ? 'Choose a sport and league to browse active teams.'
+      : 'Enable a sport above to browse its active teams.';
+    return;
+  }
+  const teams = (availableFilters.teams || []).filter(team =>
+    team.sport === selectedTeamSport && team.league === selectedTeamLeague &&
+    (!teamSearch || team.name.toLocaleLowerCase().includes(teamSearch))
+  );
+  if (!teams.length) {
+    grid.style.display = 'none'; empty.style.display = 'block';
+    empty.textContent = teamSearch ? 'No active teams match that search.' : 'No active teams found for this league.';
+    return;
+  }
+  empty.style.display = 'none'; grid.style.display = 'grid';
+  const rule = currentTeamRule();
+  const mode = rule ? rule.mode : 'all';
+  teams.forEach(team => {
+    const selected = teamIsSelected(team);
+    const card = document.createElement('div');
+    const enabled = mode === 'include' ? selected : mode === 'exclude' ? !selected : true;
+    card.className = `filter-item ${enabled ? 'enabled' : 'disabled'}`;
+    card.title = mode === 'all' ? `Exclude ${team.name}` : `${selected ? 'Deselect' : 'Select'} ${team.name}`;
+    const checkbox = document.createElement('div'); checkbox.className = 'checkbox';
+    const info = document.createElement('div'); info.className = 'filter-info';
+    const name = document.createElement('div'); name.className = 'filter-name'; name.textContent = team.name;
+    const count = document.createElement('div'); count.className = 'filter-count'; count.textContent = `${team.count} active ${team.count === 1 ? 'game' : 'games'}`;
+    info.append(name, count); card.append(checkbox, info);
+    card.addEventListener('click', () => toggleTeam(team));
+    grid.appendChild(card);
+  });
+}
+
+function toggleTeam(team) {
+  let rule = currentTeamRule();
+  if (!rule) {
+    setTeamMode('exclude');
+    rule = currentTeamRule();
+  }
+  const key = teamKey(team);
+  const index = rule.teams.findIndex(item => teamKey(item) === key);
+  if (index > -1) rule.teams.splice(index, 1);
+  else rule.teams.push({team_id:team.team_id||'', name:team.name});
+  renderTeamMode(); renderTeams(); renderTeamRulesSummary();
+}
+
+function renderTeamRulesSummary() {
+  const section = document.getElementById('team-rules-section');
+  const list = document.getElementById('team-rules-list');
+  list.replaceChildren();
+  const rules = currentPreferences.team_rules || [];
+  section.style.display = rules.length ? 'block' : 'none';
+  rules.forEach((rule, index) => {
+    const names = (rule.teams || []).map(team => team.name).filter(Boolean);
+    const action = rule.mode === 'include' ? 'Only' : 'Exclude';
+    const selection = names.length <= 2 ? names.join(', ') : `${names.slice(0,2).join(', ')} +${names.length-2}`;
+    const chip = document.createElement('button');
+    chip.type = 'button'; chip.className = 'excluded-team-chip';
+    const dormant = (currentPreferences.disabled_sports || []).includes(rule.sport) ||
+      (currentPreferences.disabled_leagues || []).includes(rule.league);
+    chip.textContent = `${action} ${selection || 'no teams'} · ${rule.league}${dormant ? ' (disabled)' : ''} ×`;
+    chip.addEventListener('click', () => {
+      currentPreferences.team_rules.splice(index, 1);
+      renderTeamMode(); renderTeams(); renderTeamRulesSummary();
+    });
+    list.appendChild(chip);
+  });
+}
+
+function clearTeamRules() {
+  currentPreferences.team_rules = [];
+  renderTeamMode(); renderTeams(); renderTeamRulesSummary();
 }
 
 function renderPriorities() {
@@ -369,14 +664,14 @@ function toggleProvider(scheme) {
   }
   renderProviders(); renderPriorities(); loadSelectionExamples();
 }
-function toggleSport(name) { const i=currentPreferences.disabled_sports.indexOf(name); if(i>-1)currentPreferences.disabled_sports.splice(i,1);else currentPreferences.disabled_sports.push(name); renderSports(); }
-function toggleLeague(name) { const i=currentPreferences.disabled_leagues.indexOf(name); if(i>-1)currentPreferences.disabled_leagues.splice(i,1);else currentPreferences.disabled_leagues.push(name); renderLeagues(); }
+function toggleSport(name) { const i=currentPreferences.disabled_sports.indexOf(name); if(i>-1)currentPreferences.disabled_sports.splice(i,1);else currentPreferences.disabled_sports.push(name); renderSports(); renderLeagues(); renderTeamExplorer(); }
+function toggleLeague(name) { const i=currentPreferences.disabled_leagues.indexOf(name); if(i>-1)currentPreferences.disabled_leagues.splice(i,1);else currentPreferences.disabled_leagues.push(name); renderLeagues(); renderTeamExplorer(); }
 
 async function savePreferences(opts) {
   const silent = opts && opts.silent;
   try {
     const [r1,r2] = await Promise.all([
-      fetch('/api/filters/preferences',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled_services:currentPreferences.enabled_services,disabled_sports:currentPreferences.disabled_sports,disabled_leagues:currentPreferences.disabled_leagues,language_preference:currentPreferences.language_preference,amazon_master_enabled:currentPreferences.amazon_master_enabled})}),
+      fetch('/api/filters/preferences',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled_services:currentPreferences.enabled_services,disabled_sports:currentPreferences.disabled_sports,disabled_leagues:currentPreferences.disabled_leagues,team_rules:currentPreferences.team_rules,language_preference:currentPreferences.language_preference,amazon_master_enabled:currentPreferences.amazon_master_enabled})}),
       fetch('/api/filters/priorities',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service_priorities:currentPreferences.service_priorities,amazon_penalty:currentPreferences.amazon_penalty})}),
     ]);
     if (r1.ok && r2.ok) {
@@ -406,7 +701,7 @@ async function applyFilters() {
 }
 
 async function resetToDefaults() {
-  const ok = await showConfirm('Reset Filters', 'Reset all filters to defaults? All services and sports will be allowed through. Your settings (priority order, etc.) will also reset.');
+  const ok = await showConfirm('Reset Filters', 'Reset all filters to defaults? All services, sports, leagues, and teams will be allowed through. Your settings (priority order, etc.) will also reset.');
   if (!ok) return;
   try {
     const res = await fetch('/api/filters/reset',{method:'POST'});
@@ -432,6 +727,7 @@ function updateStats() {
   document.getElementById('stat-providers').textContent = availableFilters.providers.length;
   document.getElementById('stat-sports').textContent = availableFilters.sports.length;
   document.getElementById('stat-leagues').textContent = availableFilters.leagues.length;
+  document.getElementById('stat-teams').textContent = availableFilters.teams.length;
 }
 
 loadFilters();

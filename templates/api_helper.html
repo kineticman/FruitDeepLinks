@@ -349,7 +349,7 @@ docker logs -f fruitdeeplinks | grep DETECTOR
 <div class="card" style="margin-bottom:14px">
   <h2>Available Filters</h2>
   <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/filters</code></div>
-  <p class="description">Get all available streaming services, sports, and leagues with event counts, plus current user preferences.</p>
+  <p class="description">Get all available streaming services, sports, leagues, and active teams with event counts, plus current user preferences. League entries include a <code>sports</code> array for their associated sports.</p>
   <pre>curl "$BASE/api/filters" | jq</pre>
 </div>
 
@@ -357,11 +357,12 @@ docker logs -f fruitdeeplinks | grep DETECTOR
   <h2>User Filter Preferences</h2>
   <div class="endpoint-line"><span class="tag tag-get">GET</span><code>/api/filters/preferences</code></div>
   <div class="endpoint-line"><span class="tag tag-post">POST</span><code>/api/filters/preferences</code></div>
-  <p class="description">View or update content filtering preferences. Control which services, sports, and leagues appear in generated playlists.<br>Tip: use exact names from <code>/api/filters</code> (apostrophes/spaces matter).</p>
+  <p class="description">View or update content filtering preferences. Control which services, sports, leagues, and teams appear in generated playlists.<br>Tip: use exact identities from <code>/api/filters</code>.</p>
   <div class="params">
     <div><span class="param-name">enabled_services</span>: Array of service codes to include (empty = all enabled)</div>
     <div><span class="param-name">disabled_sports</span>: Array of sports to exclude</div>
     <div><span class="param-name">disabled_leagues</span>: Array of leagues to exclude</div>
+    <div><span class="param-name">team_rules</span>: Per-sport/league rules with <code>include</code> or <code>exclude</code> mode, selected teams, and teamless-program behavior</div>
   </div>
   <pre># View current preferences
 curl "$BASE/api/filters/preferences" | jq
@@ -372,7 +373,8 @@ curl -X POST "$BASE/api/filters/preferences" \
   -d '{
   "enabled_services": ["sportscenter", "peacock_web"],
   "disabled_sports":  ["Cricket"],
-  "disabled_leagues": ["WNBA"]
+  "disabled_leagues": ["WNBA"],
+  "team_rules": [{"sport":"Football","league":"College Football","mode":"include","teams":[{"team_id":"umc.cst.example","name":"Indiana Hoosiers"}],"include_unassigned":true}]
 }'</pre>
 </div>
 
@@ -520,7 +522,7 @@ curl -N "$BASE/api/logs/stream"</pre>
   <div class="note" style="background:#064e3b;border-color:#10b981">
     <div class="note-title" style="color:#6ee7b7">What Gets PRESERVED</div>
     <ul style="margin:8px 0 0 20px;padding:0;color:#a7f3d0">
-      <li>User filter preferences (enabled_services, disabled_sports, disabled_leagues)</li>
+      <li>User filter preferences (enabled_services, disabled_sports, disabled_leagues, team_rules)</li>
       <li>ADB provider configuration (provider_lanes table)</li>
       <li>Amazon service definitions (amazon_services table)</li>
       <li>Manual playable overrides (amazon_playable_overrides table)</li>

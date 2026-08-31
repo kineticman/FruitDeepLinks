@@ -22,6 +22,7 @@ _DEFAULTS: Dict[str, Any] = {
     "enabled_services": [],
     "disabled_sports": [],
     "disabled_leagues": [],
+    "team_rules": [],
     "service_priorities": {},
     "amazon_penalty": True,
     "amazon_master_enabled": True,
@@ -78,6 +79,7 @@ def load(conn: sqlite3.Connection) -> Dict[str, Any]:
     ]
     result["disabled_sports"] = _list("disabled_sports")
     result["disabled_leagues"] = _list("disabled_leagues")
+    result["team_rules"] = _list("team_rules")
     result["service_priorities"] = _json("service_priorities", {})
     result["amazon_penalty"] = _bool("amazon_penalty", True)
     result["amazon_master_enabled"] = _bool("amazon_master_enabled", True)

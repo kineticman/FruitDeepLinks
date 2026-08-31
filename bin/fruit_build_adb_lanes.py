@@ -5,7 +5,7 @@ fruit_build_adb_lanes.py
 Builds per-provider ADB lanes into the `adb_lanes` table from `events` + `playables`,
 respecting:
 - provider_lanes.adb_enabled + provider_lanes.adb_lane_count
-- user_preferences: enabled_services, disabled_sports, disabled_leagues
+- user_preferences: enabled_services, disabled_sports, disabled_leagues, team_rules
 
 Semantics:
 - enabled_services = [] (or missing) means "allow all services".
@@ -90,6 +90,7 @@ def load_user_preferences(conn: sqlite3.Connection, log: logging.Logger) -> Dict
         "enabled_services": [],
         "disabled_sports": [],
         "disabled_leagues": [],
+        "team_rules": [],
         "language_preference": "en",
         "amazon_master_enabled": True,
     }
@@ -141,6 +142,8 @@ def load_user_preferences(conn: sqlite3.Connection, log: logging.Logger) -> Dict
     ]
     prefs["disabled_sports"] = get_list("disabled_sports")
     prefs["disabled_leagues"] = get_list("disabled_leagues")
+    team_rules_raw = safe_json_loads(raw.get("team_rules", ""))
+    prefs["team_rules"] = team_rules_raw if isinstance(team_rules_raw, list) else []
 
     lang_raw = raw.get("language_preference")
     if lang_raw:
@@ -155,10 +158,11 @@ def load_user_preferences(conn: sqlite3.Connection, log: logging.Logger) -> Dict
             prefs["amazon_master_enabled"] = parsed
 
     log.info(
-        "ADB filters loaded: enabled_services=%s disabled_sports=%d disabled_leagues=%d",
+        "ADB filters loaded: enabled_services=%s disabled_sports=%d disabled_leagues=%d team_rules=%d",
         ("ALL" if not prefs["enabled_services"] else str(len(prefs["enabled_services"]))),
         len(prefs["disabled_sports"]),
         len(prefs["disabled_leagues"]),
+        len(prefs["team_rules"]),
     )
     return prefs
 
@@ -191,8 +195,79 @@ def dt_to_iso(d: dt.datetime) -> str:
     return d.isoformat()  # ...+00:00
 
 
-def should_include_event(classification_json: str, disabled_sports: Sequence[str], disabled_leagues: Sequence[str]) -> bool:
-    if not disabled_sports and not disabled_leagues:
+def _norm_filter_value(value: Any) -> str:
+    return str(value or "").strip().casefold()
+
+
+def _passes_team_rules(raw_attributes_json: str, classification_json: str, team_rules: Sequence[Any]) -> bool:
+    if not team_rules:
+        return True
+    attrs = safe_json_loads(raw_attributes_json or "")
+    if not isinstance(attrs, dict):
+        attrs = {}
+    competitors = attrs.get("competitors") or []
+    if not isinstance(competitors, list):
+        competitors = []
+
+    sport = _norm_filter_value(attrs.get("sport_name"))
+    league = _norm_filter_value(attrs.get("league_name"))
+    if not sport or not league:
+        parsed = safe_json_loads(classification_json or "")
+        if isinstance(parsed, list):
+            for item in parsed:
+                if not isinstance(item, dict):
+                    continue
+                kind = _norm_filter_value(item.get("type"))
+                value = _norm_filter_value(item.get("value"))
+                if kind == "sport" and not sport:
+                    sport = value
+                elif kind == "league" and not league:
+                    league = value
+
+    for rule in team_rules:
+        if not isinstance(rule, dict):
+            continue
+        if _norm_filter_value(rule.get("sport")) != sport or _norm_filter_value(rule.get("league")) != league:
+            continue
+        mode = _norm_filter_value(rule.get("mode"))
+        if mode not in ("include", "exclude"):
+            continue
+        team_competitors = [
+            item for item in competitors
+            if isinstance(item, dict) and _norm_filter_value(item.get("type")) in ("", "team")
+        ]
+        if not team_competitors:
+            return bool(rule.get("include_unassigned", True))
+        selected_teams = [item for item in (rule.get("teams") or []) if isinstance(item, dict)]
+        matched = False
+        for competitor in team_competitors:
+            for selected in selected_teams:
+                selected_id = _norm_filter_value(selected.get("team_id") or selected.get("id"))
+                competitor_id = _norm_filter_value(competitor.get("id"))
+                if selected_id and competitor_id:
+                    if selected_id == competitor_id:
+                        matched = True
+                        break
+                elif (
+                    _norm_filter_value(selected.get("name"))
+                    and _norm_filter_value(selected.get("name")) == _norm_filter_value(competitor.get("name"))
+                ):
+                    matched = True
+                    break
+            if matched:
+                break
+        return matched if mode == "include" else not matched
+    return True
+
+
+def should_include_event(
+    classification_json: str,
+    disabled_sports: Sequence[str],
+    disabled_leagues: Sequence[str],
+    raw_attributes_json: str = "",
+    team_rules: Sequence[Any] = (),
+) -> bool:
+    if not disabled_sports and not disabled_leagues and not team_rules:
         return True
 
     cj = classification_json or ""
@@ -222,6 +297,9 @@ def should_include_event(classification_json: str, disabled_sports: Sequence[str
     if sport_vals and any(norm(v) in ds for v in sport_vals):
         return False
     if league_vals and any(norm(v) in dl for v in league_vals):
+        return False
+
+    if not _passes_team_rules(raw_attributes_json, classification_json, team_rules):
         return False
 
     # Don't do raw substring matching - it's too aggressive and filters out
@@ -292,7 +370,13 @@ def load_events_for_provider(
     """
     cur = conn.cursor()
 
-    select_cols = "e.id, e.title, e.start_utc, e.end_utc, e.start_ms, e.end_ms, e.classification_json"
+    cur.execute("PRAGMA table_info(events)")
+    event_columns = {row[1] for row in cur.fetchall()}
+    raw_attributes_select = "e.raw_attributes_json" if "raw_attributes_json" in event_columns else "''"
+    select_cols = (
+        "e.id, e.title, e.start_utc, e.end_utc, e.start_ms, e.end_ms, "
+        f"e.classification_json, {raw_attributes_select} AS raw_attributes_json"
+    )
     if expand_all_playables:
         select_cols += ", p.playable_id, p.service_name, p.locale, p.title AS p_title, p.priority, p.logical_service, p.locale_fallback, p.feed_name"
 
@@ -382,7 +466,7 @@ def load_events_for_provider(
         by_event: Dict[str, Dict[str, Any]] = {}
         playables_by_event: Dict[str, List[Dict[str, Any]]] = {}
         for row in cur.fetchall():
-            eid, title, start_utc, end_utc, start_ms, end_ms, classification_json, playable_id, service_name, locale, p_title, priority, logical_service, locale_fallback, feed_name = row
+            eid, title, start_utc, end_utc, start_ms, end_ms, classification_json, raw_attributes_json, playable_id, service_name, locale, p_title, priority, logical_service, locale_fallback, feed_name = row
             if language_preference != "both":
                 is_spanish, _ = _classify_espn_locale(
                     {"service_name": service_name, "locale": locale, "title": p_title, "locale_fallback": locale_fallback}
@@ -399,6 +483,7 @@ def load_events_for_provider(
                 "start_ms": start_ms,
                 "end_ms": end_ms,
                 "classification_json": classification_json or "",
+                "raw_attributes_json": raw_attributes_json or "",
             }
             playables_by_event.setdefault(eid, []).append(
                 {
@@ -418,7 +503,7 @@ def load_events_for_provider(
                 out.append({**by_event[eid], "playable_id": playable["playable_id"], "playable_label": label})
         return out
 
-    for (eid, title, start_utc, end_utc, start_ms, end_ms, classification_json) in cur.fetchall():
+    for (eid, title, start_utc, end_utc, start_ms, end_ms, classification_json, raw_attributes_json) in cur.fetchall():
         out.append(
             {
                 "id": eid,
@@ -428,6 +513,7 @@ def load_events_for_provider(
                 "start_ms": start_ms,
                 "end_ms": end_ms,
                 "classification_json": classification_json or "",
+                "raw_attributes_json": raw_attributes_json or "",
             }
         )
     return out
@@ -513,6 +599,7 @@ def build_adb_lanes(db_path: str, provider_filter: Optional[str] = None) -> None
     enabled_services: List[str] = prefs.get("enabled_services") or []
     disabled_sports: List[str] = prefs.get("disabled_sports") or []
     disabled_leagues: List[str] = prefs.get("disabled_leagues") or []
+    team_rules: List[Any] = prefs.get("team_rules") or []
     expand_all_playables: bool = bool(get_setting(conn, "expand_all_playables", False))
     language_preference: str = prefs.get("language_preference", "en")
     amazon_master_enabled: bool = prefs.get("amazon_master_enabled", True)
@@ -594,7 +681,10 @@ def build_adb_lanes(db_path: str, provider_filter: Optional[str] = None) -> None
             if not st or not en:
                 null_ts += 1
                 continue
-            if not should_include_event(ev.get("classification_json", ""), disabled_sports, disabled_leagues):
+            if not should_include_event(
+                ev.get("classification_json", ""), disabled_sports, disabled_leagues,
+                ev.get("raw_attributes_json", ""), team_rules,
+            ):
                 continue
             filtered.append(ev)
 

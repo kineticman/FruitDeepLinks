@@ -43,7 +43,7 @@ except ImportError:
     FILTERING_AVAILABLE = False
 
     def load_user_preferences(conn):
-        return {"enabled_services": [], "disabled_sports": [], "disabled_leagues": []}
+        return {"enabled_services": [], "disabled_sports": [], "disabled_leagues": [], "team_rules": []}
 
     def should_include_event(event, prefs):
         return True
@@ -948,4 +948,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main() or 0)
-
