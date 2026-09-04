@@ -2,7 +2,7 @@
 
 <img src="templates/logo.png" alt="FruitDeepLinks" width="320">
 
-**Universal Sports Streaming Aggregator — v2.0.0**
+**Universal Sports Streaming Aggregator — v2.3.0**
 
 FruitDeepLinks scrapes Apple TV's Sports aggregation API plus 10 regional services to build a unified sports EPG with deeplinks to 24+ streaming apps. Export M3U/XMLTV for Channels DVR, ADBTuner, CC4C, and PrismCast.
 
@@ -29,7 +29,14 @@ FruitDeepLinks creates virtual TV channels in Channels DVR with deeplinks that l
 
 ---
 
-## 🆕 What's New in v2.0.0
+## 🆕 What's New in v2.3.0
+
+### Team-Level Filtering
+
+- **Team selection rules** — on the Filters page, keep only selected teams or exclude selected teams within a specific sport and league
+- **Exact team identities** — matches Apple TV's structured competitor IDs (with full-name fallback), avoiding nickname collisions between teams
+- **Safe handling of general programming** — choose whether pregame shows and other events without identified teams remain visible
+- **Consistent exports** — team rules apply to direct channels, virtual lanes, and ADB provider lanes
 
 ### v2 Server Refactor
 
@@ -244,7 +251,7 @@ Per-provider: `/out/adb_lanes_aiv.m3u`, `/out/adb_lanes_aiv_apple.m3u`, etc.
 
 2. **Pipeline** (`daily_refresh.py`) — 15-step orchestrator: scrape → migrate → import → enrich → build lanes → export; runs on schedule or manually via dashboard
 
-3. **Filter Engine** — user-configurable service preferences, sport/league selection, multi-service priority resolution, Amazon channel expansion
+3. **Filter Engine** — user-configurable service, sport, league, and team selection; multi-service priority resolution; Amazon channel expansion
 
 4. **Export Engine** — generates M3U + XMLTV for direct channels, virtual lanes, and ADB lanes; applies device profiles (Fire TV scheme vs. HTTPS)
 
@@ -282,6 +289,10 @@ Enable only Prime Video + Peacock → ~200 events filtered to ~40.
 ### Soccer Enthusiast
 
 Enable Paramount+ (Champions League), ViX (Liga MX), Peacock (Premier League). Disable Basketball, Baseball, Hockey → only soccer events from your services.
+
+### Follow Your Teams
+
+On `/filters`, choose a sport and league, select **Only selected teams**, then pick your teams. The rule keeps matchups involving any selected team; optionally keep teamless programming such as pregame shows.
 
 ### Disable Scrapers You Don't Need
 
@@ -343,7 +354,7 @@ Database size: ~20 MB
 
 ## 🗓️ Roadmap
 
-### Completed in v2.0.0
+### Completed
 
 - [x] Flask v2 app factory with blueprint routing
 - [x] Settings page — full UI config, no .env required
@@ -354,12 +365,12 @@ Database size: ~20 MB
 - [x] ESPN Watch Graph enrichment for Fire TV deeplinks
 - [x] Regional scrapers: Kayo, Fanatiz, beIN, NESN, Victory+, Gotham
 - [x] XMLTV standards compliance (`<live/>`, `<new/>`, structured categories)
+- [x] Team-level filtering for direct, virtual-lane, and ADB exports
 
 ### Coming Soon
 
 - [ ] Stabilize deeplinks for experimental services (Fanatiz, beIN, Gotham, Victory+, NESN)
 - [ ] User-selectable Amazon Prime Video channel filtering
-- [ ] Team-based filtering
 - [ ] Time-of-day event filters
 
 ---

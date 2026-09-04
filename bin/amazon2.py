@@ -154,7 +154,8 @@ class HttpProbeResult:
     fallback_reason: str
 
 def _utcnow_iso() -> str:
-    return _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    now = _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0)
+    return now.isoformat().replace("+00:00", "Z")
 
 
 
