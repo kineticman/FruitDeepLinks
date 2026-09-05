@@ -13,7 +13,7 @@ Architecture:
 - Scrapes Apple TV Sports API into apple_events.db
 - Uses GZIP compression for raw_json (70-80% space savings)
 - Supports incremental updates (skips already-fetched events)
-- Multiple search terms for comprehensive coverage
+- Multiple search terms plus paginated related-game shelves for discovery
 - Smart deduplication and crash recovery
 - Separate from fruit_events.db (master aggregated DB)
 
@@ -547,6 +547,8 @@ class HybridAPIClient:
         # Last-call diagnostics (sanitized) for logging / troubleshooting
         self.last_debug: dict = {}
         self.last_error: Optional[str] = None
+        self._completed_shelves = set()
+        self._discovered_shelf_events = set()
     
     def fetch_event_v3(self, event_id: str) -> dict:
         """Fetch event using hybrid approach (requests first, Selenium fallback).
@@ -561,6 +563,10 @@ class HybridAPIClient:
         )
         url = f"{base}?{params}"
 
+        return self._fetch_url(url, event_id)
+
+    def _fetch_url(self, url: str, event_id: str) -> dict:
+        """Shared authenticated transport for event details and shelf pages."""
         self.last_error = None
         self.last_debug = {
             "event_id": event_id,
@@ -641,6 +647,57 @@ class HybridAPIClient:
 
         self.last_debug["selenium"] = sel_info
         return data
+
+    def fetch_shelf_v3(self, shelf: dict, token: str) -> dict:
+        # Carry collection context, but keep authentication and host under our control.
+        context = urllib.parse.parse_qs(
+            urllib.parse.urlsplit(shelf.get("url", "")).query
+        )
+        params = {k: v[-1] for k, v in context.items() if k.startswith("ctx_")}
+        params.update(caller="web", locale="en-US", pfm="web", sf="143441",
+                      v="90", utscf=self.utscf, utsk=self.utsk, nextToken=token)
+        shelf_id = shelf["id"]
+        url = ("https://tv.apple.com/api/uts/v3/shelves/"
+               + urllib.parse.quote(shelf_id, safe="")
+               + "?" + urllib.parse.urlencode(params))
+        return self._fetch_url(url, shelf_id)
+
+    def iter_shelf_events(self, data: dict):
+        """Discover all pages, retaining each page's playable/channel metadata."""
+        for initial in data.get("data", {}).get("canvas", {}).get("shelves", []):
+            shelf_id = initial.get("id")
+            page, parent = initial, data
+            tokens = set()
+            pages = 0
+            while True:
+                for item in page.get("items", []):
+                    event_id = item.get("id")
+                    if (item.get("type") == "SportingEvent" and event_id
+                            and event_id not in self._discovered_shelf_events):
+                        self._discovered_shelf_events.add(event_id)
+                        yield item, parent
+                token = page.get("nextToken")
+                key = (shelf_id, initial.get("url", ""))
+                if token is None or token == "" or not shelf_id:
+                    if shelf_id:
+                        self._completed_shelves.add(key)
+                    break
+                if key in self._completed_shelves:
+                    break
+                token = str(token)
+                if token in tokens or pages >= 100:
+                    print(f"  [Shelf warning] {shelf_id}: pagination stopped (repeated token or page limit)")
+                    break
+                tokens.add(token)
+                response = self.fetch_shelf_v3(initial, token)
+                next_page = response.get("data", {}).get("shelf")
+                if not isinstance(next_page, dict) or not isinstance(next_page.get("items"), list):
+                    print(f"  [Shelf warning] {shelf_id}: failed to fetch page {token}; keeping discovered events")
+                    break
+                page, parent = next_page, response
+                pages += 1
+            if pages:
+                print(f"  [Shelf pages] {shelf_id}: fetched {pages} additional pages")
 
     def _fetch_via_browser(self, url: str) -> dict:
         """Original Selenium-based fetch (fallback).
@@ -765,42 +822,37 @@ def scrape_search_term(driver, conn: sqlite3.Connection, search_term: str,
                     skipped += 1  # Count as skipped for stats, but data IS updated
                     batch_refreshed += 1
                 
-                # Extract shelf events
-                canvas = data.get("data", {}).get("canvas", {})
-                shelves = canvas.get("shelves", [])
-                shelf_discovered = 0
-                for shelf in shelves:
-                    for item in shelf.get("items", []):
-                        if item.get("type") == "SportingEvent":
-                            shelf_id = item.get("id")
-                            if shelf_id and not event_exists_as_full(conn, shelf_id):
-                                relevant_playables = extract_relevant_playables(data, item)
-                                
-                                shelf_data = {
-                                    "data": {
-                                        "content": item,
-                                        "canvas": {},
-                                        "playables": item.get("playables", {})
-                                    },
-                                    "playables": relevant_playables,
-                                    "channels": data.get("channels", {}),
-                                    "howToWatch": []
-                                }
-                                
-                                if relevant_playables:
-                                    for playable_id, playable in relevant_playables.items():
-                                        channel_id = playable.get("channelId", "")
-                                        if channel_id:
-                                            shelf_data["howToWatch"].append({
-                                                "channelId": channel_id,
-                                                "versions": [{"playableId": playable_id}]
-                                            })
-                                
-                                save_event(conn, shelf_id, "shelf", "shelf", shelf_data)
-                                new_shelf += 1
-                                shelf_discovered += 1
-                                batch_new_shelf += 1
-                
+                # Follow continuation tokens instead of stopping at the first 20 games.
+                for item, page_data in api_client.iter_shelf_events(data):
+                    if item.get("type") == "SportingEvent":
+                        shelf_id = item.get("id")
+                        if shelf_id and not event_exists_as_full(conn, shelf_id):
+                            relevant_playables = extract_relevant_playables(page_data, item)
+
+                            shelf_data = {
+                                "data": {
+                                    "content": item,
+                                    "canvas": {},
+                                    "playables": item.get("playables", {})
+                                },
+                                "playables": relevant_playables,
+                                "channels": page_data.get("data", {}).get("channels", page_data.get("channels", {})),
+                                "howToWatch": []
+                            }
+
+                            if relevant_playables:
+                                for playable_id, playable in relevant_playables.items():
+                                    channel_id = playable.get("channelId", "")
+                                    if channel_id:
+                                        shelf_data["howToWatch"].append({
+                                            "channelId": channel_id,
+                                            "versions": [{"playableId": playable_id}]
+                                        })
+
+                            save_event(conn, shelf_id, "shelf", "shelf", shelf_data)
+                            new_shelf += 1
+                            batch_new_shelf += 1
+
                 conn.commit()
                 
         except Exception as e:

@@ -2,7 +2,7 @@
 
 <img src="templates/logo.png" alt="FruitDeepLinks" width="320">
 
-**Universal Sports Streaming Aggregator — v2.3.0**
+**Universal Sports Streaming Aggregator — v2.3.1**
 
 FruitDeepLinks scrapes Apple TV's Sports aggregation API plus 10 regional services to build a unified sports EPG with deeplinks to 24+ streaming apps. Export M3U/XMLTV for Channels DVR, ADBTuner, CC4C, and PrismCast.
 
@@ -29,7 +29,15 @@ FruitDeepLinks creates virtual TV channels in Channels DVR with deeplinks that l
 
 ---
 
-## 🆕 What's New in v2.3.0
+## 🆕 What's New in v2.3.1
+
+### Complete Related-Game Discovery
+
+- **Paginated Apple TV results** — follows continuation pages beyond the first 20 related games, recovering evening events missed on busy sports days
+- **Duplicate and loop protection** — deduplicates discovered events and stops repeated pagination tokens; failed pages retain events already discovered
+- **Existing workflow preserved** — the same search terms, refresh pipeline, and user filters continue to apply
+
+### Previously Added in v2.3.0
 
 ### Team-Level Filtering
 
