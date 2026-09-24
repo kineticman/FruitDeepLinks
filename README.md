@@ -2,7 +2,7 @@
 
 <img src="templates/logo.png" alt="FruitDeepLinks" width="320">
 
-**Universal Sports Streaming Aggregator — v2.3.1**
+**Universal Sports Streaming Aggregator — v2.3.2**
 
 FruitDeepLinks scrapes Apple TV's Sports aggregation API plus 10 regional services to build a unified sports EPG with deeplinks to 24+ streaming apps. Export M3U/XMLTV for Channels DVR, ADBTuner, CC4C, and PrismCast.
 
@@ -29,7 +29,14 @@ FruitDeepLinks creates virtual TV channels in Channels DVR with deeplinks that l
 
 ---
 
-## 🆕 What's New in v2.3.1
+## 🆕 What's New in v2.3.2
+
+### Chromium Zombie Process Fix
+
+- **Built-in init process** — the image now runs under `tini`, which reaps leftover Chromium helper processes after each scrape; previously, containers started without `--init` (plain `docker run`, Unraid, custom Portainer stacks) accumulated `<defunct>` chromium / chrome-headless / chrome_crashpad processes
+- **No configuration needed** — works however the container is launched; existing `init: true` compose setups are unaffected
+
+### Previously Added in v2.3.1
 
 ### Complete Related-Game Discovery
 

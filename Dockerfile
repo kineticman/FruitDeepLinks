@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-dejavu \
     fonts-noto-color-emoji \
     tzdata \
+    tini \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Install Chromium + ChromeDriver for Selenium (native arm64 + amd64 support) ---
@@ -73,5 +74,10 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
 VOLUME ["/app/data", "/app/out", "/app/logs"]
 
 EXPOSE 6655
+
+# tini reaps orphaned Chromium helpers (zygote, crashpad) that would otherwise
+# pile up as <defunct> under PID 1 when the container runs without --init.
+# -s (subreaper) keeps it correct when Docker's own init is also PID 1.
+ENTRYPOINT ["/usr/bin/tini", "-s", "--"]
 CMD ["/app/start.sh"]
 
