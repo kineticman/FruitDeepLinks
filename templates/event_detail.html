@@ -135,9 +135,12 @@ async function loadDetail() {
       ? `<div class="mono" style="font-size:11px;word-break:break-all;max-width:250px" title="${escH(appleScheme)}">${escH(appleScheme)}</div>`
       : '<span class="small">—</span>';
 
-    const httpUrl = p.http_deeplink_url || "";
+    // Fall back to Apple's playable_url (e.g. Apple MLS/MLB, which have no app scheme)
+    const httpUrl = p.http_deeplink_url || p.playable_url || "";
+    const httpFromPlayable = !p.http_deeplink_url && !!p.playable_url;
     const httpHtml = httpUrl
-      ? `<a class="link mono" style="font-size:11px;word-break:break-all;max-width:250px;display:block" href="${escH(httpUrl)}" target="_blank">${escH(httpUrl)}</a>`
+      ? `<a class="link mono" style="font-size:11px;word-break:break-all;max-width:250px;display:block" href="${escH(httpUrl)}" target="_blank">${escH(httpUrl)}</a>` +
+        (httpFromPlayable ? '<div class="small" style="margin-top:4px">playable_url</div>' : '')
       : '<span class="small">—</span>';
 
     const espnId = p.espn_graph_id || "";
@@ -156,7 +159,7 @@ async function loadDetail() {
       bestSource = "Apple TV";
     } else if (httpUrl) {
       bestDeeplinkForRow = httpUrl;
-      bestSource = "HTTP";
+      bestSource = httpFromPlayable ? "Apple TV (playable_url)" : "HTTP";
     }
 
     const isBest = bestDeeplink && bestDeeplinkForRow && bestDeeplink === bestDeeplinkForRow;
