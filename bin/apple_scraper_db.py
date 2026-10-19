@@ -752,7 +752,7 @@ def get_event_ids_from_page(driver) -> Set[str]:
 def default_terms() -> str:
     return ",".join([
         "soccer", "nba", "nhl", "mlb", "nfl", "mls",
-        "champions league", "ligue 1", "formula 1", "cricket",
+        "champions league", "europa league", "conference league", "ligue 1", "formula 1", "cricket",
         "espn", "cbs sports", "fox", "fox one", "paramount+", "prime video", "peacock", "dazn",
         "women's college basketball", "men's college basketball",
     ])
