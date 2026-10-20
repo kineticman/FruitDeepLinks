@@ -7,6 +7,8 @@ Routes:
   GET  /api/status
   GET  /api/logs
   GET  /api/logs/stream   (SSE)
+  GET  /api/logs/runs
+  GET  /api/logs/runs/<name>[?download=1]
   POST /api/refresh
   GET  /api/auto-refresh
   POST /api/auto-refresh
@@ -24,14 +26,16 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Blueprint, Response, jsonify, request, stream_with_context
+from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
 
 from db.connection import db_exists, get_conn, get_conn_or_none, resolve_db_path
 from db.preferences import get_settings_schema, load_all_settings, save_settings
 from db.stats import get_db_stats
 from server import scheduler as sched
 from server.config import cfg
-from server.logging_setup import get_recent_logs, log
+from server.logging_setup import (
+    BOOT_ID, get_recent_entries, get_recent_logs, list_run_logs, log, run_log_path,
+)
 from server.refresh import refresh_status, start_apply_filters_thread, start_refresh_thread
 from server.services.filters import get_auto_refresh, save_auto_refresh
 
@@ -112,26 +116,34 @@ def api_logs():
 
 @bp.route("/api/logs/stream")
 def api_logs_stream():
+    """SSE log stream.
+
+    ?since=<seq>&boot=<id> resumes after seq if the server hasn't restarted
+    (boot matches BOOT_ID); otherwise the client gets a `reset` event followed
+    by the last ?tail=N lines (default 2000).  Each message: {seq, ts, log}.
+    """
+    since = request.args.get("since", 0, type=int) or 0
+    tail = min(request.args.get("tail", 2000, type=int) or 0, 5000)
+    resume = since > 0 and request.args.get("boot") == BOOT_ID
+
+    def _msg(e):
+        return f"data: {json.dumps({'seq': e['seq'], 'ts': e['ts'], 'log': e['line']}, ensure_ascii=False)}\n\n"
+
     def generate():
-        try:
-            tail = int(request.args.get("tail", "0") or "0")
-            since = int(request.args.get("since", "0") or "0")
-        except Exception:
-            tail = since = 0
-
-        last_seq = since
+        last_seq = since if resume else 0
         heartbeat_ts = time.time()
-        yield ": connected\n\n"
+        yield f"event: hello\ndata: {json.dumps({'boot': BOOT_ID})}\n\n"
 
-        if tail > 0:
-            for seq, line in get_recent_logs(count=tail):
-                yield f"data: {json.dumps({'seq': seq, 'log': line}, ensure_ascii=False)}\n\n"
-                last_seq = max(last_seq, seq)
+        if not resume:
+            yield "event: reset\ndata: {}\n\n"
+            for e in get_recent_entries(count=tail):
+                yield _msg(e)
+                last_seq = e["seq"]
 
         while True:
-            for seq, line in get_recent_logs(count=5000, after_seq=last_seq):
-                yield f"data: {json.dumps({'seq': seq, 'log': line}, ensure_ascii=False)}\n\n"
-                last_seq = max(last_seq, seq)
+            for e in get_recent_entries(count=5000, after_seq=last_seq):
+                yield _msg(e)
+                last_seq = e["seq"]
 
             if (time.time() - heartbeat_ts) >= 15:
                 yield "event: ping\ndata: {}\n\n"
@@ -146,11 +158,29 @@ def api_logs_stream():
     )
 
 
+@bp.route("/api/logs/runs")
+def api_log_runs():
+    return jsonify({"runs": list_run_logs()})
+
+
+@bp.route("/api/logs/runs/<name>")
+def api_log_run(name):
+    path = run_log_path(name)
+    if path is None:
+        return jsonify({"status": "error", "message": "Log not found"}), 404
+    return send_file(path, mimetype="text/plain", as_attachment=bool(request.args.get("download")),
+                     download_name=name, max_age=0)
+
+
 @bp.route("/api/refresh", methods=["POST"])
 def api_refresh():
     if refresh_status["running"]:
         return jsonify({"error": "Refresh already running"}), 409
-    skip = bool((request.json or {}).get("skip_scrape", False))
+    # Accept a JSON body, a ?skip_scrape= query param, or no body at all
+    # (`curl -X POST .../api/refresh` as documented in the README).
+    body = request.get_json(silent=True) or {}
+    skip = body.get("skip_scrape", request.args.get("skip_scrape", ""))
+    skip = skip if isinstance(skip, bool) else str(skip).lower() in ("1", "true", "yes")
     start_refresh_thread(skip_scrape=skip, source="manual")
     return jsonify({"status": "started"})
 

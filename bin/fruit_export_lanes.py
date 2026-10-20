@@ -251,7 +251,7 @@ def build_lanes_xmltv(conn: sqlite3.Connection, xml_path: str, epg_prefix: str =
 
 # -------------------- Lanes M3U --------------------
 def build_lanes_m3u(conn: sqlite3.Connection, m3u_path: str, server_url: str, epg_prefix: str = "lane."):
-    """Export lanes to M3U playlist for CDVR detector"""
+    """Export lanes to a plain M3U whose channels 302-redirect to what's on now"""
     
     # Get all lanes
     cur = conn.cursor()
@@ -273,8 +273,9 @@ def build_lanes_m3u(conn: sqlite3.Connection, m3u_path: str, server_url: str, ep
             name = f"Fruit Lane {lane_id}"  # Renamed from "Multi-Source Sports"
             chno = lane.get("logical_number") or lane_id
             
-            # Stream URL points to detector endpoint on main server
-            stream_url = f"{server_url}/lane/{lane_id}/stream.m3u8"
+            # /launch 302-redirects to the lane's current deeplink (same endpoint
+            # the Chrome Capture / CH4C / PrismCast playlists wrap)
+            stream_url = f"{server_url}/api/lane/{lane_id}/launch?deeplink_format=http"
             
             f.write(f'#EXTINF:-1 tvg-id="{chan_id}" tvg-chno="{chno}" group-title="FruitDeepLinks",{name}\n')
             f.write(f"{stream_url}\n\n")

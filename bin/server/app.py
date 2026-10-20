@@ -56,11 +56,13 @@ def create_app() -> Flask:
     from server.routes.api.filters import bp as filters_bp
     from server.routes.api.events import bp as events_bp
     from server.routes.api.lanes import bp as lanes_bp
+    from server.routes.api.search_terms import bp as search_terms_bp
 
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(filters_bp)
     app.register_blueprint(events_bp)
     app.register_blueprint(lanes_bp)
+    app.register_blueprint(search_terms_bp)
 
     return app

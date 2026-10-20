@@ -370,6 +370,21 @@ def _get_enabled_services_from_db(db_path: Path) -> list:
         return []
 
 
+def _get_apple_search_terms(db_path: Path) -> list:
+    """Return the Apple TV search terms from the Search Terms page (or defaults)."""
+    from core.search_terms import DEFAULT_TERMS, load_terms
+    try:
+        if not db_path.exists():
+            return list(DEFAULT_TERMS)
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        try:
+            return load_terms(conn)
+        finally:
+            conn.close()
+    except Exception:
+        return list(DEFAULT_TERMS)
+
+
 try:
     from db.preferences import get_setting as _pref_get_setting
 except ImportError:
@@ -540,10 +555,13 @@ def main(argv=None):
             print(f"ERROR: --skip-scrape set but {apple_db} not found")
             return 1
     else:
+        apple_terms = _get_apple_search_terms(DB_PATH)
+        print(f"[scraper-config] Apple TV search terms ({len(apple_terms)}): {', '.join(apple_terms)}")
         if not run_step(1, total_steps, "Scraping Apple TV Sports (all terms)", [
             "python3", "apple_scraper_db.py",
             "--headless",
             "--db", str(DATA_DIR / "apple_events.db"),
+            "--terms", ",".join(apple_terms),
         ]):
             return 1
         

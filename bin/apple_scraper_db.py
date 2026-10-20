@@ -51,6 +51,9 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from core.search_terms import DEFAULT_TERMS, KEEP_RUNS, init_stats_schema
+
 SEARCH_URL = "https://tv.apple.com/us/collection/sports/uts.col.search.SE?searchTerm={term}"
 
 # ------------------------------ Paths ------------------------------
@@ -750,12 +753,7 @@ def get_event_ids_from_page(driver) -> Set[str]:
 
 # ------------------------------ Search Terms ------------------------------
 def default_terms() -> str:
-    return ",".join([
-        "soccer", "nba", "nhl", "mlb", "nfl", "mls",
-        "champions league", "ligue 1", "formula 1", "cricket",
-        "espn", "cbs sports", "fox", "fox one", "paramount+", "prime video", "peacock", "dazn",
-        "women's college basketball", "men's college basketball",
-    ])
+    return ",".join(DEFAULT_TERMS)
 
 def parse_terms(arg: str) -> List[str]:
     return [t.strip() for t in arg.split(",") if t.strip()]
@@ -768,12 +766,15 @@ def ensure_all_first(terms: List[str]) -> List[str]:
 
 # ------------------------------ Main Scraping ------------------------------
 def scrape_search_term(driver, conn: sqlite3.Connection, search_term: str, 
-                       api_client: HybridAPIClient) -> Tuple[int, int, int]:
+                       api_client: HybridAPIClient) -> Tuple[int, int, int, dict, Set[str]]:
     """
     Scrape a single search term.
-    Returns: (new_seeds, new_shelf, skipped)
+    Returns: (new_seeds, new_shelf, skipped, term_stats, found_ids)
+    found_ids is every event this term surfaced (seeds + shelf events), used
+    for per-term attribution on the Search Terms page.
     """
     print(f"\n== Search: {search_term} ==")
+    term_started = time.monotonic()
     
     driver.get(SEARCH_URL.format(term=search_term))
     time.sleep(0.6)
@@ -788,6 +789,7 @@ def scrape_search_term(driver, conn: sqlite3.Connection, search_term: str,
     new_seeds = 0
     new_shelf = 0
     skipped = 0
+    found_ids: Set[str] = set(seed_ids)
     
     total_seeds = len(seed_ids)
     log_every = max(1, total_seeds // 5)  # ~5 progress lines across the batch
@@ -826,6 +828,8 @@ def scrape_search_term(driver, conn: sqlite3.Connection, search_term: str,
                 for item, page_data in api_client.iter_shelf_events(data):
                     if item.get("type") == "SportingEvent":
                         shelf_id = item.get("id")
+                        if shelf_id:
+                            found_ids.add(shelf_id)
                         if shelf_id and not event_exists_as_full(conn, shelf_id):
                             relevant_playables = extract_relevant_playables(page_data, item)
 
@@ -868,7 +872,60 @@ def scrape_search_term(driver, conn: sqlite3.Connection, search_term: str,
     if processed and processed % log_every != 0 and processed != total_seeds:
         log_progress(processed)
 
-    return new_seeds, new_shelf, skipped
+    term_stats = {
+        "seed_count": total_seeds,
+        "found_count": len(found_ids),
+        "new_full": batch_new_seeds,
+        "refreshed": batch_refreshed,
+        "new_shelf": batch_new_shelf,
+        "errors": batch_errors,
+        "duration_s": round(time.monotonic() - term_started, 1),
+    }
+    return new_seeds, new_shelf, skipped, term_stats, found_ids
+
+
+def record_term_stats(conn: sqlite3.Connection, started_at: str,
+                      per_term: List[Tuple[str, dict, Set[str]]]) -> None:
+    """Persist one run of per-term stats; replace search_term_hits with this run's."""
+    try:
+        init_stats_schema(conn)
+        counts: Dict[str, int] = {}
+        for _, _, ids in per_term:
+            for eid in ids:
+                counts[eid] = counts.get(eid, 0) + 1
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO search_term_runs (started_at, finished_at, term_count, total_found) "
+            "VALUES (?, ?, ?, ?)",
+            (started_at, datetime.now(timezone.utc).isoformat(), len(per_term), len(counts)),
+        )
+        run_id = cur.lastrowid
+        cur.executemany(
+            "INSERT OR REPLACE INTO search_term_stats (run_id, term, position, seed_count, found_count, "
+            "unique_count, new_full, refreshed, new_shelf, errors, duration_s) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (run_id, term, pos, st["seed_count"], st["found_count"],
+                 sum(1 for eid in ids if counts[eid] == 1),
+                 st["new_full"], st["refreshed"], st["new_shelf"], st["errors"], st["duration_s"])
+                for pos, (term, st, ids) in enumerate(per_term)
+            ],
+        )
+        cur.execute("DELETE FROM search_term_hits")
+        cur.executemany(
+            "INSERT OR IGNORE INTO search_term_hits (term, event_id, run_id) VALUES (?, ?, ?)",
+            [(term, eid, run_id) for term, _, ids in per_term for eid in ids],
+        )
+        cur.execute(
+            "DELETE FROM search_term_runs WHERE run_id NOT IN "
+            "(SELECT run_id FROM search_term_runs ORDER BY run_id DESC LIMIT ?)", (KEEP_RUNS,)
+        )
+        cur.execute("DELETE FROM search_term_stats WHERE run_id NOT IN (SELECT run_id FROM search_term_runs)")
+        conn.commit()
+        print(f"[term-stats] Recorded run {run_id}: {len(per_term)} terms, {len(counts)} distinct events")
+    except Exception as e:
+        # Stats are diagnostic only; never fail the scrape over them.
+        print(f"[term-stats] WARNING: failed to record search term stats: {e}")
 
 # ------------------------------ Main ------------------------------
 def main():
@@ -938,13 +995,17 @@ def main():
             terms = ensure_all_first(parse_terms(args.terms))
             print(f"\nScraping {len(terms)} search terms: {terms[:5]}...")
             
+            run_started = datetime.now(timezone.utc).isoformat()
+            per_term: List[Tuple[str, dict, Set[str]]] = []
             for term in terms:
-                new_seeds, new_shelf, skipped = scrape_search_term(
+                new_seeds, new_shelf, skipped, term_stats, found_ids = scrape_search_term(
                     driver, conn, term, api_client
                 )
                 total_new_seeds += new_seeds
                 total_new_shelf += new_shelf
                 total_skipped += skipped
+                per_term.append((term, term_stats, found_ids))
+            record_term_stats(conn, run_started, per_term)
             
             print(f"\n=== Seed Scraping Complete ===")
             print(f"New full events: {total_new_seeds}")

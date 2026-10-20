@@ -10,6 +10,8 @@ Routes:
   GET /events/now
   GET /events/<event_id>
   GET /filters
+  GET /search-terms
+  GET /logs
   GET /out/<filename>
   GET /xmltv/lanes
   GET /m3u/lanes
@@ -50,6 +52,16 @@ def adb_config_page():
 @bp.route("/settings")
 def settings_page():
     return _render("settings.html")
+
+
+@bp.route("/logs")
+def logs_page():
+    return _render("logs.html")
+
+
+@bp.route("/search-terms")
+def search_terms_page():
+    return _render("search_terms.html")
 
 
 @bp.route("/filters")

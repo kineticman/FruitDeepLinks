@@ -211,6 +211,8 @@ Scheduled multi-provider virtual channels — one event per time slot per lane.
 - **M3U URL:** `http://your-server-ip:6655/m3u/lanes`
 - **XMLTV URL:** `http://your-server-ip:6655/xmltv/lanes`
 
+Each lane channel is a `/api/lane/<n>/launch` URL that redirects to whatever is on that lane right now, so it suits tuners that follow redirects. Ready-made playlists for Chrome Capture, Channels4Chrome and PrismCast are in `/out/multisource_lanes_chrome.m3u`, `_ch4c.m3u` and `_prismcast.m3u`. For Channels DVR on its own, use the Direct or ADB playlists.
+
 ### ADB Provider Lanes
 
 Per-provider lanes for ADBTuner; supports device profiles:

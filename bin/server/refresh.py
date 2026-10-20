@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from server.config import cfg
-from server.logging_setup import append_log_line, log
+from server.logging_setup import append_log_line, end_run_log, log, start_run_log
 
 REFRESH_PROGRESS_PREFIX = "__FDL_PROGRESS__"
 
@@ -137,6 +137,7 @@ def run_refresh(skip_scrape: bool = False, source: str = "manual") -> None:
     refresh_status["progress"]["phase"] = "starting"
 
     label = "Auto" if source == "auto" else "Manual"
+    start_run_log("refresh", f"({label.lower()}, skip_scrape={skip_scrape})")
     log(f"{label} refresh triggered (skip_scrape={skip_scrape})", "INFO")
 
     outcome = "error"
@@ -174,6 +175,7 @@ def run_refresh(skip_scrape: bool = False, source: str = "manual") -> None:
         refresh_status["progress"]["phase"] = "error"
         log(f"{label} refresh error: {e}", "ERROR")
     finally:
+        end_run_log(outcome)
         refresh_status["running"] = False
         refresh_status["current_step"] = None
         refresh_status["progress"]["finished_at"] = datetime.now(timezone.utc).isoformat()
@@ -196,6 +198,7 @@ def run_apply_filters() -> None:
 
     refresh_status["running"] = True
     refresh_status["current_step"] = "Applying filters..."
+    start_run_log("apply-filters")
     log("Applying filter settings (regenerating exports)", "INFO")
 
     # Read live DB settings so settings-page changes take effect without restart.
@@ -250,7 +253,9 @@ def run_apply_filters() -> None:
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
             )
             for line in process.stdout:
-                append_log_line(line.strip())
+                line = line.rstrip("\n")
+                if line.strip():
+                    append_log_line(line)
             process.wait()
             if process.returncode != 0:
                 raise Exception(f"{script_name} failed with code {process.returncode}")
@@ -260,6 +265,7 @@ def run_apply_filters() -> None:
         log(f"Apply filters error: {e}", "ERROR")
         refresh_status["last_status"] = "error"
     finally:
+        end_run_log(refresh_status["last_status"] or "error")
         refresh_status["running"] = False
         refresh_status["current_step"] = None
         refresh_status["last_run"] = datetime.now(timezone.utc).isoformat()

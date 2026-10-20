@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+
+{% block title %}Logs — FruitDeepLinks{% endblock %}
+{% block page_title %}Logs{% endblock %}
+{% block page_subtitle %}<p class="subtitle">Live server and refresh output, plus saved logs from past refreshes.</p>{% endblock %}
+
+{% block extra_style %}
+.log-card { display: flex; flex-direction: column; gap: 10px; }
+.log-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.log-toolbar select { width: auto; min-width: 230px; max-width: 100%; }
+.log-toolbar input[type="search"] { flex: 1; min-width: 160px; }
+.log-toolbar label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-dim); cursor: pointer; white-space: nowrap; }
+.log-toolbar label input { width: 15px; height: 15px; accent-color: var(--accent); }
+.log-toolbar .btn { padding: 7px 12px; }
+.log-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
+.log-state::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
+.log-state.live::before { background: var(--success); }
+.log-state.warn::before { background: var(--warning); }
+.log-state.bad::before { background: var(--danger); }
+.log-wrap { position: relative; }
+.log-view {
+  background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius);
+  height: calc(100vh - 290px); min-height: 360px; overflow-y: auto;
+  font-family: var(--mono); font-size: 12px; line-height: 1.5; padding: 8px 0;
+}
+.log-view .ln { display: flex; padding: 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-dim); }
+.log-view .ln:hover { background: var(--bg-hover); }
+.log-view .ts { flex: none; width: 70px; color: var(--text-muted); user-select: none; }
+.log-view.no-ts .ts { display: none; }
+.log-view .tx { flex: 1; min-width: 0; }
+.log-view .ln.step { color: var(--heading); font-weight: 700; margin-top: 6px; }
+.log-view .ln.err  { color: var(--danger); }
+.log-view .ln.warn { color: var(--warning); }
+.log-view .ln.meta { color: var(--text-muted); font-style: italic; }
+.log-view mark { background: rgba(251, 191, 36, 0.35); color: inherit; border-radius: 2px; }
+.log-empty { padding: 16px 12px; color: var(--text-muted); font-family: inherit; }
+.log-jump { position: absolute; right: 16px; bottom: 14px; display: none; box-shadow: 0 4px 14px rgba(0,0,0,0.3); }
+.log-foot { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); }
+@media (max-width: 640px) {
+  .log-view { height: 65vh; font-size: 11px; }
+  .log-view .ts { width: 62px; }
+  .log-toolbar select { min-width: 0; flex: 1 1 100%; }
+}
+{% endblock %}
+
+{% block content %}
+<div class="card log-card">
+  <div class="log-toolbar">
+    <select id="log-source" aria-label="Log source">
+      <option value="live">Live</option>
+    </select>
+    <span class="log-state" id="log-state">Connecting…</span>
+    <input type="search" id="log-filter" placeholder="Filter lines…" aria-label="Filter lines">
+    <label><input type="checkbox" id="log-problems"> Errors &amp; warnings</label>
+    <label><input type="checkbox" id="log-times" checked> Times</label>
+    <button class="btn btn-secondary" id="log-download">Download</button>
+  </div>
+  <div class="log-wrap">
+    <div class="log-view" id="log-view" role="log" aria-live="off"></div>
+    <button class="btn log-jump" id="log-jump">↓ Latest</button>
+  </div>
+  <div class="log-foot">
+    <span id="log-count"></span>
+    <span>Also in <code>docker logs fruitdeeplinks</code>; past refreshes saved to <code>logs/</code> (last 20).</span>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_script %}
+<script>
+const MAX_LIVE = 5000;
+const BOTTOM_PX = 40;
+
+const view = document.getElementById('log-view');
+const sourceSel = document.getElementById('log-source');
+const stateEl = document.getElementById('log-state');
+const filterEl = document.getElementById('log-filter');
+const problemsEl = document.getElementById('log-problems');
+const timesEl = document.getElementById('log-times');
+const jumpBtn = document.getElementById('log-jump');
+
+let live = [];            // {ts, text, cls}
+let shown = [];           // lines in the current view (live or a saved run)
+let source = 'live';
+let es = null, lastSeq = 0, bootId = null, retryTimer = null;
+let unseen = 0;
+let runs = [];
+
+// ---- Line classification ----
+const RE_STEP = /^\s*\[[\w-]+\/\d+\]\s/;
+const RE_ERR  = /\b(ERROR|CRITICAL|Traceback|Exception|FAILED)\b|failed with code|^\s*error\b|✗|❌/;
+const RE_WARN = /\bWARNING\b|\bWARN\b|⚠/;
+function classify(text) {
+  if (text.startsWith('# ')) return 'meta';
+  if (RE_STEP.test(text)) return 'step';
+  if (RE_ERR.test(text)) return 'err';
+  if (RE_WARN.test(text)) return 'warn';
+  return '';
+}
+function mk(ts, text) { return { ts: ts || '', text, cls: classify(text) }; }
+
+// ---- Rendering ----
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function needle() { return filterEl.value.trim().toLowerCase(); }
+function matches(l, q) {
+  if (problemsEl.checked && !(l.cls === 'err' || l.cls === 'warn' || l.cls === 'step')) return false;
+  return !q || l.text.toLowerCase().includes(q);
+}
+function lineHtml(l, q) {
+  let tx = esc(l.text);
+  if (q) {
+    const i = l.text.toLowerCase().indexOf(q);
+    if (i >= 0) tx = esc(l.text.slice(0, i)) + '<mark>' + esc(l.text.slice(i, i + q.length)) + '</mark>' + esc(l.text.slice(i + q.length));
+  }
+  return `<div class="ln ${l.cls}"><span class="ts">${esc(l.ts)}</span><span class="tx">${tx || ' '}</span></div>`;
+}
+function atBottom() { return view.scrollHeight - view.scrollTop - view.clientHeight <= BOTTOM_PX; }
+function toBottom() { view.scrollTop = view.scrollHeight; unseen = 0; jumpBtn.style.display = 'none'; }
+
+function renderAll({ keepScroll = false } = {}) {
+  const q = needle();
+  const vis = shown.filter(l => matches(l, q));
+  const top = view.scrollTop;
+  view.innerHTML = vis.length ? vis.map(l => lineHtml(l, q)).join('')
+    : `<div class="log-empty">${shown.length ? 'No lines match the filter.' : (source === 'live' ? 'Waiting for log output…' : 'This log is empty.')}</div>`;
+  if (keepScroll) view.scrollTop = top; else toBottom();
+  updateCount(vis.length);
+}
+function updateCount(visCount) {
+  const q = needle(), filtered = q || problemsEl.checked;
+  const n = visCount ?? shown.filter(l => matches(l, q)).length;
+  const errs = shown.filter(l => l.cls === 'err').length, warns = shown.filter(l => l.cls === 'warn').length;
+  document.getElementById('log-count').textContent =
+    `${shown.length.toLocaleString()} lines` + (filtered ? ` · ${n.toLocaleString()} shown` : '') +
+    ` · ${errs} error${errs === 1 ? '' : 's'} · ${warns} warning${warns === 1 ? '' : 's'}`;
+}
+
+function appendLive(l) {
+  live.push(l);
+  if (live.length > MAX_LIVE) live.splice(0, live.length - MAX_LIVE);
+  if (source !== 'live') return;
+  const q = needle();
+  if (!matches(l, q)) { updateCount(); return; }
+  const follow = atBottom();
+  const empty = view.querySelector('.log-empty');
+  if (empty) empty.remove();
+  view.insertAdjacentHTML('beforeend', lineHtml(l, q));
+  while (view.childElementCount > MAX_LIVE) view.firstElementChild.remove();
+  if (follow) toBottom();
+  else { unseen++; jumpBtn.textContent = `↓ ${unseen} new`; jumpBtn.style.display = 'inline-flex'; }
+}
+
+// ---- Live stream ----
+let countTimer = null;
+function setState(text, cls) { stateEl.textContent = text; stateEl.className = 'log-state ' + (cls || ''); }
+function connect() {
+  if (es) es.close();
+  clearTimeout(retryTimer);
+  const qs = new URLSearchParams(lastSeq && bootId ? { since: lastSeq, boot: bootId } : { tail: MAX_LIVE });
+  es = new EventSource('/api/logs/stream?' + qs);
+  es.addEventListener('hello', e => {
+    try { bootId = JSON.parse(e.data).boot; } catch {}
+    if (source === 'live') setState('Live', 'live');
+  });
+  es.addEventListener('reset', () => {
+    // Fresh connection or the server restarted: the tail that follows replaces what we have.
+    live = []; lastSeq = 0;
+    if (source === 'live') { shown = live; renderAll(); }
+  });
+  es.onmessage = e => {
+    let o; try { o = JSON.parse(e.data); } catch { return; }
+    if (o.seq) lastSeq = o.seq;
+    appendLive(mk(o.ts, o.log || ''));
+    if (source === 'live') { clearTimeout(countTimer); countTimer = setTimeout(() => updateCount(), 300); }
+  };
+  es.onerror = () => {
+    es.close();
+    if (source === 'live') setState('Reconnecting…', 'warn');
+    retryTimer = setTimeout(connect, 2000);
+  };
+}
+
+// ---- Saved runs ----
+function fmtRun(r) {
+  const d = new Date(r.started);
+  const when = d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const kind = r.kind === 'apply-filters' ? 'Apply filters' : 'Refresh';
+  const status = { success: '✓', failed: '✗ failed', error: '✗ error', interrupted: '⚠ interrupted', running: '● running' }[r.status] || r.status;
+  return `${when} — ${kind} ${status}`;
+}
+async function loadRuns() {
+  try {
+    runs = (await fetch('/api/logs/runs').then(r => r.json())).runs || [];
+  } catch { return; }
+  const cur = sourceSel.value;
+  sourceSel.innerHTML = '<option value="live">Live</option>' + (runs.length
+    ? '<optgroup label="Saved refresh logs">' + runs.map(r => `<option value="${esc(r.name)}">${esc(fmtRun(r))}</option>`).join('') + '</optgroup>'
+    : '');
+  sourceSel.value = runs.some(r => r.name === cur) ? cur : 'live';
+}
+async function showRun(name) {
+  setState('Loading…');
+  try {
+    const text = await fetch('/api/logs/runs/' + encodeURIComponent(name)).then(r => { if (!r.ok) throw new Error(r.status); return r.text(); });
+    shown = text.split('\n').filter(s => s.length).map(s => {
+      const m = /^(\d\d:\d\d:\d\d) (.*)$/.exec(s);
+      return m ? mk(m[1], m[2]) : mk('', s);
+    });
+    const r = runs.find(x => x.name === name);
+    const st = r ? r.status : '';
+    setState(st === 'running' ? 'Saved log (still running — switch to Live to follow)' : 'Saved log', st === 'success' ? '' : (st === 'running' ? 'live' : 'bad'));
+    renderAll();
+    view.scrollTop = 0;
+  } catch (err) {
+    shown = [];
+    view.innerHTML = `<div class="log-empty">Could not load ${esc(name)} (${esc(err.message)}).</div>`;
+    setState('Error', 'bad');
+  }
+}
+
+sourceSel.addEventListener('change', () => {
+  source = sourceSel.value;
+  try { sessionStorage.setItem('fdl-log-source', source); } catch {}
+  if (source === 'live') { shown = live; setState(es && es.readyState === 1 ? 'Live' : 'Connecting…', es && es.readyState === 1 ? 'live' : ''); renderAll(); }
+  else showRun(source);
+});
+sourceSel.addEventListener('focus', loadRuns);
+sourceSel.addEventListener('mousedown', loadRuns);
+
+// ---- Toolbar ----
+let filterTimer = null;
+filterEl.addEventListener('input', () => { clearTimeout(filterTimer); filterTimer = setTimeout(() => renderAll(), 150); });
+problemsEl.addEventListener('change', () => renderAll());
+timesEl.addEventListener('change', () => {
+  view.classList.toggle('no-ts', !timesEl.checked);
+  try { localStorage.setItem('fdl-log-times', timesEl.checked ? '1' : '0'); } catch {}
+});
+jumpBtn.addEventListener('click', toBottom);
+view.addEventListener('scroll', () => { if (atBottom()) { unseen = 0; jumpBtn.style.display = 'none'; } }, { passive: true });
+
+document.getElementById('log-download').addEventListener('click', () => {
+  if (source !== 'live') { window.location = '/api/logs/runs/' + encodeURIComponent(source) + '?download=1'; return; }
+  const blob = new Blob([live.map(l => (l.ts ? l.ts + ' ' : '') + l.text).join('\n') + '\n'], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'fruitdeeplinks-live-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '') + '.log';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
+// ---- Init ----
+try { if (localStorage.getItem('fdl-log-times') === '0') { timesEl.checked = false; view.classList.add('no-ts'); } } catch {}
+shown = live;
+renderAll();
+connect();
+loadRuns().then(() => {
+  let saved = null;
+  try { saved = sessionStorage.getItem('fdl-log-source'); } catch {}
+  if (saved && saved !== 'live' && runs.some(r => r.name === saved)) { sourceSel.value = saved; sourceSel.dispatchEvent(new Event('change')); }
+});
+</script>
+{% endblock %}

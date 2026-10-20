@@ -57,6 +57,7 @@
     <div class="refresh-actions">
       <button class="btn" onclick="triggerRefresh(false)" id="btn-refresh">Full Refresh</button>
       <button class="btn btn-secondary" onclick="triggerRefresh(true)" id="btn-refresh-skip">Skip Scrape</button>
+      <a class="btn btn-secondary" href="/logs" style="text-decoration:none">View Logs</a>
     </div>
 
     <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
@@ -83,10 +84,6 @@
   </div>
 </div>
 
-<div class="card">
-  <h2>Live Logs <span id="log-status" style="font-size:12px;color:var(--text-muted);margin-left:8px"></span></h2>
-  <div class="log-container" id="log-container"></div>
-</div>
 
 <!-- Wipe event data confirmation modal -->
 <div id="wipe-modal" class="modal-backdrop" role="dialog" aria-modal="true">
@@ -105,19 +102,6 @@
 
 {% block extra_script %}
 <script>
-let logEventSource;
-let _scrollListenerAttached = false;
-const LOG_MAX_LINES = 5000;
-const LOG_TAIL_ON_CONNECT = 5000;
-const AUTO_SCROLL_THRESHOLD_PX = 40;
-const LOG_STORE_KEY = "fdl_admin_live_logs_v1";
-const LOG_STORE_SEQ_KEY = "fdl_admin_live_logs_seq";
-const LOG_STORE_SCROLL_KEY = "fdl_admin_live_logs_scroll";
-let _logSaveTimer = null;
-let _logLines = [];
-let _lastSeq = 0;
-let _logReconnectTimer = null;
-
 // ---- Wipe modal ----
 function openWipeModal() {
   document.getElementById('wipe-confirm-input').value = '';
@@ -336,104 +320,7 @@ function applyAutoToDom(auto) {
     : 'Auto refresh disabled';
 }
 
-// ---- Live logs ----
-function _loadLogsFromSession() {
-  try {
-    const raw = sessionStorage.getItem(LOG_STORE_KEY);
-    const rawSeq = sessionStorage.getItem(LOG_STORE_SEQ_KEY);
-    const rawScroll = sessionStorage.getItem(LOG_STORE_SCROLL_KEY);
-    if (raw) { const p = JSON.parse(raw); if (Array.isArray(p)) _logLines = p.filter(x => x && typeof x.text === 'string'); }
-    if (rawSeq) _lastSeq = parseInt(rawSeq, 10) || 0;
-    return { hadLogs: _logLines.length > 0, lastSeq: _lastSeq, scrollTop: rawScroll ? (parseInt(rawScroll,10)||0) : 0 };
-  } catch { _logLines = []; _lastSeq = 0; return {hadLogs:false,lastSeq:0,scrollTop:0}; }
-}
-function _scheduleSave() {
-  if (_logSaveTimer) return;
-  _logSaveTimer = setTimeout(() => {
-    _logSaveTimer = null;
-    try { sessionStorage.setItem(LOG_STORE_KEY, JSON.stringify(_logLines.slice(-LOG_MAX_LINES))); sessionStorage.setItem(LOG_STORE_SEQ_KEY, String(_lastSeq)); } catch {}
-  }, 250);
-}
-function _renderLogs({restoreScrollTop=null}={}) {
-  const c = document.getElementById('log-container'); if (!c) return;
-  c.innerHTML = _logLines.slice(-LOG_MAX_LINES).map(x=>`<div class="log-line">${_escapeHtml(x.text)}</div>`).join('');
-  c.scrollTop = (typeof restoreScrollTop === 'number' && restoreScrollTop > 0) ? Math.min(restoreScrollTop, c.scrollHeight) : c.scrollHeight;
-}
-function _isAtBottom(c) { return c.scrollHeight - c.scrollTop - c.clientHeight <= AUTO_SCROLL_THRESHOLD_PX; }
-function _appendLine(text, seq) {
-  const c = document.getElementById('log-container'); if (!c) return;
-  const atBottom = _isAtBottom(c); const prev = c.scrollTop;
-  const el = document.createElement('div'); el.className = 'log-line'; el.textContent = text; c.appendChild(el);
-  while (c.children.length > LOG_MAX_LINES) c.removeChild(c.firstChild);
-  c.scrollTop = atBottom ? c.scrollHeight : prev;
-  if (!atBottom) try { sessionStorage.setItem(LOG_STORE_SCROLL_KEY, String(prev)); } catch {}
-}
-function _addLine(text, seqRaw) {
-  if (!text) return;
-  const seq = seqRaw != null ? (parseInt(seqRaw,10)||0) : 0;
-  if (seq > 0) _lastSeq = Math.max(_lastSeq, seq);
-  _logLines.push({seq: seq||null, text});
-  if (_logLines.length > LOG_MAX_LINES) _logLines = _logLines.slice(-LOG_MAX_LINES);
-  _appendLine(text, seq||null);
-  _scheduleSave();
-}
-function setupLogStream(forceTail=false) {
-  if (logEventSource) logEventSource.close();
-  if (_logReconnectTimer) { clearTimeout(_logReconnectTimer); _logReconnectTimer = null; }
-  const statusEl = document.getElementById('log-status');
-  if (statusEl) statusEl.textContent = 'CONNECTING…';
-  const hasSeq = !forceTail && _lastSeq > 0;
-  const qs = new URLSearchParams(hasSeq ? {since: String(_lastSeq)} : {tail: String(LOG_TAIL_ON_CONNECT)});
-  logEventSource = new EventSource(`/api/logs/stream?${qs}`);
-  const c = document.getElementById('log-container');
-  let sawMsg = false;
-  if (c && !_scrollListenerAttached) {
-    _scrollListenerAttached = true;
-    c.addEventListener('scroll', () => {
-      try { _isAtBottom(c) ? sessionStorage.removeItem(LOG_STORE_SCROLL_KEY) : sessionStorage.setItem(LOG_STORE_SCROLL_KEY, String(c.scrollTop)); } catch {}
-    }, {passive:true});
-  }
-  logEventSource.onmessage = e => {
-    sawMsg = true;
-    let text = '', seq = null;
-    try { const o = JSON.parse(e.data); text = o.log||o.line||String(e.data||''); if (o.seq != null) seq = o.seq; } catch { text = String(e.data||''); }
-    if (text) _addLine(text, seq);
-  };
-  logEventSource.addEventListener('ping', ()=>{});
-  if (hasSeq) _logReconnectTimer = setTimeout(() => {
-    if (!sawMsg) {
-      try { logEventSource.close(); } catch {}
-      _lastSeq = 0; _logLines = [];
-      try { [LOG_STORE_SEQ_KEY,LOG_STORE_KEY,LOG_STORE_SCROLL_KEY].forEach(k=>sessionStorage.removeItem(k)); } catch {}
-      _renderLogs(); setupLogStream(true);
-    }
-  }, 2000);
-  logEventSource.onerror = () => {
-    if (_logReconnectTimer) { clearTimeout(_logReconnectTimer); _logReconnectTimer = null; }
-    if (statusEl) statusEl.textContent = 'RECONNECTING…';
-    try { logEventSource.close(); } catch {}
-    setTimeout(setupLogStream, 2000);
-  };
-  if (statusEl) statusEl.textContent = 'LIVE';
-}
-async function loadInitialLogs() {
-  const restored = _loadLogsFromSession();
-  _renderLogs({restoreScrollTop: restored.scrollTop});
-  if (!restored.hadLogs) {
-    try {
-      const d = await fetch(`/api/logs?count=${LOG_TAIL_ON_CONNECT}`).then(r=>r.json());
-      if (Array.isArray(d.logs)) {
-        d.logs.forEach(t => { if (t && t.trim()) _logLines.push({seq:null,text:t}); });
-        _logLines = _logLines.slice(-LOG_MAX_LINES);
-        _renderLogs(); _scheduleSave();
-      }
-    } catch {}
-  }
-}
-
 loadStatus();
-loadInitialLogs();
-setupLogStream();
 setInterval(loadStatus, 5000);
 </script>
 {% endblock %}
