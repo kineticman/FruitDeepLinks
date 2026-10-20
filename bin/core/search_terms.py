@@ -32,8 +32,8 @@ PREF_KEY = "apple_search_terms"
 
 # Most search-result events Apple returns per term.  This is a server-side
 # limit: the search page renders exactly this many tiles with nothing to scroll
-# to, and the backing UTS shelf (uts/v3/shelves/uts.col.search.SE) returns the
-# same items with no nextToken and ignores page-size params (probed 2026-10-20).
+# to, and the UTS search shelf (uts/v3/shelves/uts.col.search.SE) also stops at
+# 28 with no nextToken and ignores page-size params (probed 2026-10-20).
 # A term that hits it is truncated -- events past the cap are only found via
 # another, narrower term or a related-game shelf.
 SEARCH_RESULT_CAP = 28

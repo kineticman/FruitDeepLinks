@@ -733,12 +733,28 @@ class HybridAPIClient:
                 print("  Performance: requests path active for >90% of calls")
 
 # ------------------------------ Scraping Helpers ------------------------------
-def auto_scroll(driver, seconds: float, steps: int):
-    """Scroll page to load more content"""
-    per_step = seconds / max(1, steps)
-    for _ in range(steps):
-        driver.execute_script("window.scrollBy(0, 300);")
-        time.sleep(per_step)
+def wait_for_search_results(driver, timeout: float = 6.0, interval: float = 0.3,
+                            settle: float = 1.0) -> Set[str]:
+    """Return the page's event IDs once they've stopped changing for `settle` seconds.
+
+    Apple renders all (at most 28) search results on load -- there is nothing
+    to scroll to -- so this replaces the old fixed 5s scroll. Measured
+    2026-10-20: settles in ~1.4s, and waiting 4s longer found nothing new.
+    """
+    start = time.monotonic()
+    last: Optional[Set[str]] = None
+    changed_at = start
+    while True:
+        ids = get_event_ids_from_page(driver)
+        now = time.monotonic()
+        if ids != last:
+            last, changed_at = ids, now
+        elif ids and now - changed_at >= settle:
+            return ids
+        if now - start >= timeout:
+            return ids
+        time.sleep(interval)
+
 
 def get_event_ids_from_page(driver) -> Set[str]:
     """Extract event IDs from current page HTML"""
@@ -776,11 +792,12 @@ def scrape_search_term(driver, conn: sqlite3.Connection, search_term: str,
     print(f"\n== Search: {search_term} ==")
     term_started = time.monotonic()
     
+    # Render the search page rather than calling the UTS search shelf
+    # (uts/v3/shelves/uts.col.search.SE) directly: the page is server-rendered
+    # and its search matches differently -- e.g. "formula 1" gives 28 F1
+    # sessions on the page but only 5 F1 Academy races from the API.
     driver.get(SEARCH_URL.format(term=search_term))
-    time.sleep(0.6)
-    auto_scroll(driver, seconds=5.0, steps=24)
-    
-    seed_ids = get_event_ids_from_page(driver)
+    seed_ids = wait_for_search_results(driver)
     print(f"  Found {len(seed_ids)} seed IDs from page")
     
     already_full_count = sum(1 for eid in seed_ids if event_exists_as_full(conn, eid))
