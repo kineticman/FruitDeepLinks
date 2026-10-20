@@ -78,6 +78,7 @@
   <div class="st-legend">
     <b>Only this term</b> is the number to watch: a term with a high count is surfacing events nothing else finds.
     A term that is <b>redundant</b> for several runs could be removed to shorten the scrape.
+    <b>Capped</b> means the search hit its <span id="st-cap">28</span>-result limit, so it may be missing events: add narrower terms to reach them.
     <b>all</b> is always searched first and can't be removed. Click a term to see its events.
   </div>
 </div>
@@ -119,6 +120,7 @@ async function loadTerms() {
     const data = await fetch('/api/search-terms').then(r => r.json());
     if (data.status !== 'success') throw new Error(data.message || 'unknown error');
     _data = data;
+    document.getElementById('st-cap').textContent = data.result_cap;
     _saved = data.terms.slice();
     _draft = data.terms.slice();
     render();
@@ -138,6 +140,10 @@ function flagsFor(hist) {
     flags.push('<span class="badge badge-gray" title="Every event this term found was also found by another term, ' + FLAG_RUNS + ' runs running">Redundant</span>');
   }
   const last = hist[hist.length - 1];
+  const cap = _data.result_cap;
+  if (last && cap && last.seed_count >= cap) {
+    flags.push(`<span class="badge badge-yellow" title="Search returned the maximum ${cap} results last run, so it may be missing events. Try narrower terms (a league or competition) to reach the rest.">Capped</span>`);
+  }
   if (last && last.errors > 0) {
     flags.push(`<span class="badge badge-yellow" title="${last.errors} fetch errors in the last run">${last.errors} errors</span>`);
   }

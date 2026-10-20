@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, jsonify, request
 
 from core.search_terms import (
-    ALWAYS_TERM, DEFAULT_TERMS, PREF_KEY, load_terms, normalize_terms,
+    ALWAYS_TERM, DEFAULT_TERMS, PREF_KEY, SEARCH_RESULT_CAP, load_terms, normalize_terms,
 )
 from db.connection import get_conn, get_conn_or_none, resolve_db_path
 from server.logging_setup import log
@@ -112,6 +112,7 @@ def api_search_terms_get():
     return jsonify({
         "status": "success",
         "always_term": ALWAYS_TERM,
+        "result_cap": SEARCH_RESULT_CAP,
         "terms": terms,
         "defaults": DEFAULT_TERMS,
         "customized": terms != DEFAULT_TERMS,

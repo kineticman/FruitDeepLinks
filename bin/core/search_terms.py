@@ -30,6 +30,12 @@ DEFAULT_TERMS: List[str] = [
 
 PREF_KEY = "apple_search_terms"
 
+# Most search-result event IDs the scraper sees per term: the Apple TV search
+# page renders at most this many within the scraper's scroll window.  A term
+# that hits it is truncated -- events past the cap are only found if another
+# term (or a related-game shelf) surfaces them.
+SEARCH_RESULT_CAP = 28
+
 # Number of runs of history to keep in search_term_stats / search_term_runs.
 KEEP_RUNS = 60
 
