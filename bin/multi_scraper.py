@@ -19,6 +19,9 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from core.search_terms import DEFAULT_TERMS
+
 SEARCH_URL = "https://tv.apple.com/us/collection/sports/uts.col.search.SE?searchTerm={term}"
 
 # ------------------------------ paths ------------------------------
@@ -689,12 +692,7 @@ def parse_terms(arg: str) -> List[str]:
     return [t.strip() for t in arg.split(",") if t.strip()]
 
 def default_terms() -> str:
-    return ",".join([
-        "soccer", "nba", "nhl", "mlb", "nfl", "mls",
-        "champions league", "ligue 1", "formula 1", "cricket",
-        "espn", "cbs sports", "fox", "fox one", "paramount+", "prime video", "peacock", "dazn",
-        "women's college basketball", "men's college basketball",
-    ])
+    return ",".join(DEFAULT_TERMS)
 
 def ensure_all_first(terms: List[str]) -> List[str]:
     lower = [t.lower() for t in terms]

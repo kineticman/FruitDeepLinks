@@ -2,7 +2,7 @@
 
 <img src="templates/logo.png" alt="FruitDeepLinks" width="320">
 
-**Universal Sports Streaming Aggregator — v2.3.4**
+**Universal Sports Streaming Aggregator — v2.4.0**
 
 FruitDeepLinks scrapes Apple TV's Sports aggregation API plus 10 regional services to build a unified sports EPG with deeplinks to 24+ streaming apps. Export M3U/XMLTV for Channels DVR, ADBTuner, CC4C, and PrismCast.
 
@@ -29,7 +29,30 @@ FruitDeepLinks creates virtual TV channels in Channels DVR with deeplinks that l
 
 ---
 
-## 🆕 What's New in v2.3.4
+## 🆕 What's New in v2.4.0
+
+### Configurable Apple TV Search Terms
+
+- **Search Terms page** (`/search-terms`) — add, remove, or reset the terms used to discover Apple TV events; changes apply on the next refresh, no code patches needed
+- **Per-term discovery stats** — each refresh records what every term finds, including events *no other term* finds, with a 30-run trend, upcoming-event drill-down, and flags for terms that are redundant, return nothing, or hit Apple's 28-result search cap
+- **More soccer coverage** — UEFA Europa League and Conference League added to the default terms
+- Thanks to [@dropte](https://github.com/dropte) for the missing UEFA terms and the idea to make search terms configurable ([#21](https://github.com/kineticman/FruitDeepLinks/pull/21))
+
+### Logs
+
+- **Logs tab** — live log with filtering, errors-and-warnings view, timestamps, and download; replaces the dashboard log card
+- **Saved refresh logs** — every refresh and Apply Filters run is written to `logs/` (last 20 kept) and can be reopened from the Logs tab
+- **`docker logs` shows refresh output** — and no longer fills with health checks and UI page loads; M3U/XMLTV fetches, tune-time lookups, changes, and errors are still logged
+
+### Fixes
+
+- **Faster Apple scrape** — search results are read as soon as they load instead of after a fixed 5-second scroll (~1.5 minutes saved per refresh)
+- **`POST /api/refresh`** — works as a bare `curl -X POST` or with `?skip_scrape=true`, as documented (previously returned 400/415 without a JSON body)
+- **Virtual lanes M3U** — channels no longer point at the removed `/lane/<n>/stream.m3u8` endpoint (404); they redirect via `/api/lane/<n>/launch`
+- **API Helper page** — brought up to date with current endpoints and defaults
+- **Amazon ADB lanes** — Blue Jackets Hockey Network and MW+ (added in v2.3.4) now count as Amazon services at tune time; if they were your only enabled Amazon services, Amazon ADB lanes returned no deeplink
+
+### Previously Added in v2.3.4
 
 ### Amazon Provider Mapping
 
@@ -210,6 +233,8 @@ Scheduled multi-provider virtual channels — one event per time slot per lane.
 
 - **M3U URL:** `http://your-server-ip:6655/m3u/lanes`
 - **XMLTV URL:** `http://your-server-ip:6655/xmltv/lanes`
+
+Each lane channel is a `/api/lane/<n>/launch` URL that redirects to whatever is on that lane right now, so it suits tuners that follow redirects. Ready-made playlists for Chrome Capture, Channels4Chrome and PrismCast are in `/out/multisource_lanes_chrome.m3u`, `_ch4c.m3u` and `_prismcast.m3u`. For Channels DVR on its own, use the Direct or ADB playlists.
 
 ### ADB Provider Lanes
 

@@ -1,0 +1,412 @@
+{% extends "base.html" %}
+
+{% block title %}Search Terms — FruitDeepLinks{% endblock %}
+{% block page_title %}Search Terms{% endblock %}
+{% block page_subtitle %}<p class="subtitle">Apple TV search terms used to discover events, and how many events each one finds. Changes apply on the next refresh.</p>{% endblock %}
+
+{% block extra_style %}
+.st-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 20px; }
+.st-tile .st-tile-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.st-tile .st-tile-value { font-size: 24px; font-weight: 700; color: var(--text); margin-top: 4px; }
+.st-tile .st-tile-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.st-table-wrap { overflow-x: auto; }
+.st-table td.num, .st-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.st-table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.st-table th.sortable:hover { color: var(--heading); }
+.st-table th .sort-ind { font-size: 10px; color: var(--text-muted); margin-left: 3px; }
+.st-table td.term { font-weight: 600; white-space: nowrap; }
+.st-table td.term a { color: var(--text); text-decoration: none; border-bottom: 1px dotted var(--text-muted); cursor: pointer; }
+.st-table td.term a:hover { color: var(--heading); border-color: var(--heading); }
+.st-table tr.row-pending td { color: var(--text-muted); }
+.st-table tr.row-removed td { opacity: 0.5; }
+.st-table tr.row-selected td { background: var(--bg-hover); }
+.st-table .muted { color: var(--text-muted); }
+.st-flags { display: flex; gap: 4px; flex-wrap: wrap; }
+.spark { display: block; overflow: visible; }
+.spark .spark-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.spark .spark-last { fill: var(--accent); stroke: var(--bg-card); stroke-width: 2; }
+.spark .spark-hit { fill: transparent; }
+.spark .spark-hit:hover + .spark-dot, .spark .spark-dot.on { opacity: 1; }
+.spark .spark-dot { fill: var(--accent); stroke: var(--bg-card); stroke-width: 2; opacity: 0; pointer-events: none; }
+.st-tip { position: fixed; z-index: 1000; pointer-events: none; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 9px; font-size: 12px; color: var(--text); box-shadow: 0 4px 14px rgba(0,0,0,0.25); display: none; white-space: nowrap; }
+.st-tip .st-tip-date { color: var(--text-muted); margin-bottom: 2px; }
+.st-add { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.st-add input { flex: 1; min-width: 200px; }
+.btn-x { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 15px; padding: 2px 6px; border-radius: 4px; }
+.btn-x:hover { color: var(--danger); background: var(--bg-inset); }
+.btn-x:disabled { opacity: 0.3; cursor: default; background: none; color: var(--text-muted); }
+.save-bar { position: sticky; bottom: 0; background: var(--bg-page); border-top: 1px solid var(--border); padding: 12px 0; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+.st-legend { font-size: 12px; color: var(--text-muted); line-height: 1.6; margin-top: 12px; }
+.st-legend b { color: var(--text-dim); }
+#st-events { margin-top: 20px; }
+#st-events table td { font-size: 12px; }
+@media (max-width: 640px) {
+  .st-hide-sm { display: none; }
+  .st-table th.sortable, .st-table td.term { white-space: normal; }
+  .st-table th, .st-table td { padding: 8px 4px; }
+}
+{% endblock %}
+
+{% block content %}
+<div class="st-summary" id="st-summary"></div>
+
+<div class="card">
+  <h2>Terms</h2>
+  <div class="st-table-wrap">
+    <table class="st-table">
+      <thead>
+        <tr>
+          <th class="sortable" data-sort="term">Term<span class="sort-ind"></span></th>
+          <th class="sortable num" data-sort="found" title="Distinct events found in the last run: search results plus related-game shelves">Found<span class="sort-ind"></span></th>
+          <th class="sortable num" data-sort="unique" title="Events in the last run that no other term found">Only this term<span class="sort-ind"></span></th>
+          <th class="sortable num st-hide-sm" data-sort="upcoming" title="Events from the last run still upcoming or live in the guide database (only-this-term in parentheses)">Upcoming<span class="sort-ind"></span></th>
+          <th class="sortable num st-hide-sm" data-sort="duration" title="Seconds spent on this term in the last run">Time<span class="sort-ind"></span></th>
+          <th class="st-hide-sm">Found, last 30 runs</th>
+          <th>Flags</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="st-rows"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="st-add">
+    <input type="text" id="st-new" placeholder="Add a search term, e.g. europa league" onkeydown="if(event.key==='Enter'){event.preventDefault();addTerm();}">
+    <button class="btn" onclick="addTerm()">Add</button>
+  </div>
+
+  <div class="st-legend">
+    <b>Only this term</b> is the number to watch: a term with a high count is surfacing events nothing else finds.
+    A term that is <b>redundant</b> for several runs could be removed to shorten the scrape.
+    <b>Capped</b> means the search hit its <span id="st-cap">28</span>-result limit, so it may be missing events: add narrower terms to reach them.
+    <b>all</b> is always searched first and can't be removed. Click a term to see its events.
+  </div>
+</div>
+
+<div class="card" id="st-events" style="display:none"></div>
+
+<div class="save-bar">
+  <button class="btn" id="btn-save" onclick="saveTerms()" disabled>Save Terms</button>
+  <button class="btn btn-secondary" id="btn-discard" onclick="discardChanges()" disabled>Discard Changes</button>
+  <button class="btn btn-secondary" onclick="resetDefaults()">Reset to Defaults</button>
+  <span id="save-status" style="font-size:13px;color:var(--text-muted)"></span>
+</div>
+
+<div class="st-tip" id="st-tip"></div>
+{% endblock %}
+
+{% block extra_script %}
+<script>
+// A flag needs this many consecutive runs before it is shown.
+const FLAG_RUNS = 3;
+
+let _data = null;       // last GET /api/search-terms
+let _saved = [];        // terms as saved on the server
+let _draft = [];        // terms as edited on the page
+let _sort = { key: null, dir: 1 };
+let _selected = null;
+
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function fmtInt(n) { return n == null ? '—' : Number(n).toLocaleString(); }
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+function sameList(a, b) { return a.length === b.length && a.every((v, i) => v === b[i]); }
+
+async function loadTerms() {
+  try {
+    const data = await fetch('/api/search-terms').then(r => r.json());
+    if (data.status !== 'success') throw new Error(data.message || 'unknown error');
+    _data = data;
+    document.getElementById('st-cap').textContent = data.result_cap;
+    _saved = data.terms.slice();
+    _draft = data.terms.slice();
+    render();
+  } catch (err) {
+    document.getElementById('st-rows').innerHTML = `<tr><td colspan="8" class="status-failed">Failed to load search terms: ${escHtml(err.message)}</td></tr>`;
+  }
+}
+
+function historyFor(term) { return (_data && _data.history[term]) || []; }
+
+function flagsFor(hist) {
+  const flags = [];
+  const tail = hist.slice(-FLAG_RUNS);
+  if (tail.length >= FLAG_RUNS && tail.every(h => h.found_count === 0)) {
+    flags.push('<span class="badge badge-red" title="No events found in the last ' + FLAG_RUNS + ' runs">⚠ No results</span>');
+  } else if (tail.length >= FLAG_RUNS && tail.every(h => h.unique_count === 0)) {
+    flags.push('<span class="badge badge-gray" title="Every event this term found was also found by another term, ' + FLAG_RUNS + ' runs running">Redundant</span>');
+  }
+  const last = hist[hist.length - 1];
+  const cap = _data.result_cap;
+  if (last && cap && last.seed_count >= cap) {
+    flags.push(`<span class="badge badge-yellow" title="Search returned the maximum ${cap} results last run, so it may be missing events. Try narrower terms (a league or competition) to reach the rest.">Capped</span>`);
+  }
+  if (last && last.errors > 0) {
+    flags.push(`<span class="badge badge-yellow" title="${last.errors} fetch errors in the last run">${last.errors} errors</span>`);
+  }
+  return flags.join('');
+}
+
+function buildRows() {
+  const lastRunId = _data.runs.length ? _data.runs[_data.runs.length - 1].run_id : null;
+  const savedLower = new Set(_saved.map(t => t.toLowerCase()));
+  const rows = [];
+  const add = (term, kind) => {
+    const hist = historyFor(term);
+    const last = hist.length && hist[hist.length - 1].run_id === lastRunId ? hist[hist.length - 1] : null;
+    const up = _data.upcoming[term] || {};
+    rows.push({ term, kind, hist, last, up,
+      pending: kind === 'term' && (!savedLower.has(term.toLowerCase()) || !last) });
+  };
+  add(_data.always_term, 'always');
+  _draft.forEach(t => add(t, 'term'));
+  // Saved terms removed on this page but not yet saved, then previously removed terms with history.
+  _saved.filter(t => !_draft.includes(t)).forEach(t => add(t, 'unsaved-removed'));
+  _data.removed_with_history.forEach(t => add(t, 'removed'));
+  return rows;
+}
+
+function sortValue(r, key) {
+  switch (key) {
+    case 'term': return r.term.toLowerCase();
+    case 'found': return r.last ? r.last.found_count : -1;
+    case 'unique': return r.last ? r.last.unique_count : -1;
+    case 'upcoming': return r.up.upcoming ?? -1;
+    case 'duration': return r.last ? r.last.duration_s : -1;
+  }
+  return 0;
+}
+
+function render() {
+  renderSummary();
+  let rows = buildRows();
+  if (_sort.key) {
+    const pinned = rows.filter(r => r.kind === 'removed' || r.kind === 'unsaved-removed');
+    rows = rows.filter(r => !pinned.includes(r));
+    rows.sort((a, b) => {
+      const va = sortValue(a, _sort.key), vb = sortValue(b, _sort.key);
+      return (va < vb ? -1 : va > vb ? 1 : 0) * _sort.dir;
+    });
+    rows = rows.concat(pinned);
+  }
+  document.querySelectorAll('.st-table th.sortable').forEach(th => {
+    th.querySelector('.sort-ind').textContent = th.dataset.sort === _sort.key ? (_sort.dir > 0 ? '▲' : '▼') : '';
+  });
+
+  const html = rows.map(r => {
+    const cls = [
+      r.pending ? 'row-pending' : '',
+      (r.kind === 'removed' || r.kind === 'unsaved-removed') ? 'row-removed' : '',
+      r.term === _selected ? 'row-selected' : '',
+    ].join(' ');
+    let status = flagsFor(r.hist);
+    if (r.kind === 'always') status = '<span class="badge badge-blue">Always</span>' + status;
+    if (r.kind === 'removed') status = '<span class="badge badge-gray">Removed</span>';
+    if (r.kind === 'unsaved-removed') status = '<span class="badge badge-yellow">Removing (unsaved)</span>';
+    if (r.pending && r.kind === 'term') status = '<span class="badge badge-blue">Next refresh</span>';
+
+    const termCell = r.hist.length
+      ? `<a onclick="showEvents(${escHtml(JSON.stringify(r.term))})">${escHtml(r.term)}</a>`
+      : escHtml(r.term);
+    let action = '';
+    if (r.kind === 'term') action = `<button class="btn-x" title="Remove" onclick="removeTerm(${escHtml(JSON.stringify(r.term))})">✕</button>`;
+    else if (r.kind === 'unsaved-removed') action = `<button class="btn-x" title="Undo remove" onclick="restoreTerm(${escHtml(JSON.stringify(r.term))})">↺</button>`;
+    else if (r.kind === 'removed') action = `<button class="btn-x" title="Add back" onclick="restoreTerm(${escHtml(JSON.stringify(r.term))})">＋</button>`;
+
+    const L = r.last;
+    const upcoming = r.up.upcoming != null
+      ? `${fmtInt(r.up.upcoming)} <span class="muted">(${fmtInt(r.up.upcoming_unique)})</span>`
+      : '<span class="muted">—</span>';
+    return `<tr class="${cls}">
+      <td class="term">${termCell}</td>
+      <td class="num">${L ? fmtInt(L.found_count) : '<span class="muted">—</span>'}</td>
+      <td class="num">${L ? fmtInt(L.unique_count) : '<span class="muted">—</span>'}</td>
+      <td class="num st-hide-sm">${upcoming}</td>
+      <td class="num st-hide-sm">${L ? L.duration_s.toFixed(0) + 's' : '<span class="muted">—</span>'}</td>
+      <td class="st-hide-sm">${sparkline(r.term, r.hist)}</td>
+      <td><div class="st-flags">${status}</div></td>
+      <td style="text-align:right">${action}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('st-rows').innerHTML = html;
+
+  const dirty = !sameList(_draft, _saved);
+  document.getElementById('btn-save').disabled = !dirty;
+  document.getElementById('btn-discard').disabled = !dirty;
+  if (dirty) document.getElementById('save-status').textContent = 'Unsaved changes';
+}
+
+function renderSummary() {
+  const runs = _data.runs;
+  const last = runs[runs.length - 1];
+  const lastStats = last ? Object.values(_data.history).map(h => h[h.length - 1]).filter(s => s && s.run_id === last.run_id) : [];
+  const totalTime = lastStats.reduce((a, s) => a + (s.duration_s || 0), 0);
+  const tiles = [
+    { label: 'Search terms', value: _saved.length + 1,
+      sub: _data.customized ? 'Customized' : 'Defaults' },
+    { label: 'Events found, last run', value: last ? fmtInt(last.total_found) : '—',
+      sub: last ? fmtDate(last.started_at) : 'No scrape recorded yet' },
+    { label: 'Search time, last run', value: last ? Math.round(totalTime / 60) + ' min' : '—',
+      sub: last ? `${runs.length} run${runs.length === 1 ? '' : 's'} of history` : 'Stats start after the next refresh' },
+  ];
+  document.getElementById('st-summary').innerHTML = tiles.map(t => `
+    <div class="card st-tile">
+      <div class="st-tile-label">${t.label}</div>
+      <div class="st-tile-value">${t.value}</div>
+      <div class="st-tile-sub">${t.sub}</div>
+    </div>`).join('');
+}
+
+// Sparkline of found_count across the shared run axis (gaps where a term wasn't searched).
+function sparkline(term, hist) {
+  const runs = _data.runs;
+  if (!hist.length || runs.length < 2) return '<span class="muted">—</span>';
+  const W = 120, H = 26, P = 3;
+  const byRun = new Map(hist.map(h => [h.run_id, h]));
+  const max = Math.max(1, ...hist.map(h => h.found_count));
+  const x = i => P + (i * (W - 2 * P)) / (runs.length - 1);
+  const y = v => H - P - (v / max) * (H - 2 * P);
+  let d = '', pen = false, lastPt = null;
+  const hits = [];
+  runs.forEach((run, i) => {
+    const h = byRun.get(run.run_id);
+    if (!h) { pen = false; return; }
+    const px = x(i), py = y(h.found_count);
+    d += (pen ? 'L' : 'M') + px.toFixed(1) + ' ' + py.toFixed(1);
+    pen = true;
+    lastPt = [px, py];
+    const slot = (W - 2 * P) / Math.max(1, runs.length - 1);
+    hits.push(`<rect class="spark-hit" x="${(px - slot / 2).toFixed(1)}" y="0" width="${slot.toFixed(1)}" height="${H}"
+      data-date="${escHtml(run.started_at)}" data-found="${h.found_count}" data-unique="${h.unique_count}"></rect><circle class="spark-dot" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3"></circle>`);
+  });
+  return `<svg class="spark" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${escHtml(term)}: found per run, latest ${hist[hist.length - 1].found_count}">
+    <path class="spark-line" d="${d}"></path>
+    ${lastPt ? `<circle class="spark-last" cx="${lastPt[0].toFixed(1)}" cy="${lastPt[1].toFixed(1)}" r="3"></circle>` : ''}
+    ${hits.join('')}
+  </svg>`;
+}
+
+// Sparkline tooltip
+const _tip = document.getElementById('st-tip');
+document.addEventListener('mousemove', e => {
+  const hit = e.target.closest && e.target.closest('.spark-hit');
+  if (!hit) { _tip.style.display = 'none'; return; }
+  _tip.innerHTML = `<div class="st-tip-date">${escHtml(fmtDate(hit.dataset.date))}</div>
+    ${fmtInt(hit.dataset.found)} found · ${fmtInt(hit.dataset.unique)} only this term`;
+  _tip.style.display = 'block';
+  const tw = _tip.offsetWidth;
+  _tip.style.left = Math.min(window.innerWidth - tw - 8, e.clientX + 12) + 'px';
+  _tip.style.top = (e.clientY - 44) + 'px';
+});
+
+document.querySelectorAll('.st-table th.sortable').forEach(th => {
+  th.addEventListener('click', () => {
+    const k = th.dataset.sort;
+    if (_sort.key === k) {
+      if (_sort.dir === (k === 'term' ? 1 : -1)) _sort.dir = -_sort.dir;
+      else _sort = { key: null, dir: 1 };     // third click: back to configured order
+    } else {
+      _sort = { key: k, dir: k === 'term' ? 1 : -1 };
+    }
+    render();
+  });
+});
+
+function addTerm() {
+  const input = document.getElementById('st-new');
+  const t = input.value.replace(/,/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t) return;
+  const lower = t.toLowerCase();
+  if (lower === _data.always_term) { showToast('"all" is always searched', 'info'); return; }
+  if (_draft.some(x => x.toLowerCase() === lower)) { showToast(`"${t}" is already in the list`, 'info'); return; }
+  _draft.push(t);
+  input.value = '';
+  render();
+}
+
+function removeTerm(t) {
+  if (_draft.length <= 1) { showToast('At least one search term is required', 'error'); return; }
+  _draft = _draft.filter(x => x !== t);
+  render();
+}
+
+function restoreTerm(t) {
+  if (!_draft.some(x => x.toLowerCase() === t.toLowerCase())) _draft.push(t);
+  render();
+}
+
+function discardChanges() {
+  _draft = _saved.slice();
+  document.getElementById('save-status').textContent = '';
+  render();
+}
+
+async function postTerms(body) {
+  const res = await fetch('/api/search-terms', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.status !== 'success') throw new Error(data.message || 'Save failed');
+  return data;
+}
+
+async function saveTerms() {
+  const btn = document.getElementById('btn-save');
+  btn.disabled = true;
+  try {
+    await postTerms({ terms: _draft });
+    showToast('Search terms saved — they apply on the next refresh', 'success');
+    await loadTerms();
+    document.getElementById('save-status').textContent = 'Saved at ' + new Date().toLocaleTimeString();
+  } catch (err) {
+    showToast(err.message, 'error');
+    btn.disabled = false;
+  }
+}
+
+async function resetDefaults() {
+  if (!confirm('Replace your search terms with the built-in defaults?')) return;
+  try {
+    await postTerms({ reset: true });
+    showToast('Search terms reset to defaults', 'success');
+    await loadTerms();
+    document.getElementById('save-status').textContent = '';
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function showEvents(term) {
+  const panel = document.getElementById('st-events');
+  if (_selected === term) { _selected = null; panel.style.display = 'none'; render(); return; }
+  _selected = term;
+  render();
+  panel.style.display = 'block';
+  panel.innerHTML = `<h2>${escHtml(term)}</h2><span class="status-muted">Loading…</span>`;
+  try {
+    const data = await fetch('/api/search-terms/events?term=' + encodeURIComponent(term)).then(r => r.json());
+    const evs = data.events || [];
+    const uniq = evs.filter(e => e.unique).length;
+    const rows = evs.map(e => `<tr>
+      <td>${e.unique ? '<span class="badge badge-green">Only this term</span>' : `<span class="muted">${e.term_hits} terms</span>`}</td>
+      <td><a href="/events/${encodeURIComponent(e.id)}">${escHtml(e.title || e.id)}</a></td>
+      <td>${escHtml(e.league || '')}</td>
+      <td class="st-hide-sm">${escHtml(e.channel_name || '')}</td>
+      <td style="white-space:nowrap">${fmtDate(e.start_utc)}</td>
+    </tr>`).join('');
+    panel.innerHTML = `<h2>${escHtml(term)} <span class="muted" style="font-size:13px;font-weight:400">— ${evs.length} upcoming events from the last run, ${uniq} found only by this term</span></h2>
+      ${evs.length ? `<div class="st-table-wrap"><table><thead><tr><th></th><th>Event</th><th>League</th><th class="st-hide-sm">Channel</th><th>Start</th></tr></thead><tbody>${rows}</tbody></table></div>`
+                   : '<span class="status-muted">No upcoming events from this term in the guide database.</span>'}`;
+  } catch (err) {
+    panel.innerHTML = `<h2>${escHtml(term)}</h2><span class="status-failed">Failed to load events: ${escHtml(err.message)}</span>`;
+  }
+}
+
+loadTerms();
+</script>
+{% endblock %}

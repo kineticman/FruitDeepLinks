@@ -9,7 +9,9 @@ from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'bin'))
-from apple_scraper_db import HybridAPIClient, extract_relevant_playables, init_database, scrape_search_term
+from apple_scraper_db import (
+    HybridAPIClient, extract_relevant_playables, init_database, scrape_search_term, wait_for_search_results,
+)
 
 
 def event(eid):
@@ -68,13 +70,26 @@ class ShelfPaginationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'apple.db'
             init_database(path)
-            with sqlite3.connect(path) as conn, patch('apple_scraper_db.time.sleep'), patch('apple_scraper_db.auto_scroll'), patch('apple_scraper_db.get_event_ids_from_page', return_value={'seed'}):
-                self.assertEqual(scrape_search_term(Mock(), conn, 'football', self.client), (1, 2, 0))
+            with sqlite3.connect(path) as conn, patch('apple_scraper_db.time.sleep'), patch('apple_scraper_db.wait_for_search_results', return_value={'seed'}):
+                new_seeds, new_shelf, skipped, term_stats, found_ids = scrape_search_term(Mock(), conn, 'football', self.client)
+                self.assertEqual((new_seeds, new_shelf, skipped), (1, 2, 0))
+                # Shelf events count toward the term's attribution, not just seeds.
+                self.assertEqual(found_ids, {'seed', 'early', 'late'})
+                self.assertEqual(term_stats['found_count'], 3)
                 level, blob = conn.execute("SELECT fetch_level, raw_json_gzip FROM apple_events WHERE event_id='late'").fetchone()
                 self.assertEqual(level, 'shelf')
                 saved = json.loads(gzip.decompress(blob))
                 self.assertEqual(saved['channels'], late['data']['channels'])
                 self.assertEqual(saved['playables'], late['data']['playables'])
+
+    def test_search_results_wait_until_ids_stop_changing(self):
+        pages = [set(), {'a'}, {'a', 'b'}, {'a', 'b'}, {'a', 'b'}, {'a', 'b'}, {'a', 'b'}]
+        with patch('apple_scraper_db.get_event_ids_from_page', side_effect=pages + [{'a', 'b'}] * 50):
+            self.assertEqual(wait_for_search_results(Mock(), timeout=2, interval=0.01, settle=0.03), {'a', 'b'})
+
+    def test_search_results_give_up_after_timeout_when_empty(self):
+        with patch('apple_scraper_db.get_event_ids_from_page', return_value=set()):
+            self.assertEqual(wait_for_search_results(Mock(), timeout=0.05, interval=0.01, settle=0.02), set())
 
     def test_terminal_shelf_does_not_request_pages(self):
         self.shelf.pop('nextToken')

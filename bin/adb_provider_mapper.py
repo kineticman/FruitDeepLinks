@@ -42,6 +42,8 @@ ADB_PROVIDER_MAP = {
     'aiv_mlb_network': 'aiv',
     'aiv_mlbtv': 'aiv',
     'aiv_aggregator': 'aiv',
+    'aiv_blue_jackets_hockey_network': 'aiv',
+    'aiv_mw_plus': 'aiv',
     'aiv': 'aiv',  # Keep original mapping
 
     # aiv_unavailable_in_location is deliberately NOT mapped here: it's the

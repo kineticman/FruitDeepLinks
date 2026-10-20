@@ -184,7 +184,7 @@ h1 { color: var(--heading); }
 .btn-success:hover { background: #047857; }
 
 /* ---- Forms ---- */
-input[type="text"], input[type="number"], input[type="time"],
+input[type="text"], input[type="search"], input[type="number"], input[type="time"],
 select, textarea {
   background: var(--bg-inset);
   border: 1px solid var(--border);
@@ -377,9 +377,11 @@ tr:hover td { background: var(--bg-hover); }
   {% set _current = request.path %}
   <a href="/"        class="topnav-link {% if _current == '/' %}topnav-link-active{% endif %}">Dashboard</a>
   <a href="/filters" class="topnav-link {% if _current == '/filters' %}topnav-link-active{% endif %}">Filters</a>
+  <a href="/search-terms" class="topnav-link {% if _current == '/search-terms' %}topnav-link-active{% endif %}">Search Terms</a>
   <a href="/settings" class="topnav-link {% if _current == '/settings' %}topnav-link-active{% endif %}">Settings</a>
   <a href="/events"  class="topnav-link {% if _current.startswith('/events') %}topnav-link-active{% endif %}">Event Inspector</a>
   <a href="/adb"     class="topnav-link {% if _current == '/adb' %}topnav-link-active{% endif %}">ADB Config</a>
+  <a href="/logs"    class="topnav-link {% if _current == '/logs' %}topnav-link-active{% endif %}">Logs</a>
   <a href="/api"     class="topnav-link {% if _current == '/api' %}topnav-link-active{% endif %}">API Helper</a>
   {% block nav_extra %}{% endblock %}
 </nav>
