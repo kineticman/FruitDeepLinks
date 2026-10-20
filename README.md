@@ -50,6 +50,7 @@ FruitDeepLinks creates virtual TV channels in Channels DVR with deeplinks that l
 - **`POST /api/refresh`** — works as a bare `curl -X POST` or with `?skip_scrape=true`, as documented (previously returned 400/415 without a JSON body)
 - **Virtual lanes M3U** — channels no longer point at the removed `/lane/<n>/stream.m3u8` endpoint (404); they redirect via `/api/lane/<n>/launch`
 - **API Helper page** — brought up to date with current endpoints and defaults
+- **Amazon ADB lanes** — Blue Jackets Hockey Network and MW+ events (added in v2.3.4) now appear in the shared Amazon ADB lanes
 
 ### Previously Added in v2.3.4
 
